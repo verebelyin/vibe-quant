@@ -88,7 +88,10 @@ def _compile(
     return getattr(module, f"{camel}Strategy"), getattr(module, f"{camel}Config")
 
 
-_IND_15M: dict[str, dict[str, Any]] = {"ema": {"type": "EMA", "period": 5}, "pmax": {"type": "PMAX"}}
+_IND_15M: dict[str, dict[str, Any]] = {
+    "ema": {"type": "EMA", "period": 5},
+    "pmax": {"type": "PMAX"},
+}
 _IND_15M_4H: dict[str, dict[str, Any]] = {
     "ema": {"type": "EMA", "period": 5},
     "pmax": {"type": "PMAX"},
@@ -172,7 +175,9 @@ def _run(strategy: Any, bars: list[Bar]) -> None:
     # one add_data per bar type in tf order (what the runners' data configs do): equal-ts
     # bars of different timeframes then reach the strategy in the order NT itself picks
     for key in sorted({str(b.bar_type) for b in bars}):
-        engine.add_data(sorted((b for b in bars if str(b.bar_type) == key), key=lambda b: b.ts_init))
+        engine.add_data(
+            sorted((b for b in bars if str(b.bar_type) == key), key=lambda b: b.ts_init)
+        )
     engine.add_strategy(strategy)
     try:
         engine.run()
@@ -202,7 +207,9 @@ def _seed_of(*groups: list[Bar]) -> dict[str, list[Bar]]:
     return {str(g[0].bar_type): g for g in groups}
 
 
-def _by_ts(rows: list[tuple[int, str, dict[str, float]]]) -> dict[tuple[int, str], dict[str, float]]:
+def _by_ts(
+    rows: list[tuple[int, str, dict[str, float]]],
+) -> dict[tuple[int, str], dict[str, float]]:
     return {(ts, spec): values for ts, spec, values in rows}
 
 
@@ -328,7 +335,9 @@ def _gap_case(topup_after: int, gap: list[int]) -> tuple[Any, Any, list[Bar]]:
 def test_gap_at_handover_requests_topup_and_matches_no_gap_reference() -> None:
     """R9: first live bar at wm + 3 steps -> top-up (wm, ts), then values == the no-gap run."""
     ref, warm, bars = _gap_case(topup_after=3, gap=[SEED_N, SEED_N + 1])
-    assert warm.topups == [("15-MINUTE-LAST", _close_ts("15m", SEED_N - 1), _close_ts("15m", SEED_N + 2))]
+    assert warm.topups == [
+        ("15-MINUTE-LAST", _close_ts("15m", SEED_N - 1), _close_ts("15m", SEED_N + 2))
+    ]
     ref_rows = _by_ts(ref.rows)
     resumed = [(ts, spec, v) for ts, spec, v in warm.rows if ts > _close_ts("15m", SEED_N + 4)]
     assert len(resumed) == 7
@@ -382,7 +391,9 @@ def test_secondary_only_gap_queues_the_primary_until_topup() -> None:
     _run(warm, [*live15, *live4])
 
     bt4 = warm.bar_type_4h
-    assert warm.topups == [("4-HOUR-LAST", _close_ts("4h", k_seed - 1), _close_ts("4h", k_seed + 1))]
+    assert warm.topups == [
+        ("4-HOUR-LAST", _close_ts("4h", k_seed - 1), _close_ts("4h", k_seed + 1))
+    ]
     assert len(warm.topups) == 1
     ref_rows = _by_ts(ref.rows)
     boundary = _close_ts("4h", k_seed + 1)
@@ -410,7 +421,9 @@ def test_prev_values_captured_at_last_primary_bar() -> None:
     ref = make()
     _run(ref, [*b15, *b4])
 
-    k_seed = 21  # 4h bars 0..20 seeded: the last closes at 00:00; the cut is 02:00 (8 15m bars later)
+    k_seed = (
+        21  # 4h bars 0..20 seeded: the last closes at 00:00; the cut is 02:00 (8 15m bars later)
+    )
     cut15 = 16 * k_seed + 8
     warm = make()
     warm._warm_from(_seed_of(b15[:cut15], b4[:k_seed]))
@@ -438,7 +451,9 @@ def test_nt_tie_order_equals_traversal_order() -> None:
 
     warm = make()
     warm._warm_from(_seed_of(b15, b4))
-    tied = [ts for ts in {t for _, t in engine_order} if sum(1 for _, x in engine_order if x == ts) > 1]
+    tied = [
+        ts for ts in {t for _, t in engine_order} if sum(1 for _, x in engine_order if x == ts) > 1
+    ]
     assert len(tied) == len(b4)
     assert warm.replayed == engine_order
 
@@ -544,7 +559,11 @@ def test_growing_gap_while_pending_stays_pending_until_every_bar_is_present() ->
     assert len(asked) == 1
     warm._warm_feed_topup(bt, [bars[SEED_N], bars[SEED_N + 1]])
     assert warm._warm_pending == {bt}  # still pending: the new hole is not covered
-    assert asked[1] == ("15-MINUTE-LAST", _close_ts("15m", SEED_N + 2), _close_ts("15m", SEED_N + 5))
+    assert asked[1] == (
+        "15-MINUTE-LAST",
+        _close_ts("15m", SEED_N + 2),
+        _close_ts("15m", SEED_N + 5),
+    )
     assert warm.ind_ema.count == SEED_N  # nothing replayed yet
     assert warm._warm_ingress(bars[SEED_N + 6]) is False  # still no signals
     warm._warm_feed_topup(bt, [bars[SEED_N + 3], bars[SEED_N + 4]])

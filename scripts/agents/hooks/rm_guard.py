@@ -86,7 +86,9 @@ def untracked_in_linked_worktree(path: str) -> bool:
     folder = os.path.dirname(path)
 
     def git(*args: str) -> str:
-        done = subprocess.run(["git", "-C", folder, *args], capture_output=True, text=True, timeout=5)
+        done = subprocess.run(
+            ["git", "-C", folder, *args], capture_output=True, text=True, timeout=5
+        )
         return done.stdout.strip() if done.returncode == 0 else ""
 
     common = git("rev-parse", "--path-format=absolute", "--git-common-dir")

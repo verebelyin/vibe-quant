@@ -132,7 +132,9 @@ def _run(dsls: list[dict[str, Any]], bars: list[Bar]) -> list[Any]:
     return strategies
 
 
-def _expected(seen: dict[int, tuple[float, float]], price_left: bool) -> tuple[list[int], list[int]]:
+def _expected(
+    seen: dict[int, tuple[float, float]], price_left: bool
+) -> tuple[list[int], list[int]]:
     """True crosses on the values the strategy saw (first ready bar never fires)."""
     up: list[int] = []
     down: list[int] = []
@@ -165,8 +167,20 @@ def test_price_vs_ma_crossover_fire_count(
     tag = ma_type.lower()
     price_left, price_right = _run(
         [
-            _dsl(f"xp_left_{tag}", ma_type, period, "close crosses_above ma", "close crosses_below ma"),
-            _dsl(f"xp_right_{tag}", ma_type, period, "ma crosses_above close", "ma crosses_below close"),
+            _dsl(
+                f"xp_left_{tag}",
+                ma_type,
+                period,
+                "close crosses_above ma",
+                "close crosses_below ma",
+            ),
+            _dsl(
+                f"xp_right_{tag}",
+                ma_type,
+                period,
+                "ma crosses_above close",
+                "ma crosses_below close",
+            ),
         ],
         bars,
     )
@@ -257,7 +271,11 @@ class TestCrossoverEdges:
         def run(prev_close: float | None, close: float) -> bool:
             prev = {} if prev_close is None else {"@close": prev_close}
             fake = types.SimpleNamespace(_prev_values=prev, config=cfg)
-            return bool(mod.XpriceLitStrategy._check_long_entry(fake, types.SimpleNamespace(close=_P(close))))
+            return bool(
+                mod.XpriceLitStrategy._check_long_entry(
+                    fake, types.SimpleNamespace(close=_P(close))
+                )
+            )
 
         assert run(99.0, 101.0)
         assert not run(101.0, 102.0)

@@ -153,8 +153,7 @@ def test_vidya_incremental_buffer_stability(fixture_df: pd.DataFrame) -> None:
             if pd.isna(v_short) and pd.isna(v_long):
                 continue
             assert v_short == v_long, (
-                f"buffer-length non-determinism: t={t} k={k} "
-                f"short={v_short!r} long={v_long!r}"
+                f"buffer-length non-determinism: t={t} k={k} short={v_short!r} long={v_long!r}"
             )
 
 

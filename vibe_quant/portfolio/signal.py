@@ -317,15 +317,19 @@ def decision_signals(
         elif tick is None:
             signals[symbol] = None
             excluded[symbol] = "no_price"
-        elif threshold is not None and quote_volume is not None and (
-            reason := _liquidity(quote_volume.get(symbol, {}), decision_ns, threshold)
+        elif (
+            threshold is not None
+            and quote_volume is not None
+            and (reason := _liquidity(quote_volume.get(symbol, {}), decision_ns, threshold))
         ):
             signals[symbol] = None
             excluded[symbol] = reason
         else:
             signals[symbol] = value
             if vols is not None and vol_closes is not None:
-                sigma = trailing_vol(vol_closes.get(symbol, {}), decision_ns, spec.vol_lookback_days)
+                sigma = trailing_vol(
+                    vol_closes.get(symbol, {}), decision_ns, spec.vol_lookback_days
+                )
                 if sigma is None:
                     signals[symbol] = None
                     excluded[symbol] = "no_vol"

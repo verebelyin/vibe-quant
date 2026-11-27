@@ -93,7 +93,9 @@ async def test_slow_coverage_does_not_block_the_event_loop(monkeypatch) -> None:
 
     assert health.status_code == 200
     assert coverage_pending, "/api/data/coverage finished before /health (event loop blocked)"
-    assert archive.released_by_gate is True, "coverage read was released by timeout, not by the test"
+    assert archive.released_by_gate is True, (
+        "coverage read was released by timeout, not by the test"
+    )
     assert coverage.status_code == 200
     assert coverage.json() == {"coverage": []}
 
@@ -122,13 +124,9 @@ def _seed_archive(db_path: Path) -> None:
         [(_MS_2024_01_01, 4.0, 4.0, 4.0, 4.0, 4.0, _MS_2024_01_01 + 14_399_999)],
         "binance_vision",
     )
-    archive.insert_funding_rates(
-        "AAAUSDT", [(_MS_2024_01_01, 0.0001, 100.0)], "binance_vision"
-    )
+    archive.insert_funding_rates("AAAUSDT", [(_MS_2024_01_01, 0.0001, 100.0)], "binance_vision")
     # Funding-only symbol: not in raw_klines, so it must not surface.
-    archive.insert_funding_rates(
-        "CCCUSDT", [(_MS_2024_01_01, 0.0002, 50.0)], "binance_vision"
-    )
+    archive.insert_funding_rates("CCCUSDT", [(_MS_2024_01_01, 0.0002, 50.0)], "binance_vision")
     archive.close()
 
 

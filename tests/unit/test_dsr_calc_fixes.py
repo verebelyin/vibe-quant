@@ -36,9 +36,7 @@ class TestDeannualizeSharpe:
         assert deannualize_sharpe(2.0) == pytest.approx(2.0 / math.sqrt(252))
 
     def test_custom_periods(self) -> None:
-        assert deannualize_sharpe(3.0, periods_per_year=365) == pytest.approx(
-            3.0 / math.sqrt(365)
-        )
+        assert deannualize_sharpe(3.0, periods_per_year=365) == pytest.approx(3.0 / math.sqrt(365))
 
     def test_constant(self) -> None:
         assert TRADING_DAYS_PER_YEAR == 252.0
@@ -89,9 +87,7 @@ class TestDsrUsesStoredMoments:
                 passed_purged_kfold BOOLEAN
             );
         """)
-        conn.execute(
-            "INSERT INTO strategies (id, name, dsl_config) VALUES (1, 's', '{}')"
-        )
+        conn.execute("INSERT INTO strategies (id, name, dsl_config) VALUES (1, 's', '{}')")
         conn.execute(
             "INSERT INTO backtest_runs VALUES (1, 1, 'screening', '[]', '4h',"
             " '2025-01-01', '2026-01-01', '{}')"
@@ -100,9 +96,7 @@ class TestDsrUsesStoredMoments:
         conn.close()
         return path
 
-    def _run_dsr(
-        self, db_path: Path, skewness: float | None, kurtosis: float | None
-    ) -> float:
+    def _run_dsr(self, db_path: Path, skewness: float | None, kurtosis: float | None) -> float:
         conn = sqlite3.connect(str(db_path))
         conn.execute("DELETE FROM sweep_results")
         # realized Sharpe 9.0 is a decoy: DSR must read the MTM columns (SR 3.0 ann)
@@ -119,9 +113,7 @@ class TestDsrUsesStoredMoments:
         try:
             result = pipeline.run(
                 run_id=1,
-                config=FilterConfig(
-                    enable_dsr=True, enable_wfa=False, enable_purged_kfold=False
-                ),
+                config=FilterConfig(enable_dsr=True, enable_wfa=False, enable_purged_kfold=False),
                 total_trials=100,
             )
         finally:

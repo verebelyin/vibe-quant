@@ -281,9 +281,7 @@ def test_parent_registration_never_overwrites_a_child_pid(
 
     monkeypatch.setattr(manager_module.subprocess, "Popen", _popen_then_child_claims)
     try:
-        with pytest.raises(
-            ValueError, match=rf"already has an active job \(pid={victim.pid}\)"
-        ):
+        with pytest.raises(ValueError, match=rf"already has an active job \(pid={victim.pid}\)"):
             manager.start_job(paper_run, "paper", ["sleep", "30"])
 
         assert _job_row(manager, paper_run) == ("running", victim.pid, identity)
@@ -374,8 +372,7 @@ def test_refuses_without_a_job_row(manager: BacktestJobManager, paper_run: int) 
         refusal = manager.claim_process(paper_run, victim.pid, identity)
 
         assert refusal == (
-            f"Refusing to trade: run {paper_run} has no job or run row "
-            "to record this process in"
+            f"Refusing to trade: run {paper_run} has no job or run row to record this process in"
         )
         count = manager.conn.execute(
             "SELECT COUNT(*) FROM background_jobs WHERE run_id = ?", (paper_run,)
@@ -575,8 +572,7 @@ async def test_cli_claim_error_refuses_and_hides_the_exception_text(
 
     assert rc == 1
     assert capsys.readouterr().err.splitlines() == [
-        f"Refusing to trade: could not record this process for run {paper_run} "
-        "(OperationalError)"
+        f"Refusing to trade: could not record this process for run {paper_run} (OperationalError)"
     ]
     assert started == []
     assert account_lock_holder(_testnet_account()) is None

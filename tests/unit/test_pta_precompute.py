@@ -101,7 +101,9 @@ def _flat_bars(n: int = 750, tf: str = "1h") -> list[BarEvent]:
         lo[s : s + 40] = c[s]
         o[s : s + 40] = c[s]
     v = np.where(np.arange(n) % 97 == 0, 0.0, 1.0 + rng.rand(n))
-    return [(tf, float(o[i]), float(h[i]), float(lo[i]), float(c[i]), float(v[i])) for i in range(n)]
+    return [
+        (tf, float(o[i]), float(h[i]), float(lo[i]), float(c[i]), float(v[i])) for i in range(n)
+    ]
 
 
 @cache
@@ -420,7 +422,12 @@ def test_feed_nan_never_overwrites_the_held_value() -> None:
 def test_feed_equality_edges() -> None:
     """ts one off, close one ulp off, and the exhausted index each fail; exact passes."""
     one_ulp = float(np.nextafter(2.0, np.inf))
-    for ts, close, fed_ok in [(5, 2.0, True), (6, 2.0, False), (4, 2.0, False), (5, one_ulp, False)]:
+    for ts, close, fed_ok in [
+        (5, 2.0, True),
+        (6, 2.0, False),
+        (4, 2.0, False),
+        (5, one_ulp, False),
+    ]:
         pre = PtaPrecomputed([5], [2.0], [("k", [9.0])])
         values: dict[str, float] = {}
         assert pre.feed(values, ts, close) is fed_ok
@@ -454,7 +461,9 @@ def test_non_context_source_carries_the_seam() -> None:
     assert "    _pta_pre = None\n" in src
     assert '    _PTA_META = {"ind": ("KAMA", "1h"), "m": ("MACD", "1h")}\n' in src
     assert src.index("_PTA_META") < src.index("def __init__")
-    assert "if _pre is not None and _pre.feed(self._pta_values, bar.ts_init, float(bar.close)):" in src
+    assert (
+        "if _pre is not None and _pre.feed(self._pta_values, bar.ts_init, float(bar.close)):" in src
+    )
 
 
 def test_no_install_is_todays_path() -> None:
@@ -471,7 +480,9 @@ def test_no_install_is_todays_path() -> None:
     assert _differing_bars(empty, plain) == 0
     assert _differing_bars(other_tf, plain) == 0
     pre = _precompute(cls, specs, bars)
-    assert _differing_bars(run_stream(cls, bars, memo=False, specs=specs, precompute=pre), plain) == 0
+    assert (
+        _differing_bars(run_stream(cls, bars, memo=False, specs=specs, precompute=pre), plain) == 0
+    )
 
 
 def _other_tf(cls: Any, specs: Specs, bars: list[BarEvent]) -> dict[str, PtaPrecomputed]:
@@ -489,9 +500,13 @@ def _other_tf(cls: Any, specs: Specs, bars: list[BarEvent]) -> dict[str, PtaPrec
 def test_strategy_pta_columns_rejects_unreplayable_indicator() -> None:
     frame = pd.DataFrame({k: [1.0, 2.0] for k in ("open", "high", "low", "close", "volume")})
     with pytest.raises(PtaReplayUnsupported, match="compute_fn indicator ind cannot be replayed"):
-        strategy_pta_columns({"ind": {}}, {"ind": ("NOT_A_REAL_TYPE", "1m")}, {"1m": 0}, "1m", frame)
+        strategy_pta_columns(
+            {"ind": {}}, {"ind": ("NOT_A_REAL_TYPE", "1m")}, {"1m": 0}, "1m", frame
+        )
     with pytest.raises(PtaReplayUnsupported, match="compute_fn indicator ind cannot be replayed"):
-        strategy_pta_columns({"ind": {}}, {"ind": ("NATR", "1m")}, {"1m": 0}, "1m", frame)  # no compute_fn
+        strategy_pta_columns(
+            {"ind": {}}, {"ind": ("NATR", "1m")}, {"1m": 0}, "1m", frame
+        )  # no compute_fn
     assert issubclass(PtaReplayUnsupported, ValueError)
 
 

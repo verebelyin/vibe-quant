@@ -57,7 +57,10 @@ def _git_env() -> dict[str, str]:
 
 def _git(repo: Path, *args: str) -> str:
     out = subprocess.run(
-        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True,
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+        check=True,
         env=_git_env(),
     )
     return out.stdout
@@ -127,9 +130,7 @@ def _result(trades: int) -> dict[str, Any]:
             "metrics": {"total_trades": trades, "liquidation_count": 0},
             "margin_refusals": 0,
         },
-        "validation": {
-            "result": {"total_trades": trades, "notes": {}, "liquidation_events": []}
-        },
+        "validation": {"result": {"total_trades": trades, "notes": {}, "liquidation_events": []}},
     }
 
 

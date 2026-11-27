@@ -716,7 +716,9 @@ class OverfittingPipeline:
                 return max(evaluated, num_candidates)
             logger.warning(
                 "Discovery candidate %s has no 'evaluated' trial count — DSR N falls "
-                "back to %d (understates the search)", candidate.get("id"), num_candidates,
+                "back to %d (understates the search)",
+                candidate.get("id"),
+                num_candidates,
             )
         return max(1, num_candidates)
 
@@ -767,7 +769,9 @@ class OverfittingPipeline:
         try:
             return float(spread)
         except OverflowError:  # a huge int (10**400) is not a usable spread: fail closed
-            logger.warning("q95 re-check: neff_ev_q95_spread too large for a float; using legacy rule")
+            logger.warning(
+                "q95 re-check: neff_ev_q95_spread too large for a float; using legacy rule"
+            )
             return None
 
     @staticmethod
@@ -946,9 +950,7 @@ class OverfittingPipeline:
             lines.append(
                 f"  WFA (Walk-Forward):      {result.passed_wfa}/{result.total_candidates} ({pct:.1f}%)"
             )
-            lines.append(
-                "    (stability test: params held fixed per window, no re-optimization)"
-            )
+            lines.append("    (stability test: params held fixed per window, no re-optimization)")
         else:
             lines.append("  WFA (Walk-Forward):      DISABLED")
 

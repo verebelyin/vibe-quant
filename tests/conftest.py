@@ -90,9 +90,7 @@ def _guard_sockaddr(family: int, sockaddr: object) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _forbid_network(
-    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def _forbid_network(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """N1/N3/N6: refuse every non-loopback connect, connect_ex, getaddrinfo and
     NautilusTrader Binance request.
 
@@ -107,15 +105,11 @@ def _forbid_network(
     if request.node.get_closest_marker("allow_network") is not None:
         return
 
-    def guarded_connect(
-        sock: socket.socket, address: Any, *args: Any, **kwargs: Any
-    ) -> Any:
+    def guarded_connect(sock: socket.socket, address: Any, *args: Any, **kwargs: Any) -> Any:
         _guard_sockaddr(sock.family, address)
         return _ORIGINAL_CONNECT(sock, address, *args, **kwargs)
 
-    def guarded_connect_ex(
-        sock: socket.socket, address: Any, *args: Any, **kwargs: Any
-    ) -> Any:
+    def guarded_connect_ex(sock: socket.socket, address: Any, *args: Any, **kwargs: Any) -> Any:
         _guard_sockaddr(sock.family, address)
         return _ORIGINAL_CONNECT_EX(sock, address, *args, **kwargs)
 
@@ -155,7 +149,14 @@ def _forbid_network(
 # a conftest that reaches production code makes every diff plan the full suite. A test that
 # wants other rows patches ``vibe_quant.paper.warmup.fetch_closed_klines`` itself.
 
-_INTERVAL_MS = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
+_INTERVAL_MS = {
+    "1m": 60_000,
+    "5m": 300_000,
+    "15m": 900_000,
+    "1h": 3_600_000,
+    "4h": 14_400_000,
+    "1d": 86_400_000,
+}
 
 
 def synthetic_klines(symbol: str, interval: str, start_ms: int, end_ms: int) -> list[Any]:
@@ -186,7 +187,10 @@ def _klines_page(params: dict[str, str]) -> list[list[Any]]:
     (so the still-forming bar is included), at most ``limit`` rows, 12 columns per row."""
     step = _INTERVAL_MS[params["interval"]]
     rows = synthetic_klines(
-        params["symbol"], params["interval"], int(params["startTime"]), int(params["endTime"]) + step
+        params["symbol"],
+        params["interval"],
+        int(params["startTime"]),
+        int(params["endTime"]) + step,
     )
     return [[*r, "1.0", 1, "1.0", "1.0", "0"] for r in rows[: int(params["limit"])]]
 

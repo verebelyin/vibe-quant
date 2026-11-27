@@ -747,9 +747,8 @@ class ValidationRunner:
             strategy_name,
             strategy_id,
             dsl.timeframe,
-            venue_config.latency_preset or (
-                self._OWN_DETAIL_RELEASE if effective_detail else "none"
-            ),
+            venue_config.latency_preset
+            or (self._OWN_DETAIL_RELEASE if effective_detail else "none"),
             effective_detail or "none",
             venue_config.default_leverage,
             venue_config.starting_balance_usdt,
@@ -1211,9 +1210,7 @@ class ValidationRunner:
             max_drawdown=max(r.max_drawdown for r in window_results),
             # Pooled trade PF over every window's trades (same definition
             # as a single run), not a trade-weighted mean of window PFs.
-            profit_factor=profit_factor(
-                t.net_pnl for r in window_results for t in r.trades
-            ),
+            profit_factor=profit_factor(t.net_pnl for r in window_results for t in r.trades),
             win_rate=win_rate,
             total_trades=total_trades,
             total_fees=sum(r.total_fees for r in window_results),
@@ -1442,9 +1439,7 @@ class ValidationRunner:
         if pre is None:
             fields = _parse_launch_fields(params, PARSE_ORDER["validation_direct_venue"])
         else:
-            fields = _parse_launch_fields(
-                params, PARSE_ORDER["validation_post_detail"], parsed=pre
-            )
+            fields = _parse_launch_fields(params, PARSE_ORDER["validation_post_detail"], parsed=pre)
         launch = LaunchSettings.from_fields(fields)
 
         starting_balance = launch.starting_balance
@@ -1485,9 +1480,7 @@ class ValidationRunner:
         )
         if has_detail_data:
             # Fill model chosen above from the preset; release is own-bar.
-            venue_config = replace(
-                venue_config, latency_preset=None, latency_config=None
-            )
+            venue_config = replace(venue_config, latency_preset=None, latency_config=None)
         return venue_config, launch
 
     def _run_backtest(
@@ -1577,16 +1570,16 @@ class ValidationRunner:
                 all_timeframes.add(ind_config.timeframe)
 
         # Ensure instruments exist in catalog
-        catalog_path = self._catalog_path if self._catalog_path is not None else DEFAULT_CATALOG_PATH
+        catalog_path = (
+            self._catalog_path if self._catalog_path is not None else DEFAULT_CATALOG_PATH
+        )
         catalog_mgr = CatalogManager(catalog_path)
         from vibe_quant.dsl import aux_data
 
         # needs_context indicators read the run's archive (None = default archive)
         aux_data.configure(self._funding_archive_path, catalog_path)
         # run_config window is already clamped to data coverage here
-        aux_data.preflight(
-            [c.type for c in dsl.indicators.values()], symbols, start_date, end_date
-        )
+        aux_data.preflight([c.type for c in dsl.indicators.values()], symbols, start_date, end_date)
         for symbol in symbols:
             if symbol in INSTRUMENT_CONFIGS:
                 instrument = create_instrument(symbol)
@@ -1622,9 +1615,7 @@ class ValidationRunner:
         # only the keys the run moved off the default are added, so an off run's config
         # stays byte-identical. Both values come from the ONE launch the run already parsed
         # (R40: no second parse).
-        strategy_params.update(
-            launch.sizing.strategy_params(launch.liquidation.leverage)
-        )
+        strategy_params.update(launch.sizing.strategy_params(launch.liquidation.leverage))
         # Market-mode twin: same run, market entries (D3-6).
         if entry_order_override is not None:
             strategy_params["entry_order"] = entry_order_override
@@ -1843,8 +1834,7 @@ class ValidationRunner:
                 )
                 result.notes["maker_entries"] = maker_entry_stats(
                     engine,
-                    primary_bar_ns=_TIMEFRAME_SECONDS.get(dsl.timeframe, 3600)
-                    * 1_000_000_000,
+                    primary_bar_ns=_TIMEFRAME_SECONDS.get(dsl.timeframe, 3600) * 1_000_000_000,
                     maker_entry_timeout_bars=timeout_bars,
                 )
 
@@ -2316,13 +2306,17 @@ class ValidationRunner:
                 strategy_name,
                 validated_params=self._build_strategy_params(cfg),
                 val_window=val_window,
-                val_symbols=[str(x) for x in syms] if isinstance(syms := cfg.get("symbols"), list) else None,
+                val_symbols=[str(x) for x in syms]
+                if isinstance(syms := cfg.get("symbols"), list)
+                else None,
                 val_sizing=val_sizing,
             )
             if reference is None:
                 if not refused:
                     return None
-                logger.warning("Run %d: screening runs %s refused; metrics not compared", run_id, refused)
+                logger.warning(
+                    "Run %d: screening runs %s refused; metrics not compared", run_id, refused
+                )
                 return refused_reference_report(refused, result.sharpe_ratio, result.total_trades)
             report = assess_consistency(
                 reference,

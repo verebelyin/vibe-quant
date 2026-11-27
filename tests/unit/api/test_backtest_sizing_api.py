@@ -205,8 +205,7 @@ async def test_exposure_above_default_leverage_is_422(
 
     assert r.status_code == 422, r.text
     assert (
-        "Value error, parameters: max_position_pct (20.0) must not exceed leverage (10.0)"
-        in r.text
+        "Value error, parameters: max_position_pct (20.0) must not exceed leverage (10.0)" in r.text
     )
     assert _run_count(state) == before
     assert popen.call_count == 0

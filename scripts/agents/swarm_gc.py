@@ -51,8 +51,10 @@ def plan(root: Path, days: float, now: float) -> tuple[list[Path], list[Path]]:
         scratch = [d for d in scratch if not any(p in scratch for p in d.parents)]
         delete += scratch
         kept += [
-            f for f in job.rglob("*")
-            if f.is_file() and f.stat().st_size >= REPORT_MIN_BYTES
+            f
+            for f in job.rglob("*")
+            if f.is_file()
+            and f.stat().st_size >= REPORT_MIN_BYTES
             and not any(d in f.parents for d in scratch)
         ]
     return delete, sorted(kept, key=lambda f: -f.stat().st_size)
@@ -63,7 +65,9 @@ def _mb(n: int) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--days", type=float, default=7, help="idle age before a job's scratch goes")
     ap.add_argument("--apply", action="store_true", help="delete (default: list only)")
     ap.add_argument("--root", type=Path, default=SWARM, help=argparse.SUPPRESS)

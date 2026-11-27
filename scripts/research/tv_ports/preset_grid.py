@@ -46,7 +46,14 @@ REPO_ROOT = HERE.parents[2]
 CATALOG = REPO_ROOT / "data" / "catalog"
 
 COINS = (
-    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "HYPEUSDT", "NEARUSDT", "SUIUSDT", "ZECUSDT",
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "BNBUSDT",
+    "HYPEUSDT",
+    "NEARUSDT",
+    "SUIUSDT",
+    "ZECUSDT",
 )
 TIMEFRAMES = ("15m", "1h", "4h")
 WINDOWS: dict[str, tuple[str, str]] = {
@@ -157,15 +164,11 @@ def select_pick(search_rows: Sequence[Row], order: Sequence[str]) -> str | None:
     return pick
 
 
-def evaluate_pick(
-    test_rows: Sequence[Row], bh: Mapping[str, float | None]
-) -> dict[str, Any]:
+def evaluate_pick(test_rows: Sequence[Row], bh: Mapping[str, float | None]) -> dict[str, Any]:
     """How a pick did on the TEST window: per coin return, coins > 0, coins beating buy-and-hold."""
     valid = [r for r in test_rows if not r.get("error")]
     per_coin = {r["coin"]: r["ret"] for r in valid}
-    beats = [
-        c for c, ret in per_coin.items() if (b := bh.get(c)) is not None and ret > b
-    ]
+    beats = [c for c, ret in per_coin.items() if (b := bh.get(c)) is not None and ret > b]
     return {
         "per_coin": per_coin,
         "positive": sum(1 for ret in per_coin.values() if ret > 0),
@@ -252,9 +255,18 @@ def run_task(task: dict[str, Any]) -> dict[str, Any]:
     row: dict[str, Any] = {
         "kind": "run",
         "key": run_key(task["port"], task["preset"], task["tf"], task["coin"], task["window"]),
-        "port": task["port"], "preset": task["preset"], "tf": task["tf"],
-        "coin": task["coin"], "window": task["window"], "start": task["start"], "end": task["end"],
-        "ret": 0.0, "trades": 0, "sharpe": 0.0, "dd": None, "error": None,
+        "port": task["port"],
+        "preset": task["preset"],
+        "tf": task["tf"],
+        "coin": task["coin"],
+        "window": task["window"],
+        "start": task["start"],
+        "end": task["end"],
+        "ret": 0.0,
+        "trades": 0,
+        "sharpe": 0.0,
+        "dd": None,
+        "error": None,
     }
     try:
         from vibe_quant.discovery.param_genome import ParamGenome
@@ -306,19 +318,32 @@ def plan(
             if window == "search" and days < MIN_SEARCH_DAYS:
                 key = aux_key("skip", coin, window)
                 if key not in present:
-                    _append(results, {
-                        "kind": "skip", "key": key, "coin": coin, "window": window,
-                        "reason": f"{days} days in the search window (< {MIN_SEARCH_DAYS})",
-                    })
+                    _append(
+                        results,
+                        {
+                            "kind": "skip",
+                            "key": key,
+                            "coin": coin,
+                            "window": window,
+                            "reason": f"{days} days in the search window (< {MIN_SEARCH_DAYS})",
+                        },
+                    )
                 continue
             spans[(coin, window)] = (s.isoformat(), e.isoformat())
             key = aux_key("bh", coin, window)
             if key not in present:
-                _append(results, {
-                    "kind": "bh", "key": key, "coin": coin, "window": window,
-                    "start": s.isoformat(), "end": e.isoformat(),
-                    "ret": bh_return(closes[coin], s, e),
-                })
+                _append(
+                    results,
+                    {
+                        "kind": "bh",
+                        "key": key,
+                        "coin": coin,
+                        "window": window,
+                        "start": s.isoformat(),
+                        "end": e.isoformat(),
+                        "ret": bh_return(closes[coin], s, e),
+                    },
+                )
     tasks: list[dict[str, Any]] = []
     for port_dir in ports:
         allowed = load_port(port_dir).allowed_timeframes
@@ -333,12 +358,18 @@ def plan(
                         if run_key(port_dir.name, preset["name"], tf, coin, window) in present:
                             continue
                         span_start, span_end = spans[(coin, window)]
-                        tasks.append({
-                            "port": port_dir.name, "preset": preset["name"], "tf": tf,
-                            "coin": coin, "window": window,
-                            "start": span_start, "end": span_end,
-                            "values": preset["values"],
-                        })
+                        tasks.append(
+                            {
+                                "port": port_dir.name,
+                                "preset": preset["name"],
+                                "tf": tf,
+                                "coin": coin,
+                                "window": window,
+                                "start": span_start,
+                                "end": span_end,
+                                "values": preset["values"],
+                            }
+                        )
     cost = {"15m": 0, "1h": 1, "4h": 2}
     tasks.sort(key=lambda t: (cost.get(t["tf"], 9), t["window"] != "search"))  # slowest first
     return tasks
@@ -388,7 +419,9 @@ def _pct(value: float | None) -> str:
     return "n/a" if value is None else f"{value * 100:+.1f}%"
 
 
-def build_report(rows: Sequence[Row], orders: Mapping[str, Sequence[str]]) -> tuple[str, dict[str, Any]]:
+def build_report(
+    rows: Sequence[Row], orders: Mapping[str, Sequence[str]]
+) -> tuple[str, dict[str, Any]]:
     """The report text and its numbers. ``orders`` is ``{port: preset names in file order}``."""
     runs = [r for r in rows if r.get("kind") == "run"]
     bh: dict[str, dict[str, float | None]] = {"search": {}, "test": {}}
@@ -401,21 +434,29 @@ def build_report(rows: Sequence[Row], orders: Mapping[str, Sequence[str]]) -> tu
     for skip in skips:
         lines.append(f"- skipped {skip['coin']} ({skip['window']}): {skip['reason']}")
     lines += [
-        "", "## Pre-registered picks on the unseen test window", "",
+        "",
+        "## Pre-registered picks on the unseen test window",
+        "",
         "| port | tf | pick | search coins>0 | med search Sharpe | test return per coin | coins>0 | beat B&H | mean | lenient | strict |",
         "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     outcomes: list[dict[str, Any]] = []
     for port in sorted(orders):
         for tf in TIMEFRAMES:
-            search = [r for r in runs if r["port"] == port and r["tf"] == tf and r["window"] == "search"]
+            search = [
+                r for r in runs if r["port"] == port and r["tf"] == tf and r["window"] == "search"
+            ]
             pick = select_pick(search, orders[port])
             if pick is None:
                 continue
             positive, median = preset_score([r for r in search if r["preset"] == pick])
             test = [
-                r for r in runs if r["port"] == port and r["tf"] == tf
-                and r["window"] == "test" and r["preset"] == pick
+                r
+                for r in runs
+                if r["port"] == port
+                and r["tf"] == tf
+                and r["window"] == "test"
+                and r["preset"] == pick
             ]
             result = evaluate_pick(test, bh["test"])
             outcomes.append({"port": port, "tf": tf, "pick": pick, **result})
@@ -433,12 +474,16 @@ def build_report(rows: Sequence[Row], orders: Mapping[str, Sequence[str]]) -> tu
     strict = sum(1 for o in outcomes if o["strict"])
     chance = chance_rates([r for r in runs if r["window"] == "test"], bh["test"])
     lines += [
-        "", "## Bars", "",
+        "",
+        "## Bars",
+        "",
         f"- LENIENT (test > 0 on >= 1 coin): {lenient}/{n} picks",
         f"- STRICT (test > buy-and-hold on >= {STRICT_MIN_BEATS} coins): {strict}/{n} picks",
         f"- chance, all {chance['runs']} test runs: {chance['share_positive'] * 100:.1f}% > 0, "
         f"{chance['share_beats_bh'] * 100:.1f}% > buy-and-hold ({chance['runs_with_bh']} with a B&H number)",
-        "", "## Buy-and-hold per coin (test window)", "",
+        "",
+        "## Buy-and-hold per coin (test window)",
+        "",
         " ".join(f"{c[:-4]} {_pct(v)}" for c, v in sorted(bh["test"].items())),
         "",
     ]
@@ -450,7 +495,8 @@ def cmd_report(args: argparse.Namespace) -> int:
     out = Path(args.out)
     rows = read_rows(out / "results.jsonl")
     orders = {
-        p.name: [e["name"] for e in load_presets(p)] for p in port_dirs("all")
+        p.name: [e["name"] for e in load_presets(p)]
+        for p in port_dirs("all")
         if any(r.get("port") == p.name for r in rows)
     }
     text, _ = build_report(rows, orders)
@@ -460,7 +506,9 @@ def cmd_report(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawTextHelpFormatter
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
     run = sub.add_parser("run", help="backtest every preset (resumable)")
     run.add_argument("--out", required=True)

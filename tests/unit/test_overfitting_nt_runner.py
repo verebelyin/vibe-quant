@@ -248,7 +248,9 @@ def test_wfa_runner_reads_bnb_discount(
     )
     runner.backtest("x", datetime.date(2024, 2, 1), datetime.date(2024, 3, 1), {})
 
-    assert fee_runner_kwargs[0]["launch"].fee_schedule == FeeSchedule(tier="VIP0", bnb_discount=True)
+    assert fee_runner_kwargs[0]["launch"].fee_schedule == FeeSchedule(
+        tier="VIP0", bnb_discount=True
+    )
 
 
 def test_wfa_runner_unknown_fee_tier_fails_closed(tmp_path: Path) -> None:

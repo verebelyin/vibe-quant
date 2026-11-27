@@ -165,9 +165,7 @@ class LegacyGenomeOps:
         )
 
     def random(self) -> StrategyChromosome:
-        return _random_chromosome(
-            direction_constraint=self._direction_constraint(), **self._kwargs
-        )
+        return _random_chromosome(direction_constraint=self._direction_constraint(), **self._kwargs)
 
     def mutate(self, genome: StrategyChromosome, rate: float) -> StrategyChromosome:
         return mutate(genome, rate, **self._kwargs)
@@ -352,9 +350,7 @@ class DiscoveryConfig:
             errors.append("exit_gene_space must be 'fixed' or 'extended'")
         if self.fitness not in ("v1", "v2"):
             errors.append("fitness must be 'v1' or 'v2'")
-        if self.stop_loss_max is not None and not (
-            SL_RANGE[0] < self.stop_loss_max < SL_RANGE[1]
-        ):
+        if self.stop_loss_max is not None and not (SL_RANGE[0] < self.stop_loss_max < SL_RANGE[1]):
             errors.append("stop_loss_max must be in (0.5, 10.0)")
         if self.exit_gene_space == "extended" and self.stop_loss_max is not None:
             errors.append("exit_gene_space 'extended' excludes stop_loss_max")
@@ -562,8 +558,7 @@ def _select_diverse_top_k(
             continue
 
         is_diverse = all(
-            chromosome_distance(chrom, sel_chrom) >= min_distance
-            for sel_chrom, _ in selected
+            chromosome_distance(chrom, sel_chrom) >= min_distance for sel_chrom, _ in selected
         )
 
         if is_diverse:
@@ -621,14 +616,19 @@ def _cap_champions(
         reason: str | None = None
         if len(kept) >= top_k:
             basis = (
-                "DSR statistic" if _dsr_stat(dsr_records.get(chrom.uid)) is not None
+                "DSR statistic"
+                if _dsr_stat(dsr_records.get(chrom.uid)) is not None
                 else "adjusted score"
             )
             reason = f"champions capped at top_k={top_k} (rank {rank} by {basis})"
         else:
             fingerprint = _behaviour_fingerprint(fit)
             twin = next(
-                (c for c, f in kept if fingerprint is not None and _behaviour_fingerprint(f) == fingerprint),
+                (
+                    c
+                    for c, f in kept
+                    if fingerprint is not None and _behaviour_fingerprint(f) == fingerprint
+                ),
                 None,
             )
             near = next((c for c, _ in kept if chromosome_distance(chrom, c) < min_distance), None)
@@ -669,7 +669,10 @@ class DiscoveryPipeline:
         | None = None,
         progress_file: str | Path | None = None,
         holdout_backtest_fn: Callable[[StrategyChromosome], dict[str, float | int]] | None = None,
-        backtest_fn_factory: Callable[[str, str], Callable[[StrategyChromosome], dict[str, float | int]]] | None = None,
+        backtest_fn_factory: Callable[
+            [str, str], Callable[[StrategyChromosome], dict[str, float | int]]
+        ]
+        | None = None,
         seed_chromosomes: list[StrategyChromosome] | None = None,
         buy_hold_closes_fn: Callable[[list[str]], dict[str, dict[int, float]]] | None = None,
         genome_ops: GenomeOps | None = None,
@@ -687,7 +690,9 @@ class DiscoveryPipeline:
             msg = "genome_ops (a port run) excludes exit_gene_space 'extended'"
             raise ValueError(msg)
         if isinstance(genome_ops, ParamOps) and config.fitness == "v2":
-            msg = "genome_ops (a port run) excludes fitness 'v2' (plateau steps are chromosome genes)"
+            msg = (
+                "genome_ops (a port run) excludes fitness 'v2' (plateau steps are chromosome genes)"
+            )
             raise ValueError(msg)
         self.config = config
         self._param_ops: ParamOps | None = genome_ops if isinstance(genome_ops, ParamOps) else None
@@ -728,7 +733,11 @@ class DiscoveryPipeline:
         # --fitness v2: keys first evaluated in a plateau batch (neighbour trials: raw N, never
         # series-pool rows) and the run's plateau totals.
         self._plateau_keys: set[str] = set()
-        self._plateau_stats: dict[str, int] = {"scored": 0, "neighbour_evals": 0, "neighbour_errors": 0}
+        self._plateau_stats: dict[str, int] = {
+            "scored": 0,
+            "neighbour_evals": 0,
+            "neighbour_errors": 0,
+        }
         # DSR tests the candidate's MARK-TO-MARKET daily return series
         # (bd vibe-quant-yul7u.24, y9ywf). A real NT backtest fn is told to
         # collect it, and a candidate without one then fails DSR closed;
@@ -820,7 +829,9 @@ class DiscoveryPipeline:
         try:
             return ProcessPoolExecutor(max_workers=workers)
         except (OSError, RuntimeError):
-            logger.warning("Failed to create shared worker pool, falling back to per-generation pools")
+            logger.warning(
+                "Failed to create shared worker pool, falling back to per-generation pools"
+            )
             return None
 
     def _apply_indicator_pool_filter(self) -> None:
@@ -901,7 +912,11 @@ class DiscoveryPipeline:
         if not isinstance(indicators, dict):
             return []
         return sorted(
-            {str(spec["type"]) for spec in indicators.values() if isinstance(spec, dict) and "type" in spec}
+            {
+                str(spec["type"])
+                for spec in indicators.values()
+                if isinstance(spec, dict) and "type" in spec
+            }
         )
 
     def _preflight_bars(self) -> None:
@@ -1014,7 +1029,9 @@ class DiscoveryPipeline:
         factory = self._backtest_fn_factory
         if factory is not None:
 
-            def _factory_with_ticks(s: str, e: str) -> Callable[[StrategyChromosome], dict[str, float | int]]:
+            def _factory_with_ticks(
+                s: str, e: str
+            ) -> Callable[[StrategyChromosome], dict[str, float | int]]:
                 gate_fn = factory(s, e)
                 if isinstance(gate_fn, NTBacktestFn):
                     gate_fn.fill_ticks = ticks
@@ -1088,7 +1105,9 @@ class DiscoveryPipeline:
             for (key, idx), fr in zip(todo.items(), fresh, strict=True):
                 self._fitness_cache[key] = fr
                 self._total_evaluated += 1
-                if self._fast_evaluator and (fr.mtm_daily_returns is not None or fr.symbol_mtm_daily):
+                if self._fast_evaluator and (
+                    fr.mtm_daily_returns is not None or fr.symbol_mtm_daily
+                ):
                     self._series_chroms[key] = chroms[idx].clone()
                 if fr.adjusted_score > 0 and (
                     cfg.fitness == "v1" or passes_train_gate(fr, cfg.min_trades)
@@ -1120,7 +1139,8 @@ class DiscoveryPipeline:
         for key, chrom in zip(keys, population, strict=True):
             chrom_of.setdefault(key, chrom)
         passers = [
-            key for key in chrom_of
+            key
+            for key in chrom_of
             if cache[key].fitness_v2 is not None and passes_train_gate(cache[key], cfg.min_trades)
         ]
         slots = math.ceil(PLATEAU_TOP_FRACTION * len(population) - 1e-9)  # P = 20: 1.0 is one slot
@@ -1241,6 +1261,7 @@ class DiscoveryPipeline:
 
         # Parse direction constraint
         from vibe_quant.discovery.operators import Direction
+
         direction_constraint: Direction | None = None
         if cfg.direction:
             direction_constraint = Direction(cfg.direction)
@@ -1423,7 +1444,7 @@ class DiscoveryPipeline:
         )
         # Cast back to the expected type (FitnessResult, not float)
         top_strategies: list[tuple[StrategyChromosome, FitnessResult]] = [
-            (chrom, fr) for chrom, fr in top_strategies_raw  # type: ignore[misc]
+            (chrom, cast("FitnessResult", fr)) for chrom, fr in top_strategies_raw
         ]
         if cfg.gate_pool == "all":
             # Every train-passer goes to the gates (not just the top-K); the survivors
@@ -1437,7 +1458,8 @@ class DiscoveryPipeline:
             ]
             logger.info(
                 "Gate pool: all %d train passers go to the gates (top_k would send %d)",
-                len(top_strategies), len(top_strategies_raw),
+                len(top_strategies),
+                len(top_strategies_raw),
             )
         if last_fitness_results:
             exported = self._export_top_strategies(population, last_fitness_results)
@@ -1460,7 +1482,12 @@ class DiscoveryPipeline:
             )
             logger.info(
                 "GA Sharpe distribution (%s): n=%d mean=%.3f std=%.3f min=%.3f max=%.3f",
-                SHARPE_UNIT, len(sharpes), disp_mean, disp_std, disp_min, disp_max,
+                SHARPE_UNIT,
+                len(sharpes),
+                disp_mean,
+                disp_std,
+                disp_min,
+                disp_max,
             )
 
         # --evaluator fast: the gates below see NT numbers only.
@@ -1468,9 +1495,7 @@ class DiscoveryPipeline:
 
         # Gate 1: guardrails (DSR + min trades + complexity + bootstrap CI).
         # Fails closed: candidates failing ANY guardrail are dropped.
-        top_strategies = self._gates.screen(
-            top_strategies, self.trial_budget()
-        )
+        top_strategies = self._gates.screen(top_strategies, self.trial_budget())
 
         # Final summary
         total_time = time.monotonic() - pipeline_start
@@ -1491,7 +1516,9 @@ class DiscoveryPipeline:
             logger.info("  Evolution: %s", timeline)
 
             # Find which generation found the overall best
-            best_gen_idx = max(range(len(generation_results)), key=lambda i: generation_results[i].best_fitness)
+            best_gen_idx = max(
+                range(len(generation_results)), key=lambda i: generation_results[i].best_fitness
+            )
             logger.info(
                 "  Peak gen: %d/%d (score=%.4f, %s of total time)",
                 best_gen_idx + 1,
@@ -1539,17 +1566,22 @@ class DiscoveryPipeline:
         # NT's fill model re-seeds and draws from the GLOBAL random (vibe-quant-0bwe2): an
         # in-process confirm must not move what runs after it.
         with preserve_global_random():
-            nt_results = evaluate_population(
-                list(todo.values()),
-                fn.nt_twin(),
-                self._filter_fn,
-                max_workers=cfg.max_workers,
-                min_trades=cfg.min_trades,
-                timeframe=cfg.timeframe,
-            ) if todo else []
+            nt_results = (
+                evaluate_population(
+                    list(todo.values()),
+                    fn.nt_twin(),
+                    self._filter_fn,
+                    max_workers=cfg.max_workers,
+                    min_trades=cfg.min_trades,
+                    timeframe=cfg.timeframe,
+                )
+                if todo
+                else []
+            )
         nt_by_key = dict(zip(todo, nt_results, strict=True))
         differ = [
-            todo[key].uid for key, nt_fr in nt_by_key.items()
+            todo[key].uid
+            for key, nt_fr in nt_by_key.items()
             if _confirm_key(self._fitness_cache[key]) != _confirm_key(nt_fr)
         ]
         if differ:
@@ -1589,13 +1621,18 @@ class DiscoveryPipeline:
             )
             for (chrom, fit), reason in left_out:
                 self._gates.reject(
-                    chrom, fit, "gate_pool_cap", [reason],
+                    chrom,
+                    fit,
+                    "gate_pool_cap",
+                    [reason],
                     dsr=self._gates.dsr_records.get(chrom.uid),
                     buy_hold=self._gates.buy_hold_records.get(chrom.uid),
                 )
             logger.info(
                 "Gate pool cap: %d gate survivors, %d kept (top_k=%d)",
-                len(survivors) + len(left_out), len(survivors), cfg.top_k,
+                len(survivors) + len(left_out),
+                len(survivors),
+                cfg.top_k,
             )
 
         train_dates: tuple[str, str] | None = None
@@ -1701,7 +1738,7 @@ class DiscoveryPipeline:
             for g in c.entry_genes + c.exit_genes + c.short_entry_genes + c.short_exit_genes:
                 ind_counter[g.indicator_type] += 1
         total_genes = sum(ind_counter.values()) or 1
-        ind_pcts = {k: f"{v/total_genes*100:.0f}%" for k, v in ind_counter.most_common()}
+        ind_pcts = {k: f"{v / total_genes * 100:.0f}%" for k, v in ind_counter.most_common()}
 
         dir_counts: dict[str, int] = {}
         for c in population:
@@ -1717,10 +1754,18 @@ class DiscoveryPipeline:
         logger.info(
             "=== GEN %d/%d === best=%.4f mean=%.4f median=%.4f std=%.4f | "
             "zero_score=%d/%d | gen_time=%.1fs total=%.0fs ETA=%.0fs%s",
-            gen + 1, cfg.max_generations,
-            gen_result.best_fitness, gen_result.mean_fitness, median_score, score_std,
-            zero_count, len(scores),
-            gen_elapsed, total_elapsed, eta_seconds, improvement_str,
+            gen + 1,
+            cfg.max_generations,
+            gen_result.best_fitness,
+            gen_result.mean_fitness,
+            median_score,
+            score_std,
+            zero_count,
+            len(scores),
+            gen_elapsed,
+            total_elapsed,
+            eta_seconds,
+            improvement_str,
         )
 
         if zero_count == len(scores):
@@ -1731,12 +1776,14 @@ class DiscoveryPipeline:
         else:
             best_chrom = population[best_idx]
             logger.info(
-                "  Best: uid=%s %s | "
-                "sharpe365=%s pf=%.2f dd=%.1f%% return=%.1f%% trades=%d",
+                "  Best: uid=%s %s | sharpe365=%s pf=%.2f dd=%.1f%% return=%.1f%% trades=%d",
                 best_chrom.uid,
                 genome_summary(best_chrom),
-                fmt_sharpe(best_fr.sharpe_ratio), best_fr.profit_factor,
-                best_fr.max_drawdown * 100, best_fr.total_return * 100, best_fr.total_trades,
+                fmt_sharpe(best_fr.sharpe_ratio),
+                best_fr.profit_factor,
+                best_fr.max_drawdown * 100,
+                best_fr.total_return * 100,
+                best_fr.total_trades,
             )
             if best_fr.symbol_scores is not None:
                 logger.info(
@@ -1747,7 +1794,9 @@ class DiscoveryPipeline:
             else:
                 logger.info(
                     "  Score breakdown: raw=%.4f - complexity=%.4f - overtrade=%.4f = %.4f",
-                    best_fr.raw_score, best_fr.complexity_penalty, best_fr.overtrade_penalty,
+                    best_fr.raw_score,
+                    best_fr.complexity_penalty,
+                    best_fr.overtrade_penalty,
                     best_fr.adjusted_score,
                 )
         if all_sharpes:
@@ -1758,15 +1807,24 @@ class DiscoveryPipeline:
                 fmt_sharpe(min(all_sharpes)),
                 fmt_sharpe(statistics.median(all_sharpes)),
                 fmt_sharpe(max(all_sharpes)),
-                min(all_trades), int(statistics.median(all_trades)), max(all_trades),
-                min(all_dds) * 100, statistics.median(all_dds) * 100, max(all_dds) * 100,
-                min(all_returns) * 100, statistics.median(all_returns) * 100, max(all_returns) * 100,
+                min(all_trades),
+                int(statistics.median(all_trades)),
+                max(all_trades),
+                min(all_dds) * 100,
+                statistics.median(all_dds) * 100,
+                max(all_dds) * 100,
+                min(all_returns) * 100,
+                statistics.median(all_returns) * 100,
+                max(all_returns) * 100,
             )
 
         from vibe_quant.discovery.diversity import population_entropy
+
         logger.info(
             "  Diversity: entropy=%.3f indicators=%s directions=%s",
-            population_entropy(population), ind_pcts, dir_counts,
+            population_entropy(population),
+            ind_pcts,
+            dir_counts,
         )
         logger.info(
             "  Timing: %d new backtests (%.1fs/backtest avg, %.1fs gen total, %d distinct so far)",
@@ -1777,7 +1835,8 @@ class DiscoveryPipeline:
         )
 
     def _log_top_strategies(
-        self, top_strategies: list[tuple[StrategyChromosome, FitnessResult]],
+        self,
+        top_strategies: list[tuple[StrategyChromosome, FitnessResult]],
     ) -> None:
         """Top-K strategy details (log only)."""
         if not top_strategies:
@@ -1787,9 +1846,14 @@ class DiscoveryPipeline:
             if genome_kind(chrom) != "legacy":
                 logger.info(
                     "  #%d uid=%s score=%.4f sharpe365=%s pf=%.2f dd=%.1f%% return=%.1f%% trades=%d | %s",
-                    rank, chrom.uid, fit.adjusted_score, fmt_sharpe(fit.sharpe_ratio),
+                    rank,
+                    chrom.uid,
+                    fit.adjusted_score,
+                    fmt_sharpe(fit.sharpe_ratio),
                     fit.profit_factor,
-                    fit.max_drawdown * 100, fit.total_return * 100, fit.total_trades,
+                    fit.max_drawdown * 100,
+                    fit.total_return * 100,
+                    fit.total_trades,
                     genome_summary(chrom),
                 )
                 continue
@@ -1810,9 +1874,14 @@ class DiscoveryPipeline:
             logger.info(
                 "  #%d uid=%s score=%.4f sharpe365=%s pf=%.2f dd=%.1f%% return=%.1f%% trades=%d | "
                 "dir=%s entry=%s exit=%s %s%s",
-                rank, chrom.uid, fit.adjusted_score, fmt_sharpe(fit.sharpe_ratio),
+                rank,
+                chrom.uid,
+                fit.adjusted_score,
+                fmt_sharpe(fit.sharpe_ratio),
                 fit.profit_factor,
-                fit.max_drawdown * 100, fit.total_return * 100, fit.total_trades,
+                fit.max_drawdown * 100,
+                fit.total_return * 100,
+                fit.total_trades,
                 _dir,
                 [g.indicator_type for g in chrom.entry_genes],
                 [g.indicator_type for g in chrom.exit_genes],
@@ -1829,9 +1898,13 @@ class DiscoveryPipeline:
                 for i, gene in enumerate(genes):
                     logger.info(
                         "    %s[%d]: %s(%s) %s %.4f%s",
-                        label, i, gene.indicator_type,
+                        label,
+                        i,
+                        gene.indicator_type,
                         ", ".join(f"{k}={v}" for k, v in gene.parameters.items()),
-                        gene.condition.value if hasattr(gene.condition, "value") else gene.condition,
+                        gene.condition.value
+                        if hasattr(gene.condition, "value")
+                        else gene.condition,
                         gene.threshold,
                         f" sub={gene.sub_value}" if gene.sub_value else "",
                     )
@@ -1873,14 +1946,18 @@ class DiscoveryPipeline:
             random_fn=self._ops.random,
             protected=range(min(self._elite_slots(), len(population))),
         )
-        replaced = [i for i, (a, b) in enumerate(zip(population, new_pop, strict=True)) if a is not b]
+        replaced = [
+            i for i, (a, b) in enumerate(zip(population, new_pop, strict=True)) if a is not b
+        ]
         new_known = list(known)
         for i in replaced:
             new_known[i] = None
         if replaced:
             logger.info(
                 "  Diversity intervention: entropy=%.3f < %.1f, injected %d random immigrants",
-                entropy, cfg.entropy_threshold, len(replaced),
+                entropy,
+                cfg.entropy_threshold,
+                len(replaced),
             )
         return new_pop, new_known
 
@@ -1915,7 +1992,9 @@ class DiscoveryPipeline:
         return self._ops.random(), _MAX_OFFSPRING_RETRIES, True
 
     def _breed(
-        self, parent_a: StrategyChromosome, parent_b: StrategyChromosome,
+        self,
+        parent_a: StrategyChromosome,
+        parent_b: StrategyChromosome,
     ) -> tuple[list[StrategyChromosome], int, int]:
         """Crossover + mutation + direction constraint + validity repair.
 
@@ -2012,10 +2091,7 @@ class DiscoveryPipeline:
 
         pool_indices = [i for i in range(len(population)) if i not in elite_indices]
         random.shuffle(pool_indices)
-        pairs = [
-            (pool_indices[k], pool_indices[k + 1])
-            for k in range(0, len(pool_indices) - 1, 2)
-        ]
+        pairs = [(pool_indices[k], pool_indices[k + 1]) for k in range(0, len(pool_indices) - 1, 2)]
 
         retries = 0
         random_fallbacks = 0
@@ -2030,12 +2106,15 @@ class DiscoveryPipeline:
         child_fit = self._evaluate_new(flat) if flat else []
 
         for p, ((i, j), kids) in enumerate(zip(pairs, offspring, strict=True)):
-            kids_fit = child_fit[2 * p: 2 * p + 2]
+            kids_fit = child_fit[2 * p : 2 * p + 2]
             parents = [population[i], population[j]]
             parents_fit = [fitness_results[i], fitness_results[j]]
             winners = crowding_replace(
                 parents=parents,
-                parent_fitness=[_selection_score(fitness_results[i]), _selection_score(fitness_results[j])],
+                parent_fitness=[
+                    _selection_score(fitness_results[i]),
+                    _selection_score(fitness_results[j]),
+                ],
                 offspring=kids,
                 offspring_fitness=[_selection_score(kids_fit[0]), _selection_score(kids_fit[1])],
             )

@@ -61,7 +61,9 @@ def _git_common_dir(here: str) -> str:
     """git's common dir for the directory ``here`` (as bus.py asks it)."""
     return subprocess.run(
         ["git", "-C", here, "rev-parse", "--path-format=absolute", "--git-common-dir"],
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.strip()
 
 
@@ -108,7 +110,10 @@ def ensure_installed() -> Path:
             shutil.copyfile(BOARD_PKG_DIR / name, home / name)
         proc = subprocess.run(
             [npm, "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
-            cwd=home, capture_output=True, text=True, check=False,
+            cwd=home,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if proc.returncode != 0 or not _vb_bin(home).exists():
             tail = (proc.stdout + proc.stderr).strip().splitlines()[-5:]
@@ -183,18 +188,24 @@ def _secret_reason(argv: list[str], stdin: bytes | None) -> str | None:
     """Why this `vb` call must not be sent, or None. The reason names the argument kind, never the value."""
     at = _command_index(argv)
     cmd = argv[at] if at is not None else "call"
-    checks: list[tuple[str, str]] = [("label value", v.split("=", 1)[-1]) for v in _flag_values(argv, "--label")]
+    checks: list[tuple[str, str]] = [
+        ("label value", v.split("=", 1)[-1]) for v in _flag_values(argv, "--label")
+    ]
     checks += [("idempotency key", v) for v in _flag_values(argv, "--idempotency-key")]
     checks += [("avatar", v) for v in _flag_values(argv, "--avatar")]
     rest = argv[at + 1 :] if at is not None else []
     if cmd == "label":
-        checks += [("label value", a.split("=", 1)[1]) for a in rest if "=" in a and not a.startswith("-")]
+        checks += [
+            ("label value", a.split("=", 1)[1]) for a in rest if "=" in a and not a.startswith("-")
+        ]
     if cmd in _TEXT_COMMANDS:
         checks += [("text", a) for a in rest if a != "-"]
         for path in _flag_values(rest, "--file"):
             if path != "-":
                 with contextlib.suppress(OSError):  # the real `vb` reports a missing file
-                    checks.append(("text", Path(path).read_text(encoding="utf-8", errors="replace")))
+                    checks.append(
+                        ("text", Path(path).read_text(encoding="utf-8", errors="replace"))
+                    )
         if stdin is not None:
             checks.append(("text", stdin.decode("utf-8", errors="replace")))
     for kind, value in checks:
@@ -223,8 +234,12 @@ def run_vb(
     if reason is not None:
         return subprocess.CompletedProcess(["vb", *argv], 2, "", reason + "\n")
     return subprocess.run(
-        [str(ensure_installed()), *argv], input=stdin, env=_client_env(env),
-        capture_output=True, text=True, check=False,
+        [str(ensure_installed()), *argv],
+        input=stdin,
+        env=_client_env(env),
+        capture_output=True,
+        text=True,
+        check=False,
     )
 
 
@@ -302,12 +317,20 @@ def _board_up(real: Path, url: str) -> bool:
     """True when `vb whoami` reaches a board at ``url`` with this env's token.
 
     Bounded: a program that holds the port but never answers HTTP would hang `vb` ~8 s."""
-    env = {k: v for k, v in os.environ.items() if k not in ("BOARD_NAME", "BOARD_TOKEN", "BOARD_PROFILE")}
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("BOARD_NAME", "BOARD_TOKEN", "BOARD_PROFILE")
+    }
     env["BOARD_URL"] = url
     try:
         proc = subprocess.run(
-            [str(real), "whoami"], env=env, capture_output=True, text=True,
-            timeout=_WHOAMI_TIMEOUT_S, check=False,
+            [str(real), "whoami"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=_WHOAMI_TIMEOUT_S,
+            check=False,
         )
     except subprocess.TimeoutExpired:
         return False
@@ -378,14 +401,21 @@ def _up_locked(real: Path, data: Path, port: int, inspect: bool) -> int:
         print(f"board already up at {url}")
         return 0
     if not _port_free(port):
-        print(f"boardctl up: port {port} is in use by another program (not a board this env can reach)", file=sys.stderr)
+        print(
+            f"boardctl up: port {port} is in use by another program (not a board this env can reach)",
+            file=sys.stderr,
+        )
         return 1
     cmd = [str(real), "serve", "--port", str(port), "--dir", str(data), "--no-open"]
     if not inspect:
         cmd.append("--no-inspect")
     with open(data / "serve.log", "ab") as log:
         proc = subprocess.Popen(
-            cmd, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
         )
     (data / "serve.pid").write_text(f"{proc.pid}\n")
     deadline = time.monotonic() + _UP_WAIT_S
@@ -422,7 +452,9 @@ def _stop(pid: int) -> None:
 
 def _is_board_serve(pid: int) -> bool:
     """Guard against a recycled pid: the process must be a `vb serve`."""
-    out = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True, check=False)
+    out = subprocess.run(
+        ["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True, check=False
+    )
     return " serve " in f" {out.stdout.strip()} "
 
 
@@ -458,7 +490,9 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["vb"]:
         return _cmd_vb(argv[1:])
-    ap = argparse.ArgumentParser(prog="boardctl.py", description=__doc__.split("\n\n")[0] if __doc__ else None)
+    ap = argparse.ArgumentParser(
+        prog="boardctl.py", description=__doc__.split("\n\n")[0] if __doc__ else None
+    )
     sub = ap.add_subparsers(dest="cmd", required=True)
     p_up = sub.add_parser("up", help="start the board (or report it up)")
     p_up.add_argument("--dir", type=Path, default=None)

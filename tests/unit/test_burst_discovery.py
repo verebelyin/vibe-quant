@@ -19,7 +19,15 @@ _spec.loader.exec_module(burst)
 
 
 def _eval(trades: int, ret: float, sharpe: float, error: str | None = None) -> dict[str, Any]:
-    return {"trades": trades, "ret": ret, "sharpe": sharpe, "pf": 1.0, "dd": 0.1, "error": error, "genome": "g"}
+    return {
+        "trades": trades,
+        "ret": ret,
+        "sharpe": sharpe,
+        "pf": 1.0,
+        "dd": 0.1,
+        "error": error,
+        "genome": "g",
+    }
 
 
 def test_cell_refuses_the_real_state_db(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -30,7 +38,12 @@ def test_cell_refuses_the_real_state_db(monkeypatch: pytest.MonkeyPatch, tmp_pat
 
 def _winner_row(cell: dict[str, Any], chromosome: dict[str, Any] | None = None) -> dict[str, Any]:
     best: dict[str, Any] = {
-        "sharpe": 2.0, "ret": 0.05, "trades": 60, "pf": 1.5, "dd": 0.04, "genome": "g",
+        "sharpe": 2.0,
+        "ret": 0.05,
+        "trades": 60,
+        "pf": 1.5,
+        "dd": 0.04,
+        "genome": "g",
     }
     if chromosome is not None:
         best["chromosome"] = chromosome
@@ -57,21 +70,41 @@ def test_a_genome_that_loses_to_buy_and_hold_anywhere_never_transfers(
     rows = [_winner_row(_transfer_cell(seed=i)) for i in range(1, 6)]
     _write_rows(tmp_path / "ledger.jsonl", rows)
 
-    def xfer(row: dict[str, Any], own: bool = True, sym: bool = True, nxt: bool = True) -> dict[str, Any]:
-        return {"key": row["key"], "own": _pt(0.3, bh=own), "symbols": {"NEARUSDT": _pt(0.1, bh=sym)},
-                "next": _pt(0.05, bh=nxt)}
+    def xfer(
+        row: dict[str, Any], own: bool = True, sym: bool = True, nxt: bool = True
+    ) -> dict[str, Any]:
+        return {
+            "key": row["key"],
+            "own": _pt(0.3, bh=own),
+            "symbols": {"NEARUSDT": _pt(0.1, bh=sym)},
+            "next": _pt(0.05, bh=nxt),
+        }
 
-    old = {"key": rows[4]["key"], "symbols": {"NEARUSDT": {"ret": 0.1, "trades": 80}},
-           "next": {"ret": 0.05, "trades": 80}}  # profit everywhere, no buy-and-hold verdict
-    _write_rows(tmp_path / "transfer.jsonl", [
-        xfer(rows[0]), xfer(rows[1], own=False), xfer(rows[2], sym=False), xfer(rows[3], nxt=False), old,
-    ])
-    assert [burst.genome_transfers(json.loads(ln)) for ln in
-            (tmp_path / "transfer.jsonl").read_text().splitlines()] == [True, False, False, False, False]
+    old = {
+        "key": rows[4]["key"],
+        "symbols": {"NEARUSDT": {"ret": 0.1, "trades": 80}},
+        "next": {"ret": 0.05, "trades": 80},
+    }  # profit everywhere, no buy-and-hold verdict
+    _write_rows(
+        tmp_path / "transfer.jsonl",
+        [
+            xfer(rows[0]),
+            xfer(rows[1], own=False),
+            xfer(rows[2], sym=False),
+            xfer(rows[3], nxt=False),
+            old,
+        ],
+    )
+    assert [
+        burst.genome_transfers(json.loads(ln))
+        for ln in (tmp_path / "transfer.jsonl").read_text().splitlines()
+    ] == [True, False, False, False, False]
     burst.main(["report", "--out", str(tmp_path)])
     out = capsys.readouterr().out
     assert "rows from before that rule: 1, never a transfer" in out
-    line = next(ln for ln in out.split("## transfer", 1)[1].splitlines() if ln.startswith("ADX+MACD"))
+    line = next(
+        ln for ln in out.split("## transfer", 1)[1].splitlines() if ln.startswith("ADX+MACD")
+    )
     assert line.split()[-3] == "0.200"  # 1 of 5 winners
 
 
@@ -127,9 +160,15 @@ def _chromosome(indicator: str = "ADX", threshold: float = 25.0) -> Any:
 
 def _transfer_cell(**over: Any) -> dict[str, Any]:
     return {
-        "pair": ["ADX", "MACD"], "direction": "long", "symbol": "ZECUSDT",
-        "start": "2026-03-01", "end": "2026-04-01", "leverage": 10, "seed": 1,
-        "eval_windows": 1, **over,
+        "pair": ["ADX", "MACD"],
+        "direction": "long",
+        "symbol": "ZECUSDT",
+        "start": "2026-03-01",
+        "end": "2026-04-01",
+        "leverage": 10,
+        "seed": 1,
+        "eval_windows": 1,
+        **over,
     }
 
 
@@ -167,8 +206,9 @@ def test_atr_cells_reach_the_discovery_spec_and_the_transfer() -> None:
     argv = burst._discovery_argv(atr, 7, Path("/tmp/x/state.db"))
     assert argv[:3] == ["discovery", "--run-id", "7"]
     spec_argv = argv[3:]  # from_argv takes the argv without --run-id
-    expected = SizingSettings(max_position_pct=3.0, risk_per_trade=0.005, max_margin_pct=1.0,
-                              sizing_mode="atr")
+    expected = SizingSettings(
+        max_position_pct=3.0, risk_per_trade=0.005, max_margin_pct=1.0, sizing_mode="atr"
+    )
     assert DiscoveryRunSpec.from_argv(spec_argv).sizing_settings() == expected
     assert burst.cell_key(atr) == burst.cell_key(base) + "|atr0.005"
     assert burst._transfer_backtest(atr, atr["symbol"], atr["start"], atr["end"]).sizing == expected
@@ -193,10 +233,13 @@ def test_blind_verdict_reads_the_whole_next_window_and_prints_worst_of_n(
     _write_rows(tmp_path / "ledger.jsonl", [new, old])
     worst = {"ret": -0.02, "trades": 9, "sharpe": -0.5, "dd": 0.1, "error": None}
     full = {"ret": 0.08, "trades": 40, "sharpe": 1.3, "dd": 0.2, "error": None}
-    _write_rows(tmp_path / "transfer.jsonl", [
-        {"key": new["key"], "symbols": {}, "next": worst, "next_full": full},
-        {"key": old["key"], "symbols": {}, "next": full},  # pre-iqj2h row: next only
-    ])
+    _write_rows(
+        tmp_path / "transfer.jsonl",
+        [
+            {"key": new["key"], "symbols": {}, "next": worst, "next_full": full},
+            {"key": old["key"], "symbols": {}, "next": full},  # pre-iqj2h row: next only
+        ],
+    )
     assert blind.main(["--out", str(tmp_path)]) == 0
     out = capsys.readouterr().out
     lines = {ln.split()[1]: ln for ln in out.splitlines() if ln.startswith(("PASS", "FAIL"))}

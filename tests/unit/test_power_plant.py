@@ -367,9 +367,7 @@ def test_solve_kappa_total_budget_caps_phase_one(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(plant, "plant_drift", spy)
     for cap in (1, 3):
         calls.clear()
-        kappa, passes, l_end = plant.solve_kappa(
-            k, 0.0002, max_passes=5, max_total_passes=cap, **w
-        )
+        kappa, passes, l_end = plant.solve_kappa(k, 0.0002, max_passes=5, max_total_passes=cap, **w)
         assert passes == cap == len(calls)  # exact count, bounded by the total budget
         assert passes <= cap
         assert (kappa, l_end) == min(calls, key=lambda pair: abs(pair[1]))  # true best pair
@@ -399,9 +397,7 @@ def test_solve_kappa_without_a_root_spends_the_cap_and_returns_the_best_pair(
     ]
     for fn, want_abs in cases:
         calls = patch_l_end(monkeypatch, fn)
-        kappa, passes, l_end = plant.solve_kappa(
-            make_klines(), 0.0002, max_total_passes=40, **W60
-        )
+        kappa, passes, l_end = plant.solve_kappa(make_klines(), 0.0002, max_total_passes=40, **W60)
         assert passes == len(calls) == 40  # every pass is one evaluation, exactly the cap
         assert (kappa, l_end) == min(calls, key=lambda pair: abs(pair[1]))
         assert abs(l_end) == want_abs  # never a root: fail closed on the best pair seen
@@ -495,7 +491,9 @@ def test_rsi_period_and_level_are_honoured() -> None:
     assert (T0_MS + 26 * DAY_MS) not in default
 
 
-def _dsl_rsi_entry_closes(k: plant.Klines, w: dict[str, int], period: int, level: float) -> tuple[int, ...]:
+def _dsl_rsi_entry_closes(
+    k: plant.Klines, w: dict[str, int], period: int, level: float
+) -> tuple[int, ...]:
     """Reference: the DSL RSI compute_fn on the complete 4h closes, ``crosses_below`` level."""
     import pandas as pd
 
@@ -522,7 +520,9 @@ def test_plant_triggers_are_the_dsl_rsi_entry_bars() -> None:
     for seed, period, level in ((5, 14, 30.0), (11, 7, 35.0)):
         k = make_klines(n_minutes=120 * 1440, seed=seed, sigma=0.0015)
         w = window(k)
-        rep = plant.plant_drift(k, delta=0.0, kappa=0.0, rsi_period=period, rsi_level=level, **w).report
+        rep = plant.plant_drift(
+            k, delta=0.0, kappa=0.0, rsi_period=period, rsi_level=level, **w
+        ).report
         want = _dsl_rsi_entry_closes(k, w, period, level)
         assert len(want) >= 5, (seed, len(want))
         assert rep.trigger_close_ms == want, seed
@@ -539,7 +539,10 @@ def test_write_scratch_many_puts_every_coin_in_one_root_as_a_single_write_would(
 
     src = RawDataArchive(tmp_path / "src.db")
     day0 = 1_704_067_200_000
-    funding = {"BTCUSDT": [(day0, 0.0001, 30_000.0)], "ETHUSDT": [(day0, -0.0003, 2_000.0), (day0 + 1, 0.0, 2_001.0)]}
+    funding = {
+        "BTCUSDT": [(day0, 0.0001, 30_000.0)],
+        "ETHUSDT": [(day0, -0.0003, 2_000.0), (day0 + 1, 0.0, 2_001.0)],
+    }
     for sym, rows in funding.items():
         src.insert_funding_rates(sym, rows, "test")
         src.insert_funding_intervals(sym, [(day0, 8 if sym == "BTCUSDT" else 4)], "test")
@@ -547,7 +550,9 @@ def test_write_scratch_many_puts_every_coin_in_one_root_as_a_single_write_would(
     btc, eth = make_klines(n_minutes=2 * 1440, seed=3), make_klines(n_minutes=2 * 1440, seed=4)
 
     plant.write_scratch(tmp_path / "one", btc, tmp_path / "src.db")
-    plant.write_scratch_many(tmp_path / "many", {"BTCUSDT": btc, "ETHUSDT": eth}, tmp_path / "src.db")
+    plant.write_scratch_many(
+        tmp_path / "many", {"BTCUSDT": btc, "ETHUSDT": eth}, tmp_path / "src.db"
+    )
 
     one = CatalogManager(tmp_path / "one" / "data" / "catalog")
     many = CatalogManager(tmp_path / "many" / "data" / "catalog")

@@ -94,8 +94,15 @@ class Trip:
 def _seed(server: BoardServer, root: Path) -> dict[str, dict[str, Any]]:
     g = bus.global_board_dir()
     s: dict[str, dict[str, Any]] = {}
-    s["live"] = bus.post(g, "cc-a", "board", "info", "RULE: widget.py reads gizmo first", topic="gotchas",
-                         extra={"importance": 3, "job": _JOB})
+    s["live"] = bus.post(
+        g,
+        "cc-a",
+        "board",
+        "info",
+        "RULE: widget.py reads gizmo first",
+        topic="gotchas",
+        extra={"importance": 3, "job": _JOB},
+    )
     s["reply1"] = bus.reply(g, "cc-b", str(s["live"]["id"]), "confirmed on sprocket")
     s["reply2"] = bus.reply(g, "cc-a", str(s["reply1"]["id"]), "thanks, ünïcode kept")
     s["stale"] = bus.post(g, "w", "board", "info", "stale finding about gamma", topic="findings")
@@ -104,7 +111,9 @@ def _seed(server: BoardServer, root: Path) -> dict[str, dict[str, Any]]:
     s["retire"] = retired
     s["old"] = bus.post(g, "w", "board", "info", "use ruff 0.6 flags", topic="decisions")
     s["sup1"] = bus.supersede(g, "chief", str(s["old"]["id"]), "decisions", "use ruff 0.7 flags")
-    s["sup2"] = bus.supersede(g, "chief", str(s["old"]["id"]), "decisions", "use ruff 0.8 flags")  # lost: sup1 won
+    s["sup2"] = bus.supersede(
+        g, "chief", str(s["old"]["id"]), "decisions", "use ruff 0.8 flags"
+    )  # lost: sup1 won
     s["bare"] = bus.post(g, "w", "board", "info", "bare label target", topic="thoughts")
     _vb(server, "label", str(s["bare"]["id"]), "state=retired")  # R23: no retire record
     s["edited"] = bus.post(g, "w", "board", "info", "first text", topic="model-notes")
@@ -130,12 +139,29 @@ def trip(board_server: BoardServer, tmp_path_factory: pytest.TempPathFactory) ->
         seeded = _seed(board_server, root)
         code_a, report_a = _export(root / "a.jsonl")
         mp.setenv("SWARM_BOARD_NS", ns_b)
-        code_i, report_i = _main("import-legacy", "--persistent", str(root / "a.jsonl"),
-                                 "--jobs-root", str(root / "empty-jobs"), "--map", str(root / "b-map.json"))
+        code_i, report_i = _main(
+            "import-legacy",
+            "--persistent",
+            str(root / "a.jsonl"),
+            "--jobs-root",
+            str(root / "empty-jobs"),
+            "--map",
+            str(root / "b-map.json"),
+        )
         code_b, _ = _export(root / "b.jsonl")
     assert (code_a, code_i, code_b) == (0, 0, 0), report_i
     assert report_a is not None and report_i is not None
-    return Trip(board_server, root, ns_a, ns_b, seeded, root / "a.jsonl", root / "b.jsonl", report_a, report_i)
+    return Trip(
+        board_server,
+        root,
+        ns_a,
+        ns_b,
+        seeded,
+        root / "a.jsonl",
+        root / "b.jsonl",
+        report_a,
+        report_i,
+    )
 
 
 # ------------------------------------------------------------------ the round trip
@@ -146,13 +172,23 @@ def test_round_trip_is_byte_identical(trip: Trip) -> None:
     assert a == b
     assert a.endswith(b"}\n") and not a.endswith(b"\n\n")
     assert (trip.report_import["rejects"], trip.report_import["secret_refused"]) == (
-        {"count": 0, "items": []}, {"count": 0, "ids": []})
+        {"count": 0, "items": []},
+        {"count": 0, "ids": []},
+    )
 
 
 def test_no_job_channel_no_actor_no_os_user_no_url(trip: Trip) -> None:
     text = trip.file_a.read_text(encoding="utf-8")
     assert "JOBONLY" not in text
-    for absent in (getpass.getuser(), "local:", "actor", "principal", trip.server.url, str(trip.server.port), trip.ns_a):
+    for absent in (
+        getpass.getuser(),
+        "local:",
+        "actor",
+        "principal",
+        trip.server.url,
+        str(trip.server.port),
+        trip.ns_a,
+    ):
         assert absent not in text, absent
 
 
@@ -175,8 +211,13 @@ def test_a_secret_on_the_board_refuses_the_export_and_keeps_the_old_file(
     small: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     before = small.read_bytes()
-    leaked = bs._http("POST", "/messages", {"channel": f"{bs.ns()}chat", "text": f"oops {_SECRET}", "labels": {}},
-                      profile="w", expect=("message",))["message"]  # past the write-path scan, as a raw API client could
+    leaked = bs._http(
+        "POST",
+        "/messages",
+        {"channel": f"{bs.ns()}chat", "text": f"oops {_SECRET}", "labels": {}},
+        profile="w",
+        expect=("message",),
+    )["message"]  # past the write-path scan, as a raw API client could
     code, report = _export(small)
     err = capsys.readouterr().err
     assert (code, report) == (1, None)
@@ -185,7 +226,9 @@ def test_a_secret_on_the_board_refuses_the_export_and_keeps_the_old_file(
     assert sorted(p.name for p in tmp_path.iterdir()) == ["export.jsonl", "global"]
 
 
-def test_board_down_exits_naming_board_up_and_writes_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_board_down_exits_naming_board_up_and_writes_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv("BOARD_URL", _UNROUTABLE)
     monkeypatch.setenv("BOARD_TOKEN", "t")
     with pytest.raises(SystemExit) as exc:

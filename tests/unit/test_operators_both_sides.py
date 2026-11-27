@@ -265,9 +265,7 @@ def test_mutate_both_short_lists_change_and_stay_bounded() -> None:
     chrom = _both()
     chrom.short_entry_genes = [_rsi(ConditionType.GT, 70.0) for _ in range(3)]
     chrom.short_exit_genes = [_rsi(ConditionType.LT, 30.0) for _ in range(2)]
-    baseline = json.dumps(
-        chromosome_to_serializable(chrom)["short_entry_genes"], sort_keys=True
-    )
+    baseline = json.dumps(chromosome_to_serializable(chrom)["short_entry_genes"], sort_keys=True)
     seen: set[str] = set()
     for _ in range(100):
         m = mutate(chrom, 1.0)
@@ -323,9 +321,7 @@ def test_is_valid_out_of_range_short_threshold_is_false() -> None:
 
 def test_is_valid_out_of_pool_short_indicator_is_false() -> None:
     chrom = _both()
-    chrom.short_entry_genes = [
-        StrategyGene("NOT_AN_IND", {"period": 14.0}, ConditionType.GT, 1.0)
-    ]
+    chrom.short_entry_genes = [StrategyGene("NOT_AN_IND", {"period": 14.0}, ConditionType.GT, 1.0)]
     assert not is_valid_chromosome(chrom)
 
 

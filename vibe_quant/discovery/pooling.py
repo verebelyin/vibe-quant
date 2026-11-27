@@ -180,7 +180,9 @@ def _pool_runs(
 
         logger.info(
             "=== MULTI-SEED RUN %d/%d (seed=%d) ===",
-            seed_idx + 1, num_seeds, seed_val,
+            seed_idx + 1,
+            num_seeds,
+            seed_val,
         )
         if run.cell is not None:
             logger.info("  bankroll cell %s", run.cell.label)
@@ -219,26 +221,27 @@ def _pool_runs(
             # ``max([1.0, nan])`` is 1.0). Pick the best FINITE value only; a
             # seed whose strategies are all non-finite gets a NaN best_sharpe.
             finite_seed_sharpes = [s for s in sharpes if math.isfinite(s)]
-            best_sharpe = (
-                max(finite_seed_sharpes) if finite_seed_sharpes else float("nan")
+            best_sharpe = max(finite_seed_sharpes) if finite_seed_sharpes else float("nan")
+            seed_stats.append(
+                {
+                    "seed": seed_val,
+                    "best_sharpe": best_sharpe,
+                    "best_score": result.top_strategies[0][1].adjusted_score,
+                    "num_strategies": len(result.top_strategies),
+                }
             )
-            seed_stats.append({
-                "seed": seed_val,
-                "best_sharpe": best_sharpe,
-                "best_score": result.top_strategies[0][1].adjusted_score,
-                "num_strategies": len(result.top_strategies),
-            })
         else:
-            seed_stats.append({
-                "seed": seed_val,
-                "best_sharpe": 0.0,
-                "best_score": 0.0,
-                "num_strategies": 0,
-            })
+            seed_stats.append(
+                {
+                    "seed": seed_val,
+                    "best_sharpe": 0.0,
+                    "best_score": 0.0,
+                    "num_strategies": 0,
+                }
+            )
 
         all_strategies.extend(
-            (chrom, fit, result, idx)
-            for idx, (chrom, fit) in enumerate(result.top_strategies)
+            (chrom, fit, result, idx) for idx, (chrom, fit) in enumerate(result.top_strategies)
         )
         all_generations.extend(result.generations)
         all_rejections.extend(result.guardrail_rejections)
@@ -281,12 +284,11 @@ def _pool_runs(
         statistics.median(score_list),
     )
     if non_finite_seeds:
-        logger.info(
-            "  Non-finite seed Sharpes: %d/%d", non_finite_seeds, num_seeds
-        )
+        logger.info("  Non-finite seed Sharpes: %d/%d", non_finite_seeds, num_seeds)
     logger.info(
         "  Seed failures: %d/%d (%.0f%%)",
-        failure_count, num_seeds,
+        failure_count,
+        num_seeds,
         failure_count / num_seeds * 100 if num_seeds else 0,
     )
 
@@ -315,8 +317,7 @@ def _pool_runs(
                 chromosome_distance(chrom, rep_chrom) < config.min_diversity_distance
             )
             behaviourally_same = (
-                candidate_fp is not None
-                and candidate_fp == _behaviour_fingerprint(group[0][1])
+                candidate_fp is not None and candidate_fp == _behaviour_fingerprint(group[0][1])
             )
             if structurally_close or behaviourally_same:
                 group.append((chrom, fit, result, idx))
@@ -334,7 +335,7 @@ def _pool_runs(
                 DiscoveryResult,
                 int,
             ]
-        ]
+        ],
     ) -> float:
         sharpes = [f.sharpe_ratio for _, f, _, _ in group]  # type: ignore[union-attr]
         return statistics.median(sharpes) if sharpes else 0.0
@@ -350,13 +351,15 @@ def _pool_runs(
             int,
         ]
     ] = []
-    for group in groups[:config.top_k]:
+    for group in groups[: config.top_k]:
         best = max(group, key=lambda t: t[1].adjusted_score)  # type: ignore[union-attr]
         selected_entries.append(best)
         median_sr = _group_median_sharpe(group)
         logger.info(
             "  Group: %d seeds, median_sharpe365=%s, representative=%s",
-            len(group), fmt_sharpe(median_sr), best[0].uid,  # type: ignore[union-attr]
+            len(group),
+            fmt_sharpe(median_sr),
+            best[0].uid,  # type: ignore[union-attr]
         )
 
     # The pick is made across ALL seeds, so the multiple-testing burden is the
@@ -383,7 +386,8 @@ def _pool_runs(
         # champions, never more (vibe-quant-clmmc.2).
         logger.info(
             "  Gate pool: pooled re-check rejected %d of %d picks; capped genomes are not promoted",
-            len(candidates) - len(kept), len(candidates),
+            len(candidates) - len(kept),
+            len(candidates),
         )
     selected_entries = [e for e in selected_entries if id(e[0]) in kept_ids]
     # Cells share seeds, so a uid recurs across cells (and seeds): the union above keeps the last
@@ -417,7 +421,9 @@ def _pool_runs(
 
     logger.info(
         "  Merged: %d groups from %d total candidates (%d groups)",
-        len(top_strategies), len(all_strategies), len(groups),
+        len(top_strategies),
+        len(all_strategies),
+        len(groups),
     )
 
     merged = DiscoveryResult(

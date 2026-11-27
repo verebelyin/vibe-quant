@@ -81,9 +81,7 @@ async def test_unlock_requires_acknowledge(client: AsyncClient) -> None:
 
 async def test_unlock_clears_flag(client: AsyncClient) -> None:
     await client.post("/api/system/kill", json={"reason": "test"})
-    r = await client.post(
-        "/api/system/unlock", json={"acknowledge": True, "cleared_by": "oncall"}
-    )
+    r = await client.post("/api/system/unlock", json={"acknowledge": True, "cleared_by": "oncall"})
     assert r.status_code == 200
     body = r.json()
     assert body["kill_switch"] is False

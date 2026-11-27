@@ -61,9 +61,7 @@ def test_bnb_flag_reaches_worker_venue() -> None:
     """A BNB NTBacktestFn survives pickling and builds a 0.00045-taker runner."""
     from vibe_quant.discovery.backtest_fn import NTBacktestFn
 
-    fn = NTBacktestFn(
-        ["BTCUSDT"], "4h", "2024-01-01", "2024-02-01", fee_schedule=BNB
-    )
+    fn = NTBacktestFn(["BTCUSDT"], "4h", "2024-01-01", "2024-02-01", fee_schedule=BNB)
     loaded = pickle.loads(pickle.dumps(fn))
 
     assert loaded.fee_schedule.taker_rate == Decimal("0.00045")
@@ -90,9 +88,7 @@ def test_screening_runner_default_schedule_unchanged() -> None:
     assert venue.maker_fee == Decimal("0.0002")
 
     built = create_backtest_venue_config(venue)
-    assert built.fee_model.fee_model_path == (
-        "nautilus_trader.backtest.models:MakerTakerFeeModel"
-    )
+    assert built.fee_model.fee_model_path == ("nautilus_trader.backtest.models:MakerTakerFeeModel")
 
     # The worker factory's default is the same schedule.
     fn = NTBacktestFn(["BTCUSDT"], "4h", "2024-01-01", "2024-02-01")
@@ -119,9 +115,7 @@ def test_discovery_refuses_post_only() -> None:
     from vibe_quant.discovery.run import _make_nt_backtest_fn
 
     with pytest.raises(ValueError, match="validation-only"):
-        NTBacktestFn(
-            ["BTCUSDT"], "4h", "2024-01-01", "2024-02-01", entry_order=_POST_ONLY
-        )
+        NTBacktestFn(["BTCUSDT"], "4h", "2024-01-01", "2024-02-01", entry_order=_POST_ONLY)
 
     with pytest.raises(ValueError, match="validation-only"):
         _make_nt_backtest_fn(
@@ -156,9 +150,7 @@ def test_cli_bnb_discount_flag() -> None:
     assert FeeSchedule(
         tier=opted_in.fee_tier, bnb_discount=opted_in.bnb_discount
     ).taker_rate == Decimal("0.00045")
-    assert FeeSchedule(
-        tier=default.fee_tier, bnb_discount=default.bnb_discount
-    ) == FeeSchedule()
+    assert FeeSchedule(tier=default.fee_tier, bnb_discount=default.bnb_discount) == FeeSchedule()
 
 
 def test_discovery_notes_record_fee_schedule() -> None:
@@ -220,9 +212,7 @@ def test_screening_pipeline_reads_bnb_param(monkeypatch: Any) -> None:
     from vibe_quant.screening import pipeline as pipeline_mod
     from vibe_quant.screening.pipeline import create_screening_pipeline
 
-    monkeypatch.setattr(
-        pipeline_mod, "resolve_parent_fill_ticks", lambda *a, **k: None
-    )
+    monkeypatch.setattr(pipeline_mod, "resolve_parent_fill_ticks", lambda *a, **k: None)
 
     default = create_screening_pipeline(_minimal_dsl(), symbols=["BTCUSDT"])
     assert default._runner._venue_config().fee_schedule == FeeSchedule()
@@ -232,9 +222,7 @@ def test_screening_pipeline_reads_bnb_param(monkeypatch: Any) -> None:
         symbols=["BTCUSDT"],
         parameters={"bnb_discount": True},
     )
-    assert (
-        bnb._runner._venue_config().fee_schedule.taker_rate == Decimal("0.00045")
-    )
+    assert bnb._runner._venue_config().fee_schedule.taker_rate == Decimal("0.00045")
 
 
 def test_screening_pipeline_refuses_post_only_param() -> None:
@@ -388,9 +376,7 @@ def _run_live_discovery_cli(
     return built, json.loads(result["notes"])
 
 
-def test_live_cli_bnb_reaches_every_runner(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_live_cli_bnb_reaches_every_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Train, holdout, cross/WFA factory, headline and efficiency runners all carry BNB."""
     built, notes = _run_live_discovery_cli(tmp_path, monkeypatch, "--bnb-discount")
 
@@ -467,7 +453,9 @@ def test_screening_open_mark_uses_run_schedule_taker() -> None:
             inst = self.cache.instrument(iid)
             self.submit_order(
                 self.order_factory.market(
-                    iid, OrderSide.BUY, inst.make_qty(Decimal("0.050")),
+                    iid,
+                    OrderSide.BUY,
+                    inst.make_qty(Decimal("0.050")),
                     time_in_force=TimeInForce.IOC,
                 )
             )

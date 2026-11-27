@@ -146,9 +146,7 @@ def reload_plugins() -> list[str]:
     return load_builtin_plugins()
 
 
-def _record_failure(
-    qualified: str, exc: BaseException, strict: bool
-) -> None:
+def _record_failure(qualified: str, exc: BaseException, strict: bool) -> None:
     """Log + record + (optionally) re-raise a plugin-load exception."""
     logger.error("Failed to load indicator plugin %s: %s", qualified, exc)
     _load_errors.append(
@@ -196,16 +194,14 @@ def _discover_env_path_plugins(
     for raw_dir in raw.split(os.pathsep):
         dir_path = Path(raw_dir).expanduser()
         if not dir_path.is_dir():
-            logger.warning(
-                "VQ_PLUGIN_PATH entry is not a directory: %s", dir_path
-            )
+            logger.warning("VQ_PLUGIN_PATH entry is not a directory: %s", dir_path)
             continue
         # Derive a stable per-directory namespace so plugins in two
         # different VQ_PLUGIN_PATH dirs with the same filename don't
         # collide in sys.modules.
-        dir_tag = "_".join(
-            filter(None, str(dir_path.resolve()).replace(":", "_").split("/"))
-        ) or "root"
+        dir_tag = (
+            "_".join(filter(None, str(dir_path.resolve()).replace(":", "_").split("/"))) or "root"
+        )
         for py_file in sorted(dir_path.glob("*.py")):
             if py_file.name.startswith("_"):
                 continue

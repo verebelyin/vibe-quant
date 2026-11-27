@@ -151,8 +151,12 @@ def _stamped_template() -> Path:
         runner = _pass_runner(repo)
         for scope in _PASS_SCOPES:
             cfg = swarm_check.Config(
-                worktree=repo, main_root=root, base="main",
-                scope=scope, exactness="never", frontend="never",
+                worktree=repo,
+                main_root=root,
+                base="main",
+                scope=scope,
+                exactness="never",
+                frontend="never",
             )
             key = swarm_check._cache_probe(cfg, runner)[0]
             assert key
@@ -197,9 +201,7 @@ class FakeRunner:
         self.timeouts.append(timeout)
         self.envs.append(env)
         if c[0] == "git":
-            proc = subprocess.run(
-                c, cwd=str(cwd), capture_output=True, text=True, env=_git_env()
-            )
+            proc = subprocess.run(c, cwd=str(cwd), capture_output=True, text=True, env=_git_env())
             return proc.returncode, proc.stdout + proc.stderr
         for needle, resp in self.responses.items():
             if any(needle in Path(arg).name for arg in c):
@@ -276,9 +278,7 @@ class DeclaredGit(FakeRunner):
         self.porcelain: list[str] | None = None
         if not (committed is None and dirty is None and untracked is None):
             self.committed = list(committed or ())
-            self.porcelain = [f" M {p}" for p in dirty or ()] + [
-                f"?? {p}" for p in untracked or ()
-            ]
+            self.porcelain = [f" M {p}" for p in dirty or ()] + [f"?? {p}" for p in untracked or ()]
         self.blobs = dict(blobs or {})
 
     def _from_disk(self) -> None:
@@ -411,6 +411,8 @@ _GATE_SCRIPT = "scripts/agents/gate_golden.py"
 _GOLDENS = ("data", "swarm", "_goldens")
 _TIERS_OK = "C1-defaults: IDENTICAL\nC8-1d-isolated-125: IDENTICAL\n"
 _GATE_OK = "IDENTICAL\n"
+
+
 def _install_goldens(
     tmp_path: Path,
     repo: Path,
@@ -445,13 +447,16 @@ class TestGitState:
     def test_git_diff_failure_is_error(self, tmp_path: Path) -> None:
         repo = _init_repo(tmp_path)
 
-        def run(cmd: Sequence[str], cwd: Path, env: object = None, timeout: int = 1) -> tuple[int, str]:
+        def run(
+            cmd: Sequence[str], cwd: Path, env: object = None, timeout: int = 1
+        ) -> tuple[int, str]:
             if "diff" in cmd:
                 return 129, "usage: git diff"
             return FakeRunner()(cmd, cwd)
 
         state = swarm_check.git_state(repo, "main", run)
         assert "git diff failed" in state.error and state.changed == []
+
 
 class TestImportGraph:
     """The reverse import closure: which tests/unit files reach a changed vibe_quant module.
@@ -483,14 +488,22 @@ class TestImportGraph:
             (tmp_path / "vibe_quant" / "unreadable.py").write_bytes(b"\xff\xfe\x00\x01")
         (tmp_path / "tests" / "unit" / "api").mkdir(parents=True)
         for rel, source in (
-            ("tests/unit/test_caller.py", "from vibe_quant.discovery.pipeline import DiscoveryPipeline\n"),
-            ("tests/unit/api/test_nested.py", "from vibe_quant.discovery.pipeline import DiscoveryPipeline\n"),
+            (
+                "tests/unit/test_caller.py",
+                "from vibe_quant.discovery.pipeline import DiscoveryPipeline\n",
+            ),
+            (
+                "tests/unit/api/test_nested.py",
+                "from vibe_quant.discovery.pipeline import DiscoveryPipeline\n",
+            ),
             ("tests/unit/test_plainer.py", "import json\n"),
         ):
             (tmp_path / rel).write_text(source)
         return swarm_check.build_import_graph(tmp_path)
 
-    @pytest.mark.parametrize(("bad", "why"), [("broken", "cannot parse"), ("unreadable", "cannot read")])
+    @pytest.mark.parametrize(
+        ("bad", "why"), [("broken", "cannot parse"), ("unreadable", "cannot read")]
+    )
     def test_an_unparseable_or_unreadable_file_raises_and_the_plan_goes_full(
         self, tmp_path: Path, bad: str, why: str
     ) -> None:
@@ -502,7 +515,9 @@ class TestImportGraph:
         state = swarm_check.GitState(changed=["vibe_quant/discovery/pipeline.py"], untracked=[])
         plan = swarm_check.plan_tests(cfg, state)
         assert plan.full and plan.files == ["tests/unit"]
-        assert plan.notes[0].startswith("full tests/unit: selection unknown") and why in plan.notes[0]
+        assert (
+            plan.notes[0].startswith("full tests/unit: selection unknown") and why in plan.notes[0]
+        )
 
     def test_direct_and_transitive_importers(self) -> None:
         # test_other imports vibe_quant.c directly; test_direct reaches it through
@@ -511,6 +526,7 @@ class TestImportGraph:
             "tests/unit/test_direct.py",
             "tests/unit/test_other.py",
         ]
+
 
 def _path_reader_repo(tmp_path: Path) -> Path:
     """The bead's red fixture: a test READS two vibe_quant modules by path, never importing them.
@@ -574,6 +590,7 @@ class TestPathMentionTestSelection:
         assert _called_with(runner, "test_state_manager_locking.py")
         assert swarm_check.gate_summary(checks) == ("GATE FAIL (1 failed)", 1)
 
+
 class TestAutoTriggers:
     def test_exactness_dirs(self) -> None:
         for p in [
@@ -589,6 +606,7 @@ class TestAutoTriggers:
         ]:
             assert swarm_check.should_run_exactness([p]), p
 
+
 class TestAggregation:
     def test_gate_fail_counts(self) -> None:
         checks = [
@@ -598,6 +616,7 @@ class TestAggregation:
         ]
         gate, n = swarm_check.gate_summary(checks)
         assert (gate, n) == ("GATE FAIL (2 failed)", 2)
+
 
 class TestRunChecks:
     def test_scope_fail_lists_offenders(self, tmp_path: Path) -> None:
@@ -649,8 +668,14 @@ class TestRunChecks:
         _main_exactness(tmp_path, repo)
         runner = DeclaredGit(repo)
         runner.responses = {"exactness": (0, "IDENTICAL")}
-        cfg = _cfg(tmp_path, repo, exactness="always", frontend="never", base="HEAD",
-                   expect_pins=str(tmp_path / "nope.json"))
+        cfg = _cfg(
+            tmp_path,
+            repo,
+            exactness="always",
+            frontend="never",
+            base="HEAD",
+            expect_pins=str(tmp_path / "nope.json"),
+        )
         ex = {c.name: c for c in swarm_check.run_checks(cfg, runner)}["exactness"]
         assert ex.status == "FAIL" and "declared pins file missing" in ex.detail
         assert not _called_with(runner, "exactness_239.py")
@@ -703,6 +728,7 @@ class TestRunChecks:
         assert fe.status == "FAIL"
         assert "5" in fe.detail and "3" in fe.detail
 
+
 def _importer_repo(tmp_path: Path) -> Path:
     """The bead's red fixture: a PRE-EXISTING test file imports the module under change.
 
@@ -731,7 +757,7 @@ class TestImporterTestSelection:
     @staticmethod
     def _pytest_cmds(runner: FakeRunner) -> list[list[str]]:
         return [
-            c[c.index("pytest") + 1:]
+            c[c.index("pytest") + 1 :]
             for c in runner.calls
             if any("pytest" in Path(a).name for a in c)
         ]
@@ -764,7 +790,9 @@ class TestImporterTestSelection:
         _git(repo, "checkout", "-qb", "feature")
         (repo / "vibe_quant" / "discovery").mkdir()
         (repo / "vibe_quant" / "discovery" / "__init__.py").write_text("")
-        (repo / "vibe_quant" / "discovery" / "selection.py").write_text("def f() -> int:\n    return 1\n")
+        (repo / "vibe_quant" / "discovery" / "selection.py").write_text(
+            "def f() -> int:\n    return 1\n"
+        )
         (repo / "vibe_quant" / "discovery" / "pipeline.py").write_text(
             "def run() -> int:\n    from vibe_quant.discovery import selection\n\n"
             "    return selection.f()\n"
@@ -783,6 +811,7 @@ class TestImporterTestSelection:
         assert {c.name: c for c in checks}["tests"].status == "FAIL"
         assert _called_with(runner, "test_caller.py")
         assert swarm_check.gate_summary(checks)[1] == 1
+
 
 _PAR = ["-n", "auto", "--dist", "worksteal", "-m", "not timing"]  # the per-round xdist tail
 _POL = ["-m", "not timing"]  # the serial fail-fast policy call's tail
@@ -831,7 +860,7 @@ class TestPolicyTestSelection:
     @staticmethod
     def _pytest_cmds(runner: FakeRunner) -> list[list[str]]:
         return [
-            c[c.index("pytest") + 1:]
+            c[c.index("pytest") + 1 :]
             for c in runner.calls
             if any("pytest" in Path(a).name for a in c)
         ]
@@ -856,7 +885,9 @@ class TestPolicyTestSelection:
         4-minute suite run. A red policy call ends the tests step: the selection never runs."""
         repo = _policy_repo(tmp_path)
         (repo / "tests" / "unit" / "test_new.py").write_text("def test_new() -> None:\n    pass\n")
-        runner = DeclaredGit(repo, dirty=["vibe_quant/unrelated.py"], untracked=["tests/unit/test_new.py"])
+        runner = DeclaredGit(
+            repo, dirty=["vibe_quant/unrelated.py"], untracked=["tests/unit/test_new.py"]
+        )
         node = "tests/unit/test_discovery_liquidation.py::test_policy"
 
         def pytest_run(cmd: Sequence[str], cwd: Path) -> tuple[int, str]:
@@ -865,7 +896,9 @@ class TestPolicyTestSelection:
             return 0, "1 passed in 0.01s"
 
         runner.responses = {"pytest": pytest_run}
-        monkeypatch.setattr(swarm_check, "_new_unmarked_tests", lambda *a: ["tests/unit/test_new.py::test_new"])
+        monkeypatch.setattr(
+            swarm_check, "_new_unmarked_tests", lambda *a: ["tests/unit/test_new.py::test_new"]
+        )
         cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never", frontend="never", full=full)
         checks = {c.name: c for c in swarm_check.run_checks(cfg, runner)}
         tests = checks["tests"]
@@ -886,9 +919,15 @@ class TestPolicyTestSelection:
         the first call, so its failure arrived only after the ordinary xdist run."""
         repo = _policy_repo(tmp_path)
         policy = "tests/unit/test_script_exec_bits.py"
-        (repo / policy).write_text("from vibe_quant.unrelated import U\n\ndef test_policy() -> None:\n    assert U\n")
-        (repo / "tests" / "unit" / "test_user.py").write_text("from vibe_quant.unrelated import U\n")
-        runner = DeclaredGit(repo, dirty=["vibe_quant/unrelated.py", policy, "tests/unit/test_user.py"])
+        (repo / policy).write_text(
+            "from vibe_quant.unrelated import U\n\ndef test_policy() -> None:\n    assert U\n"
+        )
+        (repo / "tests" / "unit" / "test_user.py").write_text(
+            "from vibe_quant.unrelated import U\n"
+        )
+        runner = DeclaredGit(
+            repo, dirty=["vibe_quant/unrelated.py", policy, "tests/unit/test_user.py"]
+        )
         node = f"{policy}::test_policy"
 
         def pytest_run(cmd: Sequence[str], cwd: Path) -> tuple[int, str]:
@@ -904,7 +943,9 @@ class TestPolicyTestSelection:
         assert len(cmds) == 1 and policy in cmds[0] and "-n" not in cmds[0]
         # green: the ordinary call does not run it twice; the policy call keeps its junit
         # report, so slow-tests still times the changed policy test
-        runner = DeclaredGit(repo, dirty=["vibe_quant/unrelated.py", policy, "tests/unit/test_user.py"])
+        runner = DeclaredGit(
+            repo, dirty=["vibe_quant/unrelated.py", policy, "tests/unit/test_user.py"]
+        )
         runner.responses = {"pytest": (0, "1 passed in 0.01s")}
         swarm_check.run_checks(cfg, runner)
         cmds = self._pytest_cmds(runner)
@@ -950,11 +991,14 @@ class TestExactnessCarry:
         repo = _init_repo(tmp_path)
         _main_carry(tmp_path, repo)
         carry, _ = self._check(
-            tmp_path, repo, responses={"exactness_carry.py": (0, "no evidence line")},
+            tmp_path,
+            repo,
+            responses={"exactness_carry.py": (0, "no evidence line")},
             exactness="always",
         )
         assert carry.status == "FAIL"
         assert "drift (rc=0)" in carry.detail and "no evidence line" in carry.detail
+
 
 class TestGoldenProofs:
     """exactness-tiers and gate-golden: the two golden proofs no gate ran before.
@@ -1045,14 +1089,18 @@ class TestGoldenProofs:
         assert "worktree script missing" in by["exactness-tiers"].detail
         assert not _called_with(runner, "exactness_tiers.py")
 
+
 class TestFailClosed:
     def test_bad_base_fails_gate(self, tmp_path: Path) -> None:
         repo = _init_repo(tmp_path)
         (repo / "vibe_quant" / "foo.py").write_text("def foo() -> int:\n    return 5\n")
         _git(repo, "commit", "-qam", "change")
         # git rejects the ref itself, so this one keeps the real binary
-        checks = swarm_check.run_checks(cfg, FakeRunner()) if (cfg := _cfg(
-            tmp_path, repo, base="mian", exactness="auto", frontend="auto")) else []
+        checks = (
+            swarm_check.run_checks(cfg, FakeRunner())
+            if (cfg := _cfg(tmp_path, repo, base="mian", exactness="auto", frontend="auto"))
+            else []
+        )
         by = {c.name: c for c in checks}
         assert by["scope"].status == "FAIL" and "bad base ref: mian" in by["scope"].detail
         assert swarm_check.gate_summary(checks)[0].startswith("GATE FAIL")
@@ -1074,7 +1122,9 @@ class TestFailClosed:
         assert by["ruff"].status == "FAIL" and "cannot run" in by["ruff"].detail
         assert swarm_check.gate_summary(checks)[0].startswith("GATE FAIL")
 
-    def test_stubs_refused_without_allow(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_stubs_refused_without_allow(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         repo = _init_repo(tmp_path)
         monkeypatch.delenv("SWARM_CHECK_ALLOW_STUBS", raising=False)
         monkeypatch.setenv("SWARM_CHECK_RUFF", "/bin/true")
@@ -1116,7 +1166,7 @@ class TestFailClosed:
         pytest_cmds = [c for c in runner.calls if any("pytest" in Path(a).name for a in c)]
         # A big selection runs under xdist with the relative-speed tests deselected; the
         # serial `timing` call names its files, and this tree has none (no call).
-        assert [c[c.index("pytest") + 1:] for c in pytest_cmds] == [
+        assert [c[c.index("pytest") + 1 :] for c in pytest_cmds] == [
             ["tests/unit", "-n", "auto", "--dist", "worksteal", "-m", "not timing"],
         ]
 
@@ -1155,6 +1205,7 @@ class TestFailClosed:
         assert data["internal"]["status"] == "FAIL" and "kaboom" in data["internal"]["detail"]
         assert data["gate"] == "FAIL"
 
+
 def _shared_dir(main: Path, link: Path) -> Path:
     """`main` as a real dir holding a marker, `link` a symlink to it (worktree.sh's shared link)."""
     main.mkdir(parents=True, exist_ok=True)
@@ -1168,7 +1219,9 @@ class TestDependencyEnvs:
     """A worktree that changes its deps is gated against ITS deps, never main's (user ruling
     2026-11-24: no SWARM_CHECK_ALLOW_STUBS / --exactness never workarounds)."""
 
-    def test_lock_differs_every_python_tool_runs_from_the_worktree_venv(self, tmp_path: Path) -> None:
+    def test_lock_differs_every_python_tool_runs_from_the_worktree_venv(
+        self, tmp_path: Path
+    ) -> None:
         repo = _init_repo(tmp_path)
         (tmp_path / "uv.lock").write_text("old\n")
         (repo / "uv.lock").write_text("new\n")
@@ -1180,7 +1233,11 @@ class TestDependencyEnvs:
         by = {c.name: c for c in swarm_check.run_checks(cfg, runner)}
         assert by["python-env"].status == "PASS"
         assert by["python-env"].detail == "worktree .venv (lock differs)"
-        sync = [(c, e) for c, e in zip(runner.calls, runner.envs, strict=True) if c[:2] == ["uv", "sync"]]
+        sync = [
+            (c, e)
+            for c, e in zip(runner.calls, runner.envs, strict=True)
+            if c[:2] == ["uv", "sync"]
+        ]
         assert len(sync) == 1 and "--locked" in sync[0][0] and "--all-extras" in sync[0][0]
         assert sync[0][1] == {"UV_PROJECT_ENVIRONMENT": str(repo / ".venv")}
         # the link to MAIN's venv is gone (a sync through it would rewrite main), main untouched
@@ -1225,7 +1282,9 @@ class TestDependencyEnvs:
         (repo / "pyproject.toml").write_text("p\n")
         (tmp_path / "uv.lock").write_text("new\n")
         main_env = swarm_check.cache_key("h", "s", cfg, "t")
-        (tmp_path / "pyproject.toml").write_text("p2\n")  # main moved: the worktree's env now differs
+        (tmp_path / "pyproject.toml").write_text(
+            "p2\n"
+        )  # main moved: the worktree's env now differs
         assert swarm_check.cache_key("h", "s", cfg, "t") != main_env
 
     def _frontend(
@@ -1236,7 +1295,9 @@ class TestDependencyEnvs:
         (tmp_path / "frontend" / "package.json").write_text('{"v": 1}\n')
         (repo / "frontend").mkdir()
         (repo / "frontend" / "package.json").write_text('{"v": 2}\n')
-        marker = _shared_dir(tmp_path / "frontend" / "node_modules", repo / "frontend" / "node_modules")
+        marker = _shared_dir(
+            tmp_path / "frontend" / "node_modules", repo / "frontend" / "node_modules"
+        )
         runner = DeclaredGit(repo)
         runner.responses = responses  # type: ignore[assignment]
         cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never")
@@ -1281,8 +1342,12 @@ class TestCacheKey:
         assert key != swarm_check.cache_key("h2", "s", base, "t")
         assert key != swarm_check.cache_key("h", "s2", base, "t")
         assert key != swarm_check.cache_key("h", "s", _cfg(tmp_path, tmp_path, scope=("x",)), "t")
-        assert key != swarm_check.cache_key("h", "s", _cfg(tmp_path, tmp_path, exactness="always"), "t")
-        assert key != swarm_check.cache_key("h", "s", _cfg(tmp_path, tmp_path, frontend="always"), "t")
+        assert key != swarm_check.cache_key(
+            "h", "s", _cfg(tmp_path, tmp_path, exactness="always"), "t"
+        )
+        assert key != swarm_check.cache_key(
+            "h", "s", _cfg(tmp_path, tmp_path, frontend="always"), "t"
+        )
         assert key != swarm_check.cache_key("h", "s", base, "t2")
         assert key != swarm_check.cache_key("h", "s", base, "t", "merge-base-2")
 
@@ -1302,7 +1367,9 @@ class TestCacheKey:
             assert first not in seen and second not in seen, rel
             seen.update({first, second})
 
-    @pytest.mark.simple_target(reason="gate fail-closed: main's load_flakes.txt must key the PASS stamp")
+    @pytest.mark.simple_target(
+        reason="gate fail-closed: main's load_flakes.txt must key the PASS stamp"
+    )
     def test_main_load_flakes_list_matters(self, tmp_path: Path) -> None:
         """Review rev-flakeretry-1 S1: a stamped PASS (one earned by a retry too) is not reused
         after main's load_flakes.txt loses an entry or gains a bad line."""
@@ -1311,6 +1378,7 @@ class TestCacheKey:
         listed = swarm_check.cache_key("h", "s", cfg, "t")
         _write_flakes(tmp_path, f"{_FOO}::test_flaky  # no bead id")
         assert swarm_check.cache_key("h", "s", cfg, "t") != listed
+
 
 class TestPassCache:
     """The PASS stamp: written only for a clean tree whose key still holds, never written by a
@@ -1400,12 +1468,20 @@ class TestPassCache:
         repo, _ = self._unstamped_repo(tmp_path)
         runner = self._runner(repo)
         cfg = swarm_check.Config(
-            worktree=repo, main_root=repo, base="main", exactness="never", frontend="never", full=True
+            worktree=repo,
+            main_root=repo,
+            base="main",
+            exactness="never",
+            frontend="never",
+            full=True,
         )
         key = swarm_check._cache_probe(cfg, runner)[0]
         assert key
         swarm_check.write_stamp(repo, runner, cfg, key, _PASS_CHECKS)
-        runner.responses["pytest"] = (1, "FAILED tests/unit/test_foo.py::test_foo - boom\n1 failed in 0.01s")
+        runner.responses["pytest"] = (
+            1,
+            "FAILED tests/unit/test_foo.py::test_foo - boom\n1 failed in 0.01s",
+        )
         assert self._main(repo, runner, "--full") == 1
         assert "PASS cache:" not in capsys.readouterr().out
         for stamp in self._stamps(repo):
@@ -1460,7 +1536,7 @@ class TestPassCache:
         assert self._main(repo, runner, "--full") == 0
         assert "PASS cache:" not in capsys.readouterr().out
         assert any(
-            c[c.index("pytest") + 1:][:1] == ["tests/unit"] for c in runner.calls if "pytest" in c
+            c[c.index("pytest") + 1 :][:1] == ["tests/unit"] for c in runner.calls if "pytest" in c
         )
 
     def test_uncommitted_change_blocks_stamp(
@@ -1529,6 +1605,7 @@ class TestPassCache:
         assert "stubs" in capsys.readouterr().out
         assert not self._stamps(repo)
 
+
 class TestIntegration:
     def _repo_with_stubs(self, tmp_path: Path) -> tuple[Path, dict[str, str]]:
         repo = _init_repo(tmp_path)
@@ -1541,7 +1618,7 @@ class TestIntegration:
         stub_mypy.write_text("#!/bin/sh\necho 'Success: no issues found'\n")
         stub_pytest = tmp_path / "stub_pytest.sh"
         stub_pytest.write_text(
-            "#!/bin/sh\necho \"pytest $@\" >> \"$STUB_LOG\"\necho '3 passed in 0.05s'\n"
+            '#!/bin/sh\necho "pytest $@" >> "$STUB_LOG"\necho \'3 passed in 0.05s\'\n'
         )
         for s in (stub_ruff, stub_mypy, stub_pytest):
             s.chmod(0o755)
@@ -1565,11 +1642,16 @@ class TestIntegration:
                 "bash",
                 str(_SCRIPT.parent / "swarm-check.sh"),
                 str(repo),
-                "--base", "main",
-                "--scope", "vibe_quant/*,*.txt",
-                "--exactness", "never",
-                "--frontend", "never",
-                "--json", str(out_json),
+                "--base",
+                "main",
+                "--scope",
+                "vibe_quant/*,*.txt",
+                "--exactness",
+                "never",
+                "--frontend",
+                "never",
+                "--json",
+                str(out_json),
             ],
             capture_output=True,
             text=True,
@@ -1605,11 +1687,16 @@ class TestIntegration:
                 "bash",
                 str(_SCRIPT.parent / "swarm-check.sh"),
                 str(repo),
-                "--base", "main",
-                "--scope", "docs/*",
-                "--exactness", "never",
-                "--frontend", "never",
-                "--json", str(out_json),
+                "--base",
+                "main",
+                "--scope",
+                "docs/*",
+                "--exactness",
+                "never",
+                "--frontend",
+                "never",
+                "--json",
+                str(out_json),
             ],
             capture_output=True,
             text=True,
@@ -1646,12 +1733,18 @@ class TestBusInbox:
     def test_the_file_store_with_an_agent_fails_closed(self, tmp_path: Path) -> None:
         """R27: the file store has no worker inbox any more: FAIL naming the store, never SKIP
         or PASS, even with an unread-looking chief DM or none at all."""
-        for msgs in ([], [{"id": "m1", "from": "chief", "to": "sa", "kind": "question", "body": "x"}]):
+        for msgs in (
+            [],
+            [{"id": "m1", "from": "chief", "to": "sa", "kind": "question", "body": "x"}],
+        ):
             sub = tmp_path / str(len(msgs))
             sub.mkdir()
             d = self._bus(sub, msgs)
             chk = self._check(sub, bus=str(d), bus_agent="sa")[0]
-            assert (chk.status, chk.detail) == ("FAIL", "the file store has no worker inbox: unset SWARM_STORE")
+            assert (chk.status, chk.detail) == (
+                "FAIL",
+                "the file store has no worker inbox: unset SWARM_STORE",
+            )
             assert list(d.iterdir()) == ([d / "messages.jsonl"] if msgs else [])  # nothing written
 
     def test_cached_pass_plus_unread_chief_dm_is_gate_fail(
@@ -1671,13 +1764,26 @@ class TestBusInbox:
             if len(calls) == 1:
                 return swarm_check.Check("bus-inbox", "PASS", "pre-check: no unread")
             return swarm_check.Check(
-                "bus-inbox", "FAIL", "1 unread from chief in thread t1: m1 reread the brief — run: vb read t1, then reply"
+                "bus-inbox",
+                "FAIL",
+                "1 unread from chief in thread t1: m1 reread the brief — run: vb read t1, then reply",
             )
 
         monkeypatch.setattr(swarm_check, "bus_inbox_check", dm_after_precheck)
         rc = swarm_check.main(
-            [str(repo), "--base", "main", "--exactness", "never", "--frontend", "never",
-             "--bus", str(d), "--bus-agent", "sa"],
+            [
+                str(repo),
+                "--base",
+                "main",
+                "--exactness",
+                "never",
+                "--frontend",
+                "never",
+                "--bus",
+                str(d),
+                "--bus-agent",
+                "sa",
+            ],
             run=_pass_runner(repo),
         )
         out = capsys.readouterr().out
@@ -1723,9 +1829,13 @@ class TestBoardInboxOlderThanLastCommitEdges:
         ]  # fmt: skip
         monkeypatch.setattr(swarm_check, "_board_store_module", lambda: _FakeBoardStore(thread))
         (tmp_path / "job" / "bus").mkdir(parents=True, exist_ok=True)
-        return swarm_check._board_inbox(_cfg(tmp_path, repo, bus=str(tmp_path / "job" / "bus"), bus_agent="sa"))
+        return swarm_check._board_inbox(
+            _cfg(tmp_path, repo, bus=str(tmp_path / "job" / "bus"), bus_agent="sa")
+        )
 
-    def test_a_git_error_fails_closed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_a_git_error_fails_closed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         not_a_repo = tmp_path / "not-a-repo"
         not_a_repo.mkdir()
         chk = self._check(tmp_path, not_a_repo, int(time.time()) - 3600, monkeypatch)
@@ -1760,15 +1870,22 @@ class TestInheritedSwarmEnv:
         explicit.mkdir()
         monkeypatch.setenv("SWARM_BUS", str(explicit))
         monkeypatch.setenv("SWARM_AGENT", "sa")
-        assert swarm_check.main(argv, run=FakeRunner()) == 1  # the file store has no worker inbox (R27)
+        assert (
+            swarm_check.main(argv, run=FakeRunner()) == 1
+        )  # the file store has no worker inbox (R27)
         assert "FAIL bus-inbox: the file store has no worker inbox" in capsys.readouterr().out
         assert list(explicit.iterdir()) == []
+
 
 @pytest.fixture
 def _inbox_pass(monkeypatch: pytest.MonkeyPatch) -> None:
     """The bus-inbox check PASSes: a class that gates with an agent tests another check, and the
     file store (the unit suite's) has no worker inbox (R27)."""
-    monkeypatch.setattr(swarm_check, "bus_inbox_check", lambda cfg: swarm_check.Check("bus-inbox", "PASS", "stubbed"))
+    monkeypatch.setattr(
+        swarm_check,
+        "bus_inbox_check",
+        lambda cfg: swarm_check.Check("bus-inbox", "PASS", "stubbed"),
+    )
 
 
 def _stub_declared(
@@ -1808,9 +1925,7 @@ def _pinned_repo(tmp_path: Path) -> tuple[Path, dict[str, str]]:
 class TestPinnedText:
     """5. A test the gate does NOT run that pins a string the diff removed is a FAIL."""
 
-    def _pin(
-        self, tmp_path: Path, repo: Path, blobs: dict[str, str], **state: Any
-    ) -> Any:
+    def _pin(self, tmp_path: Path, repo: Path, blobs: dict[str, str], **state: Any) -> Any:
         cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never", frontend="never")
         runner = DeclaredGit(repo, blobs=blobs, dirty=["vibe_quant/foo.py"], **state)
         return {c.name: c for c in swarm_check.run_checks(cfg, runner)}["pinned-text"]
@@ -1822,9 +1937,9 @@ class TestPinnedText:
         assert "tests/unit/test_pin.py" in pin.detail
         assert f'pins removed text "{_PIN}"' in pin.detail
 
+
 _STALE_THREAD = (
-    "thread:delegated-task:command%3Amcp%3Aaaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-    "%3Adelegate-task%3A"
+    "thread:delegated-task:command%3Amcp%3Aaaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee%3Adelegate-task%3A"
 )
 
 
@@ -1885,9 +2000,7 @@ class TestStaleReads:
     ) -> None:
         repo = self._repo(tmp_path)
         stale = "cd main && set -o pipefail; sed -n 1,80p vibe_quant/foo.py"
-        db = _stale_db(
-            tmp_path, "cc-x-1", stale, f"cd {repo} && sed -n 1p scripts/agents/bus.py"
-        )
+        db = _stale_db(tmp_path, "cc-x-1", stale, f"cd {repo} && sed -n 1p scripts/agents/bus.py")
         monkeypatch.setenv("SWARM_T3_DB", str(db))
         assert swarm_check.main(self._argv(tmp_path, repo, "cc-x-1"), run=_stub_declared(repo)) == 1
         out = capsys.readouterr().out
@@ -1951,10 +2064,19 @@ def _vb_msg(board_server: BoardServer, *args: str, profile: str, text: str) -> d
     return msg
 
 
-def _thread_root(board_server: BoardServer, job: Path, agent: str, text: str = "t1: build it") -> str:
+def _thread_root(
+    board_server: BoardServer, job: Path, agent: str, text: str = "t1: build it"
+) -> str:
     root = _vb_msg(
-        board_server, "post", _job_channel(job), "--label", f"agent={agent}", "--label", "task=t1",
-        profile="chief", text=text,
+        board_server,
+        "post",
+        _job_channel(job),
+        "--label",
+        f"agent={agent}",
+        "--label",
+        "task=t1",
+        profile="chief",
+        text=text,
     )
     return str(root["id"])
 
@@ -1965,8 +2087,14 @@ def _say(board_server: BoardServer, root: str, profile: str, text: str) -> str:
 
 def _commit_at(repo: Path, epoch: int) -> str:
     """An empty commit dated ``epoch`` (no sleeping to order it against board messages)."""
-    env = {**_git_env(), "GIT_COMMITTER_DATE": f"@{epoch} +0000", "GIT_AUTHOR_DATE": f"@{epoch} +0000"}
-    subprocess.run(["git", "-C", str(repo), "commit", "-q", "--allow-empty", "-m", "wip"], check=True, env=env)
+    env = {
+        **_git_env(),
+        "GIT_COMMITTER_DATE": f"@{epoch} +0000",
+        "GIT_AUTHOR_DATE": f"@{epoch} +0000",
+    }
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-q", "--allow-empty", "-m", "wip"], check=True, env=env
+    )
     return _git(repo, "rev-parse", "--short", "HEAD").strip()
 
 
@@ -1977,7 +2105,10 @@ def _linted_handoff(root: Path) -> str:
     (root / "a.py").write_text("x = 1\n")
     _git(root, "add", "a.py")
     _git(root, "commit", "-q", "-m", "feat: x")
-    sha, tree = _git(root, "rev-parse", "HEAD").strip(), _git(root, "rev-parse", "HEAD^{tree}").strip()
+    sha, tree = (
+        _git(root, "rev-parse", "HEAD").strip(),
+        _git(root, "rev-parse", "HEAD^{tree}").strip(),
+    )
     log = root / "data" / "swarm" / "_gate-logs" / f"wt-{sha[:12]}-x.log"
     log.parent.mkdir(parents=True)
     log.write_text(f"$ ruff check\n[exit 0]\nHEAD {sha} TREE {tree}\nGATE PASS\n")
@@ -1996,11 +2127,17 @@ class TestBusInboxBoard:
         repo = tmp_path / "wt"
         if not repo.exists():
             repo = _init_repo(tmp_path)
-        return swarm_check.bus_inbox_check(_cfg(tmp_path, repo, bus=str(job / "bus"), bus_agent=agent))
+        return swarm_check.bus_inbox_check(
+            _cfg(tmp_path, repo, bus=str(job / "bus"), bus_agent=agent)
+        )
 
     @pytest.mark.parametrize("broken", ["unreachable", "refused", "raises"])
     def test_a_board_that_cannot_be_read_fails_naming_board_up(
-        self, board_server: BoardServer, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, broken: str
+        self,
+        board_server: BoardServer,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        broken: str,
     ) -> None:
         job = _board_mode(board_server, monkeypatch, tmp_path)
         _thread_root(board_server, job, "sa")
@@ -2010,6 +2147,7 @@ class TestBusInboxBoard:
         elif broken == "refused":
             monkeypatch.setenv("BOARD_TOKEN", "not-the-token")
         else:
+
             def boom(channel: str) -> list[dict[str, object]]:
                 raise RuntimeError("socket reset")
 
@@ -2020,7 +2158,9 @@ class TestBusInboxBoard:
         assert chk.detail.startswith("cannot read the board for sa: ")
         assert chk.detail.endswith("— start it: scripts/agents/board-up.sh")
 
-    @pytest.mark.slow(reason="board_server start/stop ~1.5 s when run alone + 5 real vb processes, ~3 s")
+    @pytest.mark.slow(
+        reason="board_server start/stop ~1.5 s when run alone + 5 real vb processes, ~3 s"
+    )
     def test_chief_messages_after_the_agents_newest_fail_with_id_and_full_text(
         self, board_server: BoardServer, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -2039,6 +2179,7 @@ class TestBusInboxBoard:
             f" — run: vb read {root}, then reply",
         )
 
+
 _NO_FILE_INBOX = "the file store has no worker inbox: unset SWARM_STORE"
 
 
@@ -2051,7 +2192,9 @@ class TestDoneNeedsHandoffInTheGate:
         repo = tmp_path / "wt"
         if not repo.exists():
             repo = _init_repo(tmp_path)
-        return swarm_check.bus_inbox_check(_cfg(tmp_path, repo, bus=str(job / "bus"), bus_agent=agent))
+        return swarm_check.bus_inbox_check(
+            _cfg(tmp_path, repo, bus=str(job / "bus"), bus_agent=agent)
+        )
 
     def test_jsonl_done_without_then_with_a_linted_handoff(self, tmp_path: Path) -> None:
         job = tmp_path / "20261120-jd"
@@ -2079,7 +2222,10 @@ class TestDoneNeedsHandoffInTheGate:
         )
         handoff.write_text(_linted_handoff(tmp_path / "gated"))
         chk = self._check(tmp_path, job)
-        assert (chk.status, chk.detail) == ("FAIL", _NO_FILE_INBOX)  # no done hit left: peer's done is not the gate's
+        assert (chk.status, chk.detail) == (
+            "FAIL",
+            _NO_FILE_INBOX,
+        )  # no done hit left: peer's done is not the gate's
 
 
 def test_gate_script_imports_only_the_stdlib() -> None:
@@ -2149,7 +2295,11 @@ class FlakeRunner(DeclaredGit):
         self.alone_timeouts: list[int] = []
 
     def __call__(
-        self, cmd: Sequence[str], cwd: Path, env: Mapping[str, str] | None = None, timeout: int = 600
+        self,
+        cmd: Sequence[str],
+        cwd: Path,
+        env: Mapping[str, str] | None = None,
+        timeout: int = 600,
     ) -> tuple[int, str]:
         c = [str(x) for x in cmd]
         if not any(Path(a).name == "pytest" for a in c):
@@ -2193,7 +2343,11 @@ class TwoCallRunner(FlakeRunner):
         self.main_calls = 0
 
     def __call__(
-        self, cmd: Sequence[str], cwd: Path, env: Mapping[str, str] | None = None, timeout: int = 600
+        self,
+        cmd: Sequence[str],
+        cwd: Path,
+        env: Mapping[str, str] | None = None,
+        timeout: int = 600,
     ) -> tuple[int, str]:
         c = [str(x) for x in cmd]
         if any(Path(a).name == "pytest" for a in c) and "-n0" not in c:
@@ -2222,7 +2376,9 @@ class TestLoadFlakeRetry:
     def test_listed_failure_that_passes_alone_passes_the_row(self, tmp_path: Path) -> None:
         repo = _init_repo(tmp_path)
         node = f"{_FOO}::test_flaky"
-        _write_flakes(tmp_path, "# load flakes", "", f"{node}  # vibe-quant-ca3v8 xdist catalog leak")
+        _write_flakes(
+            tmp_path, "# load flakes", "", f"{node}  # vibe-quant-ca3v8 xdist catalog leak"
+        )
         runner = FlakeRunner(repo, [node])
         log = swarm_check.ToolLog(runner)
         tests = self._gate(tmp_path, log)["tests"]
@@ -2249,10 +2405,12 @@ class TestLoadFlakeRetry:
         assert tests.detail == f"{today.detail} | retry alone also failed: {node}"
 
     @pytest.mark.parametrize("listed", [0, 1])
-    def test_an_unlisted_failure_never_retries_and_fails_as_today(self, tmp_path: Path, listed: int) -> None:
+    def test_an_unlisted_failure_never_retries_and_fails_as_today(
+        self, tmp_path: Path, listed: int
+    ) -> None:
         repo = _init_repo(tmp_path)
         flaky, real = f"{_FOO}::test_flaky", f"{_FOO}::TestReal::test_real"
-        red = [flaky, real][1 - listed:]
+        red = [flaky, real][1 - listed :]
         today = self._gate(tmp_path, FlakeRunner(repo, red))["tests"]
         _write_flakes(tmp_path, f"{flaky}  # vibe-quant-ca3v8 xdist catalog leak")
         runner = FlakeRunner(repo, red)
@@ -2261,7 +2419,9 @@ class TestLoadFlakeRetry:
         assert runner.alone_runs == []
 
     @pytest.mark.parametrize(("count", "retried"), [(3, True), (4, False)])
-    def test_at_most_three_failed_cases_retry(self, tmp_path: Path, count: int, retried: bool) -> None:
+    def test_at_most_three_failed_cases_retry(
+        self, tmp_path: Path, count: int, retried: bool
+    ) -> None:
         repo = _init_repo(tmp_path)
         red = [f"{_FOO}::test_flaky_{i}" for i in range(count)]
         _write_flakes(tmp_path, *(f"{n}  # vibe-quant-ca3v8 xdist catalog leak" for n in red))
@@ -2274,7 +2434,9 @@ class TestLoadFlakeRetry:
         """failed_tests() names 3 ids; the 4th, unlisted, is only in the junit."""
         repo = _init_repo(tmp_path)
         listed = [f"{_FOO}::test_flaky_{i}" for i in range(3)]
-        _write_flakes(tmp_path, *(f"{n}  # vibe-quant-ca3v8 xdist catalog leak" for n in listed[:2]))
+        _write_flakes(
+            tmp_path, *(f"{n}  # vibe-quant-ca3v8 xdist catalog leak" for n in listed[:2])
+        )
         runner = FlakeRunner(repo, listed)
         assert self._gate(tmp_path, runner)["tests"].status == "FAIL"
         assert runner.alone_runs == []
@@ -2320,7 +2482,9 @@ class TestLoadFlakeRetry:
 
     def test_a_stale_entry_is_not_an_error(self, tmp_path: Path) -> None:
         repo = _init_repo(tmp_path)
-        _write_flakes(tmp_path, f"{_FOO}::test_renamed_long_ago  # vibe-quant-ca3v8 xdist catalog leak")
+        _write_flakes(
+            tmp_path, f"{_FOO}::test_renamed_long_ago  # vibe-quant-ca3v8 xdist catalog leak"
+        )
         tests = self._gate(tmp_path, FlakeRunner(repo, []))["tests"]
         assert tests.status == "PASS" and "RETRIED" not in tests.detail
 
@@ -2343,16 +2507,23 @@ class TestLoadFlakeRetry:
         assert tests.status == ("PASS" if retried else "FAIL")
         assert runner.alone_runs == [f"{_FOO}::{r}" for r in retried or []]
 
-    def test_a_retried_run_stores_no_file_passes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_a_retried_run_stores_no_file_passes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         repo = _init_repo(tmp_path)
         node = f"{_FOO}::test_flaky"
         _write_flakes(tmp_path, f"{node}  # vibe-quant-ca3v8 xdist catalog leak")
         stored: list[list[str]] = []
         monkeypatch.setattr(
-            swarm_check, "_file_cache_plan",
+            swarm_check,
+            "_file_cache_plan",
             lambda *a: swarm_check.FileCacheRun([_FOO], {}, "env", ("a" * 40, "b" * 40, 1)),
         )
-        monkeypatch.setattr(swarm_check, "_store_file_passes", lambda cfg, run, cache, passed: stored.append(list(passed)))
+        monkeypatch.setattr(
+            swarm_check,
+            "_store_file_passes",
+            lambda cfg, run, cache, passed: stored.append(list(passed)),
+        )
         assert self._gate(tmp_path, FlakeRunner(repo, []))["tests"].status == "PASS"
         assert stored == [[_FOO]]  # control: a green run stores its file
         stored.clear()
@@ -2370,7 +2541,9 @@ class TestLoadFlakeRetryFailsClosed:
 
     @staticmethod
     def _plan(monkeypatch: pytest.MonkeyPatch, *calls: list[str]) -> None:
-        plan = swarm_check.TestPlan([(args, False, "") for args in calls], frozenset(), False, [], [])
+        plan = swarm_check.TestPlan(
+            [(args, False, "") for args in calls], frozenset(), False, [], []
+        )
         monkeypatch.setattr(swarm_check, "plan_tests", lambda cfg, state: plan)
 
     @pytest.mark.parametrize("first_rc", [1, 2, 3, 4, 5])
@@ -2388,7 +2561,9 @@ class TestLoadFlakeRetryFailsClosed:
         assert (tests.status, tests.detail) == ("FAIL", today.detail)
         assert runner.alone_runs == []
 
-    def test_two_red_calls_of_listed_flakes_retry(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_two_red_calls_of_listed_flakes_retry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Control for F7: two calls, both rc 1 with only the listed case, still retry."""
         repo = _init_repo(tmp_path)
         self._plan(monkeypatch, ["tests/unit/test_new.py"], [_FOO])
@@ -2436,14 +2611,20 @@ class TestLoadFlakeRetryFailsClosed:
         """F8: `1 failed, 1 error` with one failed and one errored listed case retries both."""
         repo = _init_repo(tmp_path)
         other = f"{_FOO}::TestX::test_setup_flaky"
-        _write_flakes(tmp_path, self._LINE, f"{other}  # vibe-quant-28p7p fixture build under xdist")
+        _write_flakes(
+            tmp_path, self._LINE, f"{other}  # vibe-quant-28p7p fixture build under xdist"
+        )
         runner = FlakeRunner(repo, [self._NODE], errors=[other])
         tests = self._gate(tmp_path, runner)["tests"]
         assert tests.status == "PASS"
         assert runner.alone_runs == [self._NODE, other]
 
-    @pytest.mark.parametrize(("outcome", "passed"), [("passed", True), ("skipped", False), ("none", False)])
-    def test_passed_alone_means_a_passed_junit_case(self, tmp_path: Path, outcome: str, passed: bool) -> None:
+    @pytest.mark.parametrize(
+        ("outcome", "passed"), [("passed", True), ("skipped", False), ("none", False)]
+    )
+    def test_passed_alone_means_a_passed_junit_case(
+        self, tmp_path: Path, outcome: str, passed: bool
+    ) -> None:
         """F9: rc 0 alone with the test skipped or not reported (deselected) is no pass."""
         repo = _init_repo(tmp_path)
         _write_flakes(tmp_path, self._LINE)
@@ -2472,9 +2653,13 @@ class TestLoadFlakeRetryFailsClosed:
         """F11: each alone re-run gets SLOW_RERUN_TIMEOUT; a timeout (run's rc 124) is a FAIL."""
         repo = _init_repo(tmp_path)
         _write_flakes(tmp_path, self._LINE)
-        runner = FlakeRunner(repo, [self._NODE], {self._NODE: 124}, alone_junit={self._NODE: "none"})
+        runner = FlakeRunner(
+            repo, [self._NODE], {self._NODE: 124}, alone_junit={self._NODE: "none"}
+        )
         tests = self._gate(tmp_path, runner)["tests"]
-        assert tests.status == "FAIL" and tests.detail.endswith(f"retry alone also failed: {self._NODE}")
+        assert tests.status == "FAIL" and tests.detail.endswith(
+            f"retry alone also failed: {self._NODE}"
+        )
         assert runner.alone_timeouts == [swarm_check.SLOW_RERUN_TIMEOUT]
 
     @pytest.mark.parametrize(("mark", "retried"), [("timing", False), ("not timing", True)])
@@ -2491,7 +2676,9 @@ class TestLoadFlakeRetryFailsClosed:
         assert runner.alone_runs == ([self._NODE] if retried else [])
 
 
-@pytest.mark.simple_target(reason="gate base selection: ancestry direction only a real repo proves; a wrong base fails scope or hides diff")
+@pytest.mark.simple_target(
+    reason="gate base selection: ancestry direction only a real repo proves; a wrong base fails scope or hides diff"
+)
 def test_an_explicit_base_on_main_follows_a_later_main_merge(tmp_path: Path) -> None:
     """A brief pins `--base <sha>`; the chief later merges main into the worktree. Gating
     against the old sha FAILed scope on main's own files, so the base moves to the new
@@ -2520,6 +2707,9 @@ def test_an_explicit_base_on_main_follows_a_later_main_merge(tmp_path: Path) -> 
 
     base, info = swarm_check.resolve_base(repo, start, run)
     assert base == later
-    assert info == f"INFO base: --base {start[:12]} is on main and the branch merged main since; using merge-base {later[:12]}"
+    assert (
+        info
+        == f"INFO base: --base {start[:12]} is on main and the branch merged main since; using merge-base {later[:12]}"
+    )
     assert swarm_check.resolve_base(repo, side, run) == (side, "")
     assert swarm_check.resolve_base(repo, "main", run) == ("main", "")

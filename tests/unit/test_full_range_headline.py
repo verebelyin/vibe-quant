@@ -32,6 +32,7 @@ _FALLBACK = dict(
     fallback_return=0.30,
 )
 
+
 def test_uses_full_range_metrics_when_present() -> None:
     """A full-range backtest dict wins over the GA fallback values."""
     out = full_range_headline(_FR, **_FALLBACK)

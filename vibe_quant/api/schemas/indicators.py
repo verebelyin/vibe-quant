@@ -69,7 +69,9 @@ class IndicatorCatalogEntry(BaseModel):
 class PluginLoadErrorEntry(BaseModel):
     """One plugin that failed to import at startup."""
 
-    module: str = Field(..., description="Fully-qualified module path (e.g. vibe_quant.dsl.plugins.foo)")
+    module: str = Field(
+        ..., description="Fully-qualified module path (e.g. vibe_quant.dsl.plugins.foo)"
+    )
     error_type: str = Field(..., description="Exception class name")
     message: str = Field(..., description="Exception message")
 

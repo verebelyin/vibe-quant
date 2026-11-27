@@ -187,7 +187,9 @@ def test_trend_filter_and_lookback_edges() -> None:
 def test_gross_above_one_needs_opt_in() -> None:
     with pytest.raises(ValueError) as caught:
         _funding(gross=1.5)
-    assert str(caught.value) == "gross > 1.0 needs allow_gross_above_one (liquidation is not modelled)"
+    assert (
+        str(caught.value) == "gross > 1.0 needs allow_gross_above_one (liquidation is not modelled)"
+    )
     with pytest.raises(ValueError, match="allow_gross_above_one"):
         _trend(gross=1.0000000000000002)
     assert _funding(gross=1.5, allow_gross_above_one=True).gross == 1.5
@@ -285,9 +287,10 @@ def test_legacy_serialization_kept() -> None:
     inverse = _funding(weighting="inverse_vol", vol_lookback_days=60)
     assert list(inverse.to_json())[7:] == ["weighting", "vol_lookback_days"]
     expected = {key: value for key, value in default.to_json().items() if key not in _ARM_OMIT}
-    assert default.arm_hash() == hashlib.sha256(
-        json.dumps(expected, sort_keys=True).encode()
-    ).hexdigest()
+    assert (
+        default.arm_hash()
+        == hashlib.sha256(json.dumps(expected, sort_keys=True).encode()).hexdigest()
+    )
 
 
 _ARM_OMIT = ("symbols", "start_ns", "end_ns", "initial_balance", "fill_granularity")
@@ -297,7 +300,9 @@ def test_arm_hash_ignores_window_cohort_tier() -> None:
     """R12: symbols, window, E0 and tier do not change the arm."""
     base = _trend()
     others = (
-        CarrySpec.from_dates(("ETHUSDT", "SOLUSDT", "XRPUSDT"), "2023-01-01", "2024-01-01", **_trend_kw()),
+        CarrySpec.from_dates(
+            ("ETHUSDT", "SOLUSDT", "XRPUSDT"), "2023-01-01", "2024-01-01", **_trend_kw()
+        ),
         _trend(initial_balance=99_000.0),
         _trend(fill_granularity="1h"),
     )

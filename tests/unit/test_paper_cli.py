@@ -239,9 +239,7 @@ class TestRunWithConfig:
                 self.completed_calls: list[tuple[int, str | None]] = []
                 self.closed = False
 
-            def claim_process(
-                self, run_id: int, pid: int, identity: str | None
-            ) -> str | None:
+            def claim_process(self, run_id: int, pid: int, identity: str | None) -> str | None:
                 return None
 
             def mark_completed(self, run_id: int, error: str | None = None) -> None:
@@ -315,9 +313,7 @@ class TestAccountLock:
         stops = {"count": 0}
 
         class _FakeManager:
-            def claim_process(
-                self, run_id: int, pid: int, identity: str | None
-            ) -> str | None:
+            def claim_process(self, run_id: int, pid: int, identity: str | None) -> str | None:
                 return None
 
             def mark_completed(self, run_id: int, error: str | None = None) -> None:
@@ -383,9 +379,7 @@ class TestAccountLock:
 
         monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _fake_run)
 
-        other = account_id(
-            BinanceTestnetConfig(api_key="other_key", api_secret="s", testnet=True)
-        )
+        other = account_id(BinanceTestnetConfig(api_key="other_key", api_secret="s", testnet=True))
         held = acquire_account_lock(other, "PAPER-OTHER")
         try:
             assert await run_with_config(config_path) == 0
@@ -394,9 +388,7 @@ class TestAccountLock:
         assert len(started) == 1
 
 
-def _write_trader_config(
-    path: Path, *, trader_id: str = "PAPER-001", testnet: bool = True
-) -> None:
+def _write_trader_config(path: Path, *, trader_id: str = "PAPER-001", testnet: bool = True) -> None:
     path.write_text(
         json.dumps(
             {
@@ -484,9 +476,7 @@ class TestTraderLock:
         ]
         assert completed == [(11, "RuntimeError: trading failed")]
         assert stops["count"] == 1
-        assert _trader_lock_is_free("PAPER-001"), (
-            "the failed run left the trader lock held"
-        )
+        assert _trader_lock_is_free("PAPER-001"), "the failed run left the trader lock held"
 
     @pytest.mark.asyncio
     async def test_unopenable_trader_lock_exits_one_with_the_class_only(
@@ -811,9 +801,7 @@ def test_main_passes_both_live_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     """``--confirm-fresh-live`` reaches ``run_with_config`` as ``allow_fresh_live``."""
     seen: list[tuple[Path, int | None, dict[str, bool]]] = []
 
-    async def _fake(
-        config_path: Path, run_id: int | None = None, **kwargs: bool
-    ) -> int:
+    async def _fake(config_path: Path, run_id: int | None = None, **kwargs: bool) -> int:
         seen.append((config_path, run_id, kwargs))
         return 0
 
@@ -864,9 +852,7 @@ class TestMarkCompletedFailure:
         self._write_minimal_config(config_path)
 
         class _FakeManager:
-            def claim_process(
-                self, run_id: int, pid: int, identity: str | None
-            ) -> str | None:
+            def claim_process(self, run_id: int, pid: int, identity: str | None) -> str | None:
                 return None
 
             def mark_completed(self, run_id: int, error: str | None = None) -> None:
@@ -906,9 +892,7 @@ class TestMarkCompletedFailure:
         self._write_minimal_config(config_path)
 
         class _FakeManager:
-            def claim_process(
-                self, run_id: int, pid: int, identity: str | None
-            ) -> str | None:
+            def claim_process(self, run_id: int, pid: int, identity: str | None) -> str | None:
                 return None
 
             def mark_completed(self, run_id: int, error: str | None = None) -> None:
@@ -949,9 +933,7 @@ class TestMarkCompletedFailure:
         self._write_minimal_config(config_path)
 
         class _FakeManager:
-            def claim_process(
-                self, run_id: int, pid: int, identity: str | None
-            ) -> str | None:
+            def claim_process(self, run_id: int, pid: int, identity: str | None) -> str | None:
                 return None
 
             def mark_completed(self, run_id: int, error: str | None = None) -> None:
@@ -1123,9 +1105,7 @@ class TestAllowlistedRefusalMessage:
     @staticmethod
     def _fake_heartbeat(monkeypatch: pytest.MonkeyPatch) -> None:
         class _FakeManager:
-            def claim_process(
-                self, run_id: int, pid: int, identity: str | None
-            ) -> str | None:
+            def claim_process(self, run_id: int, pid: int, identity: str | None) -> str | None:
                 return None
 
             def mark_completed(self, run_id: int, error: str | None = None) -> None:

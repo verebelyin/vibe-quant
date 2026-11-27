@@ -120,7 +120,9 @@ def _guarded_engine() -> SimpleNamespace:
     """Engine stand-in that survives ``_run_backtest``'s log-guard/reset cleanup."""
     analyzer = SimpleNamespace(register_statistic=lambda _stat: None)
     kernel = SimpleNamespace(
-        get_log_guard=lambda: None, cache=SimpleNamespace(), portfolio=SimpleNamespace(analyzer=analyzer)
+        get_log_guard=lambda: None,
+        cache=SimpleNamespace(),
+        portfolio=SimpleNamespace(analyzer=analyzer),
     )
     return SimpleNamespace(kernel=kernel, trader=SimpleNamespace(strategies=list))
 

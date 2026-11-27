@@ -92,9 +92,7 @@ class TestIndicatorSpec:
 
     def test_unknown_nt_output_attr_raises(self) -> None:
         """nt_output_attrs keys must be declared outputs when nt_class is set."""
-        with pytest.raises(
-            ValueError, match="nt_output_attrs keys not in output_names"
-        ):
+        with pytest.raises(ValueError, match="nt_output_attrs keys not in output_names"):
             IndicatorSpec(
                 name="TEST",
                 nt_class=object,
@@ -120,9 +118,7 @@ class TestIndicatorSpec:
 
     def test_computed_outputs_unknown_helper_raises(self) -> None:
         """computed_outputs values must resolve to a helper in derived.py."""
-        with pytest.raises(
-            ValueError, match="computed_outputs helpers not found"
-        ):
+        with pytest.raises(ValueError, match="computed_outputs helpers not found"):
             IndicatorSpec(
                 name="TEST",
                 nt_class=None,
@@ -133,9 +129,7 @@ class TestIndicatorSpec:
                 computed_outputs={"fake_output": "compute_nonexistent_helper"},
             )
 
-    def test_param_ranges_typo_logs_warning(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_param_ranges_typo_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         """A typo in param_ranges keys logs a warning (not a raise)."""
         import logging as _logging
 
@@ -148,9 +142,9 @@ class TestIndicatorSpec:
                 param_schema={"period": int},
                 param_ranges={"perriod": (5.0, 50.0)},  # typo
             )
-        assert any(
-            "perriod" in record.getMessage() for record in caplog.records
-        ), "Expected warning about param_ranges typo"
+        assert any("perriod" in record.getMessage() for record in caplog.records), (
+            "Expected warning about param_ranges typo"
+        )
 
     def test_unregister_removes_spec_case_insensitively(self) -> None:
         """unregister() drops the spec and returns True; repeat returns False."""
@@ -414,13 +408,30 @@ class TestBuiltinIndicators:
         """
         required = {
             # Trend
-            "EMA", "SMA", "WMA", "DEMA", "TEMA", "ICHIMOKU",
+            "EMA",
+            "SMA",
+            "WMA",
+            "DEMA",
+            "TEMA",
+            "ICHIMOKU",
             # Momentum
-            "RSI", "MACD", "STOCH", "CCI", "WILLR", "ROC", "ADX",
+            "RSI",
+            "MACD",
+            "STOCH",
+            "CCI",
+            "WILLR",
+            "ROC",
+            "ADX",
             # Volatility
-            "ATR", "BBANDS", "KC", "DONCHIAN",
+            "ATR",
+            "BBANDS",
+            "KC",
+            "DONCHIAN",
             # Volume
-            "OBV", "VWAP", "MFI", "VOLSMA",
+            "OBV",
+            "VWAP",
+            "MFI",
+            "VOLSMA",
         }
         registered = set(indicator_registry.list_indicators())
         missing = required - registered
@@ -466,13 +477,12 @@ class TestExtendedIndicatorSpecFields:
 
     def test_spec_accepts_compute_fn_without_nt_class(self) -> None:
         """A spec with only compute_fn (no nt_class, no pandas_ta_func) is valid."""
+
         # compute_fn is only type-checked; the runtime only checks the callable
         # is not None, so a plain stub callable suffices (avoids importing
         # pandas inside the test which triggers a numpy double-import under
         # --cov in some environments).
-        def _noop_compute(
-            df: object, params: dict[str, object]
-        ) -> object:
+        def _noop_compute(df: object, params: dict[str, object]) -> object:
             return df
 
         spec = IndicatorSpec(

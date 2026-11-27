@@ -307,8 +307,7 @@ class ScreeningPipeline:
                     dsr_passed.append(r)
             if dsr_missing:
                 logger.warning(
-                    "DSR filter: %d/%d result(s) have no mark-to-market statistics "
-                    "and fail closed",
+                    "DSR filter: %d/%d result(s) have no mark-to-market statistics and fail closed",
                     dsr_missing,
                     len(filtered),
                 )
@@ -363,7 +362,9 @@ class ScreeningPipeline:
                 raise
             except Exception as e:
                 logger.warning("Backtest failed for params %s: %s", params, e)
-                results.append(BacktestMetrics(parameters=params, sharpe_ratio=FAILED_BACKTEST_SHARPE))
+                results.append(
+                    BacktestMetrics(parameters=params, sharpe_ratio=FAILED_BACKTEST_SHARPE)
+                )
             if progress_callback:
                 progress_callback(i + 1, total)
         return results
@@ -631,9 +632,7 @@ def create_screening_pipeline(
             dsl_dict, effective_symbols, start_date, end_date, catalog_path
         )
         post = dict(
-            iter_fields(
-                run_params, PARSE_ORDER["screening_pipeline_post_tick"], parsed=pre
-            )
+            iter_fields(run_params, PARSE_ORDER["screening_pipeline_post_tick"], parsed=pre)
         )
         launch = LaunchSettings.from_fields({**pre, **post})
         runner = NTScreeningRunner(
@@ -719,7 +718,11 @@ def resolve_fill_ticks_for(
     ticks = resolve_fill_ticks(symbols, tick_tf, start, end, cat)
     logger.info(
         "Fill ticks resolved in parent (pid %d): tf=%s symbols=%s window=%s..%s",
-        os.getpid(), tick_tf, sorted(symbols), start, end,
+        os.getpid(),
+        tick_tf,
+        sorted(symbols),
+        start,
+        end,
     )
     return ticks
 
@@ -774,8 +777,10 @@ class ParentFillTicks:
         """The tick set covering ``[start, end]`` (None when the mode has no ticks)."""
         if self._span is not None and self._span[0] <= start and end <= self._span[1]:
             return self._ticks
-        lo, hi = (start, end) if self._span is None else (
-            min(start, self._span[0]), max(end, self._span[1])
+        lo, hi = (
+            (start, end)
+            if self._span is None
+            else (min(start, self._span[0]), max(end, self._span[1]))
         )
         self._ticks = resolve_parent_fill_ticks(
             self._dsl_dict, self._symbols, lo, hi, self._catalog_path

@@ -373,8 +373,14 @@ def test_cross_bust_drops_the_later_position_and_equity_stays_non_negative(
 ) -> None:
     mk = {BTC: crash_marks(to=30000.0)}
     install_apply(monkeypatch, apply_calls, mk)
-    later = Pos("P-2", BTC, [Fill(bar(45), OrderSide.BUY, 1.0, 30000.0, 15.0),
-                             Fill(bar(50), OrderSide.SELL, 1.0, 30500.0, 15.0)])
+    later = Pos(
+        "P-2",
+        BTC,
+        [
+            Fill(bar(45), OrderSide.BUY, 1.0, 30000.0, 15.0),
+            Fill(bar(50), OrderSide.SELL, 1.0, 30500.0, 15.0),
+        ],
+    )
     res = run([long_btc(), later], mk, mode="cross")
 
     assert apply_calls[0]["mode"] == "cross"
@@ -410,9 +416,7 @@ def test_event_log_gets_one_liquidation_event_per_hit_and_old_events_still_parse
     try:
         with EventWriter(run_id="7", base_path=tmp_path / "ev") as writer:
             runner._write_liquidation_events(writer, 7, "strat", res)
-        lines = [
-            json.loads(x) for x in (tmp_path / "ev" / "7.jsonl").read_text().splitlines() if x
-        ]
+        lines = [json.loads(x) for x in (tmp_path / "ev" / "7.jsonl").read_text().splitlines() if x]
     finally:
         runner.close()
     liq = [e for e in lines if e["event"] == "LIQUIDATION"]
@@ -580,9 +584,7 @@ def test_extract_results_forwards_the_mode_and_only_a_recomputed_run_skips_the_e
     monkeypatch.setattr(ex, "extract_trades", spy)
     mk = {BTC: crash_marks(to=36000.0)}
     install_apply(monkeypatch, apply_calls, mk)
-    bt = SimpleNamespace(
-        elapsed_time=1.0, total_positions=1, stats_pnls={}, stats_returns={}
-    )
+    bt = SimpleNamespace(elapsed_time=1.0, total_positions=1, stats_pnls={}, stats_returns={})
     venue = SimpleNamespace(
         starting_balance_usdt=START_BAL,
         default_leverage=VENUE.default_leverage,
@@ -592,17 +594,30 @@ def test_extract_results_forwards_the_mode_and_only_a_recomputed_run_skips_the_e
     monkeypatch.setattr(ex, "validation_engine_moments", lambda r, e: moments.append(True))
 
     res = ex.extract_results(
-        1, "s", bt, engine_for([long_btc()], mk), venue,  # type: ignore[arg-type]
-        run_start_date=START, run_end_date=END, execution_timeframe="1m",
-        catalog_path="x", liquidation_mode="isolated",
+        1,
+        "s",
+        bt,
+        engine_for([long_btc()], mk),
+        venue,  # type: ignore[arg-type]
+        run_start_date=START,
+        run_end_date=END,
+        execution_timeframe="1m",
+        catalog_path="x",
+        liquidation_mode="isolated",
     )
     assert seen["liquidation_mode"] == "isolated"
     assert res.trades[0].exit_reason == "liquidation"
     assert moments == []  # recomputed from the ledgers, not from the engine's positions
 
     ex.extract_results(
-        1, "s", bt, engine_for([long_btc()], mk), venue,  # type: ignore[arg-type]
-        run_start_date=START, run_end_date=END, execution_timeframe="1m",
+        1,
+        "s",
+        bt,
+        engine_for([long_btc()], mk),
+        venue,  # type: ignore[arg-type]
+        run_start_date=START,
+        run_end_date=END,
+        execution_timeframe="1m",
     )
     assert moments == [True]  # mode off: the unchanged engine path
 
@@ -740,9 +755,14 @@ def test_entry_slippage_survives_a_liquidation_and_is_booked_at_the_entry(
     res = ValidationResult(starting_balance=START_BAL)
     p = long_btc()
     ex.extract_trades(
-        res, engine_for([p], mk), venue,  # type: ignore[arg-type]
-        run_start_date=START, run_end_date=END, execution_timeframe="1m",
-        catalog_path="x", liquidation_mode="isolated",
+        res,
+        engine_for([p], mk),
+        venue,  # type: ignore[arg-type]
+        run_start_date=START,
+        run_end_date=END,
+        execution_timeframe="1m",
+        catalog_path="x",
+        liquidation_mode="isolated",
         slippage=slip,
         cost_ledger=None,
     )
@@ -775,9 +795,14 @@ def test_resting_entry_and_hit_inside_one_coarse_execution_bar_is_rejected(
     def go(timeframe: str | None) -> ValidationResult:
         res = ValidationResult(starting_balance=START_BAL)
         ex.extract_trades(
-            res, engine_for([resting], mk), VENUE,  # type: ignore[arg-type]
-            run_start_date=START, run_end_date=END, execution_timeframe=timeframe,
-            catalog_path="x", liquidation_mode="isolated",
+            res,
+            engine_for([resting], mk),
+            VENUE,  # type: ignore[arg-type]
+            run_start_date=START,
+            run_end_date=END,
+            execution_timeframe=timeframe,
+            catalog_path="x",
+            liquidation_mode="isolated",
             slippage=OFF_SLIPPAGE,
             cost_ledger=None,
         )
@@ -795,8 +820,14 @@ def test_walk_forward_aggregate_keeps_the_cost_free_pnl_and_the_liquidation_tota
 ) -> None:
     from vibe_quant.metrics import fee_drag
 
-    eth_pos = Pos("P-9", ETH, [Fill(bar(3), OrderSide.SELL, 300.0, 2000.0, 5.0),
-                               Fill(bar(20), OrderSide.BUY, 300.0, 1980.0, 5.0)])
+    eth_pos = Pos(
+        "P-9",
+        ETH,
+        [
+            Fill(bar(3), OrderSide.SELL, 300.0, 2000.0, 5.0),
+            Fill(bar(20), OrderSide.BUY, 300.0, 1980.0, 5.0),
+        ],
+    )
     mk = {BTC: crash_marks(to=36000.0), ETH: marks([2000.0] * 60, [2010.0] * 60)}
     install_apply(monkeypatch, apply_calls, mk)
     window = run([long_btc(), eth_pos], mk, mode="isolated")
@@ -840,8 +871,10 @@ def test_return_moments_are_recomputed_from_the_truncated_trades(
             Pos(
                 f"E-{i}",
                 ETH,
-                [Fill(bar(3 + i * 2), OrderSide.BUY, 1.0, 2000.0, 0.5),
-                 Fill(bar(4 + i * 2), OrderSide.SELL, 1.0, px, 0.5)],
+                [
+                    Fill(bar(3 + i * 2), OrderSide.BUY, 1.0, 2000.0, 0.5),
+                    Fill(bar(4 + i * 2), OrderSide.SELL, 1.0, px, 0.5),
+                ],
             )
         )
     res = run(pos, mk, mode="isolated")
@@ -862,9 +895,14 @@ def test_survivor_exit_fee_is_a_valuation_cost_not_a_liquidation_trigger(
     import vibe_quant.validation.extraction as ex
 
     ex.extract_trades(
-        result, engine_for([long_btc(sell_bar=None)], mk), VENUE,  # type: ignore[arg-type]
-        run_start_date=START, run_end_date=END, execution_timeframe="1m",
-        catalog_path="x", liquidation_mode="cross",
+        result,
+        engine_for([long_btc(sell_bar=None)], mk),
+        VENUE,  # type: ignore[arg-type]
+        run_start_date=START,
+        run_end_date=END,
+        execution_timeframe="1m",
+        catalog_path="x",
+        liquidation_mode="cross",
         slippage=OFF_SLIPPAGE,
         cost_ledger=None,
     )
@@ -884,6 +922,7 @@ def test_survivor_exit_fee_is_a_valuation_cost_not_a_liquidation_trigger(
 
 
 # ----------------------------------------------- fix round 3: one scan, one horizon, gross
+
 
 def comparable(res: ValidationResult) -> dict[str, Any]:
     """Every reported field except the liquidation provenance."""
@@ -908,10 +947,15 @@ def test_zero_hit_mode_on_equals_off_in_every_field_with_a_survivor_and_funding(
     def go(mode: str) -> ValidationResult:
         res = ValidationResult(starting_balance=START_BAL)
         ex.extract_trades(
-            res, engine_for([long_btc(), eth_open], mk), VENUE,  # type: ignore[arg-type]
+            res,
+            engine_for([long_btc(), eth_open], mk),
+            VENUE,  # type: ignore[arg-type]
             funding_calculator=funding,  # type: ignore[arg-type]
-            run_start_date=START, run_end_date=END, execution_timeframe="1m",
-            catalog_path="x", liquidation_mode=mode,
+            run_start_date=START,
+            run_end_date=END,
+            execution_timeframe="1m",
+            catalog_path="x",
+            liquidation_mode=mode,
             slippage=OFF_SLIPPAGE,
             cost_ledger=None,
         )
@@ -930,7 +974,11 @@ class _AtFunding:
         self.timestamps = timestamps
 
     def accrue(
-        self, instrument_id: str, direction: str, entry_notional: float, entry_ns: int,
+        self,
+        instrument_id: str,
+        direction: str,
+        entry_notional: float,
+        entry_ns: int,
         exit_ns: int | None,
     ) -> Any:
         from vibe_quant.validation.funding import FundingAccrual
@@ -960,10 +1008,15 @@ def test_survivor_scan_funding_equals_mode_off_funding_including_the_final_bar(
     ledgers = spy_ledgers(monkeypatch)
     res = ValidationResult(starting_balance=START_BAL)
     ex.extract_trades(
-        res, engine_for([long_btc(), eth_open], mk), VENUE,  # type: ignore[arg-type]
+        res,
+        engine_for([long_btc(), eth_open], mk),
+        VENUE,  # type: ignore[arg-type]
         funding_calculator=funding,  # type: ignore[arg-type]
-        run_start_date=START, run_end_date=END, execution_timeframe="1m",
-        catalog_path="x", liquidation_mode="isolated",
+        run_start_date=START,
+        run_end_date=END,
+        execution_timeframe="1m",
+        catalog_path="x",
+        liquidation_mode="isolated",
         slippage=OFF_SLIPPAGE,
         cost_ledger=None,
     )
@@ -977,7 +1030,9 @@ def test_survivor_scan_funding_equals_mode_off_funding_including_the_final_bar(
     assert net == pytest.approx(-4020.0 + (-1.0 - 1.0 - 10.0))  # BTC margin+fee; ETH fees+funding
     assert ledger_equity_delta(ledgers[0]) == pytest.approx(net)  # residual 0
     assert res.total_funding == pytest.approx(10.0 + btc_trade.funding_fees)
-    assert res.gross_pnl == pytest.approx(net + res.total_fees + res.total_slippage + res.total_funding)
+    assert res.gross_pnl == pytest.approx(
+        net + res.total_fees + res.total_slippage + res.total_funding
+    )
 
 
 def test_survivor_whose_last_ends_before_the_final_bar_fails_closed_naming_the_ts(
@@ -995,9 +1050,14 @@ def test_survivor_whose_last_ends_before_the_final_bar_fails_closed_naming_the_t
     def go(positions: list[Pos]) -> ValidationResult:
         res = ValidationResult(starting_balance=START_BAL)
         ex.extract_trades(
-            res, engine_for(positions, mk), VENUE,  # type: ignore[arg-type]
-            run_start_date=START, run_end_date=late_end, execution_timeframe="1m",
-            catalog_path="x", liquidation_mode="isolated",
+            res,
+            engine_for(positions, mk),
+            VENUE,  # type: ignore[arg-type]
+            run_start_date=START,
+            run_end_date=late_end,
+            execution_timeframe="1m",
+            catalog_path="x",
+            liquidation_mode="isolated",
             slippage=OFF_SLIPPAGE,
             cost_ledger=None,
         )
@@ -1016,8 +1076,13 @@ def test_survivor_whose_last_ends_before_the_final_bar_fails_closed_naming_the_t
     # mode off marks the same stale bar as before (no new check)
     off = ValidationResult(starting_balance=START_BAL)
     ex.extract_trades(
-        off, engine_for([eth_open], mk), VENUE,  # type: ignore[arg-type]
-        run_start_date=START, run_end_date=late_end, execution_timeframe="1m", catalog_path="x",
+        off,
+        engine_for([eth_open], mk),
+        VENUE,  # type: ignore[arg-type]
+        run_start_date=START,
+        run_end_date=late_end,
+        execution_timeframe="1m",
+        catalog_path="x",
         slippage=OFF_SLIPPAGE,
         cost_ledger=None,
     )
@@ -1068,9 +1133,14 @@ def test_a_crash_after_the_run_end_cannot_liquidate_a_position_real_apply(
     def go(mode: str) -> ValidationResult:
         res = ValidationResult(starting_balance=START_BAL, total_return=-20.0 / START_BAL)
         ex.extract_trades(
-            res, engine_for([long_btc(sell_bar=None)], mk), VENUE,  # type: ignore[arg-type]
-            run_start_date="2024-01-01T01:40:00", run_end_date=END,
-            execution_timeframe="1m", catalog_path="x", liquidation_mode=mode,
+            res,
+            engine_for([long_btc(sell_bar=None)], mk),
+            VENUE,  # type: ignore[arg-type]
+            run_start_date="2024-01-01T01:40:00",
+            run_end_date=END,
+            execution_timeframe="1m",
+            catalog_path="x",
+            liquidation_mode=mode,
             slippage=OFF_SLIPPAGE,
             cost_ledger=None,
         )
@@ -1079,7 +1149,9 @@ def test_a_crash_after_the_run_end_cannot_liquidate_a_position_real_apply(
     off, on = go("off"), go("isolated")
     assert off.trades[0].net_pnl == pytest.approx(-40.0)  # entry fee + estimated exit fee
     assert liq_note(on)["count"] == 0 and on.liquidation_events == []
-    assert on.trades[0].net_pnl == pytest.approx(-40.0) and on.trades[0].exit_reason == "end_of_data"
+    assert (
+        on.trades[0].net_pnl == pytest.approx(-40.0) and on.trades[0].exit_reason == "end_of_data"
+    )
     assert on.total_return == off.total_return
 
 
@@ -1104,15 +1176,22 @@ def test_hit_after_the_valuation_horizon_reuses_the_scan_funding_truncated_at_th
     res = ValidationResult(starting_balance=START_BAL)
     p = long_btc(sell_bar=None)
     ex.extract_trades(
-        res, engine_for([p], {BTC: full_day}), VENUE,  # type: ignore[arg-type]
+        res,
+        engine_for([p], {BTC: full_day}),
+        VENUE,  # type: ignore[arg-type]
         funding_calculator=_AtFunding((bar(65),)),  # type: ignore[arg-type]
-        run_start_date=START, run_end_date="2024-01-02", execution_timeframe="1d",
-        catalog_path="x", liquidation_mode="isolated",
+        run_start_date=START,
+        run_end_date="2024-01-02",
+        execution_timeframe="1d",
+        catalog_path="x",
+        liquidation_mode="isolated",
         slippage=OFF_SLIPPAGE,
         cost_ledger=None,
     )
 
-    assert res.liquidation_events[0]["ts"] == bar(70)  # 02:50, after the horizon and the 02:45 payment
+    assert res.liquidation_events[0]["ts"] == bar(
+        70
+    )  # 02:50, after the horizon and the 02:45 payment
     assert bar(70) > int(last.ts[-1])
     assert scans[0] == {}  # nothing funded inside the horizon
     (trade,) = res.trades
@@ -1155,13 +1234,18 @@ def test_real_funding_calculator_keeps_the_fallback_settlement_before_the_hit(
 
     crash = crash_marks(to=36000.0, at=490, n=1440)  # 08:10
     full_day = Marks(
-        DAY0 + np.arange(1440, dtype=np.int64) * MIN, crash.low, crash.high, crash.close,
+        DAY0 + np.arange(1440, dtype=np.int64) * MIN,
+        crash.low,
+        crash.high,
+        crash.close,
         crash.open,
     )
     scans = real_apply_with_marks(monkeypatch, full_day)
     last = BarSeries(  # the day's one 1d LAST bar, stamped like the catalog (close - 1 ms)
         ts=np.array([DAY0 + DAY - 1_000_000], dtype=np.int64),
-        open=np.array([40000.0]), high=np.array([40000.0]), low=np.array([36000.0]),
+        open=np.array([40000.0]),
+        high=np.array([40000.0]),
+        low=np.array([36000.0]),
         close=np.array([36000.0]),
     )
     monkeypatch.setattr(ex, "load_catalog_bars", lambda *a, **kw: last)
@@ -1169,10 +1253,15 @@ def test_real_funding_calculator_keeps_the_fallback_settlement_before_the_hit(
     p = long_btc(sell_bar=None)  # entry bar(2) = 01:42
     res = ValidationResult(starting_balance=START_BAL)
     ex.extract_trades(
-        res, engine_for([p], {BTC: full_day}), VENUE,  # type: ignore[arg-type]
+        res,
+        engine_for([p], {BTC: full_day}),
+        VENUE,  # type: ignore[arg-type]
         funding_calculator=calculator,
-        run_start_date=START, run_end_date="2024-01-02", execution_timeframe="1d",
-        catalog_path="x", liquidation_mode="isolated",
+        run_start_date=START,
+        run_end_date="2024-01-02",
+        execution_timeframe="1d",
+        catalog_path="x",
+        liquidation_mode="isolated",
         slippage=OFF_SLIPPAGE,
         cost_ledger=None,
     )
@@ -1210,9 +1299,14 @@ def test_validation_mark_window_is_half_open_at_the_run_end_real_apply(
         # NT's PnL% for the entry fee; mode off adds the estimated exit fee
         res = ValidationResult(starting_balance=START_BAL, total_return=-20.0 / START_BAL)
         ex.extract_trades(
-            res, engine_for([long_btc(sell_bar=None)], mk), VENUE,  # type: ignore[arg-type]
-            run_start_date="2024-01-01T01:40:00", run_end_date=END,
-            execution_timeframe="1m", catalog_path="x", liquidation_mode=mode,
+            res,
+            engine_for([long_btc(sell_bar=None)], mk),
+            VENUE,  # type: ignore[arg-type]
+            run_start_date="2024-01-01T01:40:00",
+            run_end_date=END,
+            execution_timeframe="1m",
+            catalog_path="x",
+            liquidation_mode=mode,
             slippage=OFF_SLIPPAGE,
             cost_ledger=None,
         )
@@ -1268,9 +1362,14 @@ def test_a_raw_fill_at_the_run_end_fails_closed_instead_of_liquidating_there(
     def go(exit_ns: int) -> ValidationResult:
         res = ValidationResult(starting_balance=END_FILL_BALANCE)
         ex.extract_trades(
-            res, engine_for(_end_fill_positions(exit_ns), mk), VENUE,  # type: ignore[arg-type]
-            run_start_date="2024-01-01T01:40:00", run_end_date=END,
-            execution_timeframe="1m", catalog_path="x", liquidation_mode="cross",
+            res,
+            engine_for(_end_fill_positions(exit_ns), mk),
+            VENUE,  # type: ignore[arg-type]
+            run_start_date="2024-01-01T01:40:00",
+            run_end_date=END,
+            execution_timeframe="1m",
+            catalog_path="x",
+            liquidation_mode="cross",
             slippage=OFF_SLIPPAGE,
             cost_ledger=None,
         )
@@ -1291,7 +1390,10 @@ def _cross_liquidation_run(db: Path, *, start: str, end: str) -> int:
     state = StateManager(db)
     try:
         dsl = {
-            "name": "r6b_strategy", "description": "t", "version": 1, "timeframe": "1m",
+            "name": "r6b_strategy",
+            "description": "t",
+            "version": 1,
+            "timeframe": "1m",
             "additional_timeframes": [],
             "indicators": {"rsi": {"type": "RSI", "period": 14, "source": "close"}},
             "entry_conditions": {"long": ["rsi < 30"], "short": ["rsi > 70"]},
@@ -1301,9 +1403,14 @@ def _cross_liquidation_run(db: Path, *, start: str, end: str) -> int:
         }
         sid = state.create_strategy(name="r6b_strategy", dsl_config=dsl, description="t")
         return state.create_backtest_run(
-            strategy_id=sid, run_mode="validation", symbols=["BTCUSDT", "ETHUSDT"],
-            timeframe="1m", start_date=start, end_date=end,
-            parameters={"liquidation_mode": "cross"}, latency_preset="retail",
+            strategy_id=sid,
+            run_mode="validation",
+            symbols=["BTCUSDT", "ETHUSDT"],
+            timeframe="1m",
+            start_date=start,
+            end_date=end,
+            parameters={"liquidation_mode": "cross"},
+            latency_preset="retail",
         )
     finally:
         state.close()
@@ -1336,11 +1443,16 @@ def _extract_end_fill_window(
         elapsed_time=1.0, total_positions=len(positions), stats_pnls={}, stats_returns={}
     )
     return runner._extract_results(
-        run_id=kw["run_id"], strategy_name=kw["strategy_name"], bt_result=bt,  # type: ignore[arg-type]
+        run_id=kw["run_id"],
+        strategy_name=kw["strategy_name"],
+        bt_result=bt,  # type: ignore[arg-type]
         engine=engine_for(positions, mk),  # type: ignore[arg-type]
         venue_config=venue,  # type: ignore[arg-type]
-        primary_timeframe="1m", run_start_date="2024-01-01T01:40:00", run_end_date=END,
-        execution_timeframe="1m", catalog_path=catalog_path,
+        primary_timeframe="1m",
+        run_start_date="2024-01-01T01:40:00",
+        run_end_date=END,
+        execution_timeframe="1m",
+        catalog_path=catalog_path,
         liquidation_mode=kw["launch"].liquidation.mode,
     )
 
@@ -1396,7 +1508,10 @@ def test_a_position_without_a_valuation_horizon_is_funded_only_before_the_run_en
 
     crash = crash_marks(to=36000.0, at=110, n=1440)  # 01:50
     full_day = Marks(
-        DAY0 + np.arange(1440, dtype=np.int64) * MIN, crash.low, crash.high, crash.close,
+        DAY0 + np.arange(1440, dtype=np.int64) * MIN,
+        crash.low,
+        crash.high,
+        crash.close,
         crash.open,
     )
     scans = real_apply_with_marks(monkeypatch, full_day)
@@ -1405,10 +1520,17 @@ def test_a_position_without_a_valuation_horizon_is_funded_only_before_the_run_en
     p = long_btc(sell_bar=None)
     res = ValidationResult(starting_balance=START_BAL)
     ex.extract_trades(
-        res, engine_for([p], {BTC: full_day}), VENUE,  # type: ignore[arg-type]
-        funding_calculator=FundingCalculator(archive_path=empty_archive(tmp_path / "empty-archive.db")),
-        run_start_date=START, run_end_date="2024-01-02", execution_timeframe="1m",
-        catalog_path="x", liquidation_mode="isolated",
+        res,
+        engine_for([p], {BTC: full_day}),
+        VENUE,  # type: ignore[arg-type]
+        funding_calculator=FundingCalculator(
+            archive_path=empty_archive(tmp_path / "empty-archive.db")
+        ),
+        run_start_date=START,
+        run_end_date="2024-01-02",
+        execution_timeframe="1m",
+        catalog_path="x",
+        liquidation_mode="isolated",
         slippage=OFF_SLIPPAGE,
         cost_ledger=None,
     )
@@ -1447,12 +1569,18 @@ def test_a_walk_forward_window_refused_by_the_guard_fails_the_whole_run_without_
         return _extract_end_fill_window(runner, kw, positions, mk, catalog_path=tmp_path)
 
     monkeypatch.setattr(runner, "_run_backtest", fake_backtest)
-    assert len(
-        runner._build_walk_forward_windows(
-            range_start=date(2024, 1, 1), range_end=date(2024, 1, 29),
-            train_days=7, test_days=7, step_days=7,
+    assert (
+        len(
+            runner._build_walk_forward_windows(
+                range_start=date(2024, 1, 1),
+                range_end=date(2024, 1, 29),
+                train_days=7,
+                test_days=7,
+                step_days=7,
+            )
         )
-    ) == 3
+        == 3
+    )
     try:
         with pytest.raises(ValidationRunnerError, match=rf"ValueError: .*{end_ns}"):
             runner.run_walk_forward(run_id, train_days=7, test_days=7, step_days=7)

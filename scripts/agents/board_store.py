@@ -84,7 +84,7 @@ def ns() -> str:
 
 
 def _strip_ns(channel: str, prefix: str) -> str:
-    return channel[len(prefix):] if prefix and channel.startswith(prefix) else channel
+    return channel[len(prefix) :] if prefix and channel.startswith(prefix) else channel
 
 
 def topic_channel(topic: str) -> str | None:
@@ -150,7 +150,9 @@ def _is_question(m: Raw) -> bool:
 
 def derived_kind(text: str, parent: Raw | None) -> str:
     """The kind a message without a ``kind`` label reads back as."""
-    return _prefix_kind(text) or ("answer" if parent is not None and _is_question(parent) else "info")
+    return _prefix_kind(text) or (
+        "answer" if parent is not None and _is_question(parent) else "info"
+    )
 
 
 def _parent_id(m: Raw) -> str | None:
@@ -224,7 +226,10 @@ def map_messages(
             msg["user_answer"] = True
         if "relayed-by" in lab:
             msg["by"] = lab["relayed-by"]
-        if lab.get("state") in ("retired", "superseded"):  # hidden even without a retire/supersede record
+        if lab.get("state") in (
+            "retired",
+            "superseded",
+        ):  # hidden even without a retire/supersede record
             msg[HIDDEN_BY_LABEL] = f"{lab['state']}: {lab.get('reason') or 'state label'}"
         out.append(msg)
     return out
@@ -243,7 +248,12 @@ class WritePlan(NamedTuple):
 
 
 def plan_write(
-    msg: Mapping[str, object], *, job: str | None, to_global: bool, lookup: Mapping[str, Raw], ns: str = "",
+    msg: Mapping[str, object],
+    *,
+    job: str | None,
+    to_global: bool,
+    lookup: Mapping[str, Raw],
+    ns: str = "",
 ) -> WritePlan:
     """Where and how an old-shape message is written. ``job`` = the job bus it is appended
     to (None = the global board dir); ``to_global`` = a persistent-topic post that bus.py
@@ -287,7 +297,14 @@ def plan_write(
     if profile != sender:
         labels["from"] = _one_line(sender, 200)
     key = f"{sender}:{msg['client_id']}" if msg.get("client_id") else None
-    return WritePlan(channel, str(parent["id"]) if parent is not None else None, str(msg["body"]), labels, profile, key)
+    return WritePlan(
+        channel,
+        str(parent["id"]) if parent is not None else None,
+        str(msg["body"]),
+        labels,
+        profile,
+        key,
+    )
 
 
 def side_effects(
@@ -303,11 +320,19 @@ def side_effects(
     out: list[tuple[str, dict[str, str], dict[str, str | None] | None]] = []
     target = lookup.get(str(msg.get("retires"))) if msg.get("retires") else None
     if target is not None:
-        out.append((str(target["id"]), {"state": "retired", "reason": _one_line(msg.get("reason") or msg["body"], 200)}, None))
+        out.append(
+            (
+                str(target["id"]),
+                {"state": "retired", "reason": _one_line(msg.get("reason") or msg["body"], 200)},
+                None,
+            )
+        )
     old = lookup.get(str(msg.get("supersedes"))) if msg.get("supersedes") else None
     state = _labels(old).get("state") if old is not None else None
     if old is not None and state not in ("retired", "superseded"):
-        out.append((str(old["id"]), {"state": "superseded", "superseded-by": new_id}, {"state": state}))
+        out.append(
+            (str(old["id"]), {"state": "superseded", "superseded-by": new_id}, {"state": state})
+        )
     return out
 
 
@@ -343,13 +368,20 @@ def _timeout() -> float:
     except ValueError:
         value = math.nan
     if not (math.isfinite(value) and value > 0):
-        print(f"bus: SWARM_BOARD_TIMEOUT must be a positive number of seconds, not {_one_line(raw, 40)!r}", file=sys.stderr)
+        print(
+            f"bus: SWARM_BOARD_TIMEOUT must be a positive number of seconds, not {_one_line(raw, 40)!r}",
+            file=sys.stderr,
+        )
         raise SystemExit(2)
     return value
 
 
 def _is_msg(value: object) -> bool:
-    return isinstance(value, dict) and isinstance(value.get("id"), str | int) and not isinstance(value.get("id"), bool)
+    return (
+        isinstance(value, dict)
+        and isinstance(value.get("id"), str | int)
+        and not isinstance(value.get("id"), bool)
+    )
 
 
 def _is_msgs(value: object) -> bool:
@@ -362,7 +394,10 @@ _SHAPES: dict[str, Callable[[object], bool]] = {
     "replies": _is_msgs,
     "message": _is_msg,
     "cursor": lambda v: isinstance(v, str),
-    "channels": lambda v: isinstance(v, list) and all(isinstance(c, dict) and isinstance(c.get("path"), str) for c in v),
+    "channels": lambda v: (
+        isinstance(v, list)
+        and all(isinstance(c, dict) and isinstance(c.get("path"), str) for c in v)
+    ),
     "ok": lambda v: v is True,
 }
 
@@ -379,8 +414,14 @@ def _error_code(raw: bytes) -> str:
 
 
 def _http(
-    method: str, path: str, body: Mapping[str, object] | None = None, *, profile: str | None = None,
-    query: Mapping[str, str] | None = None, accept: tuple[str, ...] = (), expect: tuple[str, ...] = (),
+    method: str,
+    path: str,
+    body: Mapping[str, object] | None = None,
+    *,
+    profile: str | None = None,
+    query: Mapping[str, str] | None = None,
+    accept: tuple[str, ...] = (),
+    expect: tuple[str, ...] = (),
 ) -> dict[str, object]:
     """One board API call, JSON in and out: the ONLY place this module talks to the board.
 
@@ -406,19 +447,27 @@ def _http(
         code = _error_code(detail)
         if code and code in accept and code in _ACCEPTED.get(exc.code, ()):
             return {"error": code}
-        sys.exit(f"bus: board refused {method} {path}: {exc.code} {_one_line(detail.decode('utf-8', errors='replace'), 300)}")
+        sys.exit(
+            f"bus: board refused {method} {path}: {exc.code} {_one_line(detail.decode('utf-8', errors='replace'), 300)}"
+        )
     except (urllib.error.URLError, OSError) as exc:
-        raise BoardUnreachable(f"bus: board at {url} unreachable ({_one_line(exc, 200)}); {_START}") from None
+        raise BoardUnreachable(
+            f"bus: board at {url} unreachable ({_one_line(exc, 200)}); {_START}"
+        ) from None
     try:
         out = json.loads(raw.decode("utf-8"))
     except ValueError:
         out = None
     if not isinstance(out, dict):
-        sys.exit(f"bus: board at {url} answered {method} {path} with no JSON object ({_one_line(raw[:80], 80)}); is it the board? {_START}")
+        sys.exit(
+            f"bus: board at {url} answered {method} {path} with no JSON object ({_one_line(raw[:80], 80)}); is it the board? {_START}"
+        )
     bad = [f for f in expect if f not in out or not _SHAPES[f](out[f])]
     if bad:
-        sys.exit(f"bus: board at {url} answered {method} {path} without a valid {'/'.join(bad)} "
-                 f"({_one_line(raw[:80], 80)}); is it the board? {_START}")
+        sys.exit(
+            f"bus: board at {url} answered {method} {path} without a valid {'/'.join(bad)} "
+            f"({_one_line(raw[:80], 80)}); is it the board? {_START}"
+        )
     return out
 
 
@@ -429,8 +478,10 @@ def _advanced(prev: str | None, new: object, what: str) -> str:
     if ok and prev is not None and prev.isdigit() and str(new).isdigit():
         ok = int(str(new)) > int(prev)
     if not ok:
-        sys.exit(f"bus: board at {board_url()} paged {what} without an advancing cursor "
-                 f"({_one_line(prev, 40)} -> {_one_line(new, 40)}); is it the board? {_START}")
+        sys.exit(
+            f"bus: board at {board_url()} paged {what} without an advancing cursor "
+            f"({_one_line(prev, 40)} -> {_one_line(new, 40)}); is it the board? {_START}"
+        )
     return str(new)
 
 
@@ -449,7 +500,12 @@ def read_channel(channel: str) -> list[Raw]:
     out: list[Raw] = []
     after = "0"
     while True:
-        page = _http("GET", "/messages", query={"channel": channel, "limit": str(PAGE), "after": after}, expect=("messages",))
+        page = _http(
+            "GET",
+            "/messages",
+            query={"channel": channel, "limit": str(PAGE), "after": after},
+            expect=("messages",),
+        )
         msgs = _msgs(page)
         out += msgs
         if len(msgs) < PAGE:
@@ -465,8 +521,13 @@ def read_thread(board_id: str) -> list[Raw]:
     path = f"/messages/{urllib.parse.quote(board_id, safe='')}"
 
     def page(after: str) -> dict[str, object]:
-        return _http("GET", path, query={"limit": str(PAGE), "after": after},
-                     accept=("message_not_found",), expect=("message", "replies"))
+        return _http(
+            "GET",
+            path,
+            query={"limit": str(PAGE), "after": after},
+            accept=("message_not_found",),
+            expect=("message", "replies"),
+        )
 
     first = page(board_id)
     if first.get("error"):
@@ -474,7 +535,9 @@ def read_thread(board_id: str) -> list[Raw]:
     root = first["message"]
     assert isinstance(root, dict)  # _SHAPES checked it
     rid = str(root["id"])
-    replies = _msgs(first if rid == board_id else page(rid), "replies")  # :id a reply: start at the root
+    replies = _msgs(
+        first if rid == board_id else page(rid), "replies"
+    )  # :id a reply: start at the root
     out: list[Raw] = [root, *replies]
     after = rid
     while len(replies) >= PAGE:
@@ -484,8 +547,15 @@ def read_thread(board_id: str) -> list[Raw]:
     return out
 
 
-def post_raw(channel: str | None, text: str, *, labels: Mapping[str, str] | None = None, profile: str,
-             re: str | None = None, key: str | None = None) -> Raw:
+def post_raw(
+    channel: str | None,
+    text: str,
+    *,
+    labels: Mapping[str, str] | None = None,
+    profile: str,
+    re: str | None = None,
+    key: str | None = None,
+) -> Raw:
     """Post a new thread in ``channel`` or a reply to ``re``; the board's message back.
 
     The text and every label value are scanned first, as the `vb` launcher does: a secret is
@@ -497,12 +567,26 @@ def post_raw(channel: str | None, text: str, *, labels: Mapping[str, str] | None
     body.update({"re": re} if re else {"channel": channel})
     if key:
         body["id"] = key
-    answer = _http("POST", "/messages", body, profile=profile, accept=("duplicate_id",) if key else (), expect=("message",))
+    answer = _http(
+        "POST",
+        "/messages",
+        body,
+        profile=profile,
+        accept=("duplicate_id",) if key else (),
+        expect=("message",),
+    )
     if answer.get("error") == "duplicate_id" and key:
-        answer = _http("GET", f"/posts/{urllib.parse.quote(key, safe='')}", profile=profile,
-                       accept=("post_not_found",), expect=("message",))
+        answer = _http(
+            "GET",
+            f"/posts/{urllib.parse.quote(key, safe='')}",
+            profile=profile,
+            accept=("post_not_found",),
+            expect=("message",),
+        )
         if answer.get("error"):
-            sys.exit(f"bus: the board refused key {key} as used by someone else, and holds no post of {profile} under it")
+            sys.exit(
+                f"bus: the board refused key {key} as used by someone else, and holds no post of {profile} under it"
+            )
     msg = answer["message"]
     assert isinstance(msg, dict)  # _SHAPES checked it
     invalidate()
@@ -512,7 +596,10 @@ def post_raw(channel: str | None, text: str, *, labels: Mapping[str, str] | None
 def refuse_secrets(*values: object) -> None:
     """Exit 2 (nothing sent) when any value looks like a secret (``boardctl.looks_like_secret``)."""
     if any(boardctl.looks_like_secret(str(v)) for v in values if v is not None):
-        print("bus: a text or label looks like a secret (KEY=value credential or env dump); nothing was sent", file=sys.stderr)
+        print(
+            "bus: a text or label looks like a secret (KEY=value credential or env dump); nothing was sent",
+            file=sys.stderr,
+        )
         raise SystemExit(2)
 
 
@@ -520,14 +607,24 @@ def _label(board_id: str, labels: Mapping[str, str], when: Mapping[str, str | No
     """Set ``labels`` on one message; with ``when``, only while each key still has that value
     (None = unset). False = the board refused the precondition (409 label_conflict), nothing set."""
     refuse_secrets(*labels.values())
-    body: dict[str, object] = {"set": dict(labels), **({"if": dict(when)} if when is not None else {})}
-    answer = _http("POST", f"/messages/{urllib.parse.quote(board_id, safe='')}/labels", body,
-                   accept=("label_conflict",) if when is not None else (), expect=("ok",))
+    body: dict[str, object] = {
+        "set": dict(labels),
+        **({"if": dict(when)} if when is not None else {}),
+    }
+    answer = _http(
+        "POST",
+        f"/messages/{urllib.parse.quote(board_id, safe='')}/labels",
+        body,
+        accept=("label_conflict",) if when is not None else (),
+        expect=("ok",),
+    )
     invalidate()
     return answer.get("error") != "label_conflict"
 
 
-def set_labels(board_id: str, labels: Mapping[str, str], *, when: Mapping[str, str | None] | None = None) -> bool:
+def set_labels(
+    board_id: str, labels: Mapping[str, str], *, when: Mapping[str, str | None] | None = None
+) -> bool:
     """Set labels on one message; every value is scanned first (a secret: exit 2, nothing sent).
 
     ``when``: only while each key still has that value (None = unset); False = the board
@@ -548,9 +645,13 @@ class _Cache:
         self.raw: dict[str, Raw] = {}  # board id -> raw message (this head)
         self.created: dict[str, str] = {}  # old id -> createdAt (this head)
         self.views: dict[str | None, list[dict[str, object]]] = {}  # read(job)'s answer (this head)
-        self.by_job: dict[str, list[dict[str, object]]] | None = None  # global view by job slug (this head)
+        self.by_job: dict[str, list[dict[str, object]]] | None = (
+            None  # global view by job slug (this head)
+        )
         self.jobs: dict[str, str] | None = None  # job_channels()'s answer (this head)
-        self.board_id: dict[str, str] = {}  # old id -> board id (ids never change: kept across heads)
+        self.board_id: dict[
+            str, str
+        ] = {}  # old id -> board id (ids never change: kept across heads)
         self.known: set[str] = set()  # every board id seen (appending one of them is a no-op)
 
     def forget(self) -> None:
@@ -690,7 +791,9 @@ def read(job: str | None) -> list[dict[str, object]]:
                     if m.get("job"):
                         c.by_job.setdefault(job_slug(str(m["job"])), []).append(m)
             mine = c.channels[own]
-            c.views[job] = _ordered(c, c.by_job.get(job_slug(job), []) + map_messages(mine, _targets(mine), prefix))
+            c.views[job] = _ordered(
+                c, c.by_job.get(job_slug(job), []) + map_messages(mine, _targets(mine), prefix)
+            )
     return [dict(m) for m in c.views[job]]
 
 
@@ -709,7 +812,9 @@ def lookup(old_id: str) -> Raw | None:
     return _fetch(c.board_id.get(old_id, old_id))
 
 
-def append(job: str | None, msg: dict[str, object], *, to_global: bool = False) -> dict[str, object]:
+def append(
+    job: str | None, msg: dict[str, object], *, to_global: bool = False
+) -> dict[str, object]:
     """Write one old-shape message; return it as stored (board id, real ts).
 
     A message already on the board (bus.py's mirroring second append of the message it
@@ -723,7 +828,9 @@ def append(job: str | None, msg: dict[str, object], *, to_global: bool = False) 
     keys = [str(msg[k]) for k in ("ref", "retires", "supersedes") if msg.get(k)]
     found = {k: hit for k in keys if (hit := lookup(k)) is not None}
     plan = plan_write(msg, job=job, to_global=to_global, lookup=found, ns=ns())
-    new = post_raw(plan.channel, plan.text, labels=plan.labels, profile=plan.profile, re=plan.re, key=plan.key)
+    new = post_raw(
+        plan.channel, plan.text, labels=plan.labels, profile=plan.profile, re=plan.re, key=plan.key
+    )
     for board_id, labels, when in side_effects(msg, str(new["id"]), found):
         _label(board_id, labels, when)  # a refused precondition: another write already won
     return stored(str(new["id"]))
@@ -754,10 +861,17 @@ def job_channels() -> dict[str, str]:
         return dict(c.jobs)
     prefix = ns() + "job/"
     out: dict[str, str] = {}
-    chans = [ch for ch in _list_channels(prefix) if "/" not in ch[len(prefix):]]
-    newest = _parallel(lambda ch: _msgs(_http("GET", "/messages", query={"channel": ch, "limit": "1"}, expect=("messages",))), chans)
+    chans = [ch for ch in _list_channels(prefix) if "/" not in ch[len(prefix) :]]
+    newest = _parallel(
+        lambda ch: _msgs(
+            _http("GET", "/messages", query={"channel": ch, "limit": "1"}, expect=("messages",))
+        ),
+        chans,
+    )
     for ch, last in zip(chans, newest, strict=True):
         if last:
-            out[ch[len(prefix):]] = _labels(last[-1]).get("ts") or _local_ts(str(last[-1].get("createdAt")))
+            out[ch[len(prefix) :]] = _labels(last[-1]).get("ts") or _local_ts(
+                str(last[-1].get("createdAt"))
+            )
     c.jobs = out
     return dict(out)

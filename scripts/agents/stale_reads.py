@@ -403,8 +403,15 @@ def _same_in_both(
         if names_only:
             diff = subprocess.run(
                 [
-                    "git", "-C", str(worktree), "diff", "--name-only", "--diff-filter=ADR",
-                    ref, "--", path,
+                    "git",
+                    "-C",
+                    str(worktree),
+                    "diff",
+                    "--name-only",
+                    "--diff-filter=ADR",
+                    ref,
+                    "--",
+                    path,
                 ],  # fmt: skip
                 capture_output=True,
                 text=True,

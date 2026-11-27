@@ -32,9 +32,9 @@ class TestReturnMomentsFormula:
         skewness = (math.sqrt(n * (n - 1)) / (n - 2)) * (m3 / m2**1.5)
 
         # G2 excess kurtosis (bias-corrected) + 3 for full kurtosis
-        excess = ((n + 1) * (n - 1) * m4) / (
-            (n - 2) * (n - 3) * m2**2
-        ) - (3 * (n - 1) ** 2) / ((n - 2) * (n - 3))
+        excess = ((n + 1) * (n - 1) * m4) / ((n - 2) * (n - 3) * m2**2) - (3 * (n - 1) ** 2) / (
+            (n - 2) * (n - 3)
+        )
         kurtosis = excess + 3.0
 
         return round(skewness, 4), round(max(1.0, kurtosis), 4)
@@ -85,8 +85,26 @@ class TestReturnMomentsFormula:
             kurtosis(data, bias=False) + 3 # 1.994104 (full kurtosis)
         """
         data = [
-            -0.08, -0.03, 0.01, 0.05, -0.02, 0.04, -0.06, 0.07, -0.01, 0.03,
-            0.02, -0.04, 0.06, -0.05, 0.00, 0.08, -0.07, 0.01, -0.02, 0.04,
+            -0.08,
+            -0.03,
+            0.01,
+            0.05,
+            -0.02,
+            0.04,
+            -0.06,
+            0.07,
+            -0.01,
+            0.03,
+            0.02,
+            -0.04,
+            0.06,
+            -0.05,
+            0.00,
+            0.08,
+            -0.07,
+            0.01,
+            -0.02,
+            0.04,
         ]
         skew, kurt = self._compute_moments(data)
         # scipy reference: skew=-0.0742, excess_kurt=-1.0059, full_kurt=1.9941
@@ -119,10 +137,18 @@ class TestFitnessResultFields:
         from vibe_quant.discovery.fitness import FitnessResult
 
         fr = FitnessResult(
-            sharpe_ratio=1.0, max_drawdown=0.1, profit_factor=1.5,
-            total_trades=100, total_return=0.1, complexity_penalty=0.0,
-            overtrade_penalty=0.0, sl_tp_penalty=0.0, raw_score=0.5, adjusted_score=0.5,
-            passed_filters=True, filter_results={},
+            sharpe_ratio=1.0,
+            max_drawdown=0.1,
+            profit_factor=1.5,
+            total_trades=100,
+            total_return=0.1,
+            complexity_penalty=0.0,
+            overtrade_penalty=0.0,
+            sl_tp_penalty=0.0,
+            raw_score=0.5,
+            adjusted_score=0.5,
+            passed_filters=True,
+            filter_results={},
         )
         assert fr.skewness == 0.0
         assert fr.kurtosis == 3.0
@@ -131,11 +157,20 @@ class TestFitnessResultFields:
         from vibe_quant.discovery.fitness import FitnessResult
 
         fr = FitnessResult(
-            sharpe_ratio=1.0, max_drawdown=0.1, profit_factor=1.5,
-            total_trades=100, total_return=0.1, complexity_penalty=0.0,
-            overtrade_penalty=0.0, sl_tp_penalty=0.0, raw_score=0.5, adjusted_score=0.5,
-            passed_filters=True, filter_results={},
-            skewness=-0.8, kurtosis=4.5,
+            sharpe_ratio=1.0,
+            max_drawdown=0.1,
+            profit_factor=1.5,
+            total_trades=100,
+            total_return=0.1,
+            complexity_penalty=0.0,
+            overtrade_penalty=0.0,
+            sl_tp_penalty=0.0,
+            raw_score=0.5,
+            adjusted_score=0.5,
+            passed_filters=True,
+            filter_results={},
+            skewness=-0.8,
+            kurtosis=4.5,
         )
         assert fr.skewness == -0.8
         assert fr.kurtosis == 4.5

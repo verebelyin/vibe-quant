@@ -95,10 +95,7 @@ def test_bbands_match_close_bollinger_on_real_ohlc_bars(period: int, std_dev: fl
         )
     # The old typical-price bands are far enough away to prove the bands changed.
     typical = (df["high"] + df["low"] + df["close"]) / 3.0
-    old_upper = (
-        typical.rolling(period).mean()
-        + std_dev * typical.rolling(period).std(ddof=0)
-    )
+    old_upper = typical.rolling(period).mean() + std_dev * typical.rolling(period).std(ddof=0)
     assert float((got["upper"] - old_upper).iloc[period + 5 :].abs().max()) > 1e-4
 
 
@@ -184,9 +181,11 @@ def test_non_positive_middle_matches_nt_guard_exactly(low: float, high: float) -
     warm = slice(period + 5, None)
     assert (got["middle"].iloc[warm] <= 0).all()
     assert (got["upper"].iloc[warm] > got["lower"].iloc[warm]).all()
-    assert got["bandwidth"].iloc[warm].tolist() == nt_df["bandwidth"].iloc[warm].tolist() == [
-        0.0
-    ] * len(nt_df["bandwidth"].iloc[warm])
+    assert (
+        got["bandwidth"].iloc[warm].tolist()
+        == nt_df["bandwidth"].iloc[warm].tolist()
+        == [0.0] * len(nt_df["bandwidth"].iloc[warm])
+    )
     assert got["percent_b"].iloc[warm].tolist() == nt_df["percent_b"].iloc[warm].tolist()
     assert {0.25, 0.75} == set(nt_df["percent_b"].iloc[warm])
     # Warm-up rows (bands undefined) stay NaN.

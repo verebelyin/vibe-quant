@@ -358,7 +358,9 @@ def _chi2_quantile(p: float, df: int) -> float:
 
 
 def _sharpe_dispersion_test(
-    fold_results: list[FoldResult], bars_per_day: float, alpha: float,
+    fold_results: list[FoldResult],
+    bars_per_day: float,
+    alpha: float,
 ) -> tuple[float, float, float]:
     """Cochran's Q of fold Sharpes against their sampling noise.
 
@@ -524,7 +526,9 @@ class PurgedKFoldCV:
         q_crit: float | None = None
         if self.config.bars_per_day and n > 1:
             q_stat, q_crit, z_pooled = _sharpe_dispersion_test(
-                fold_results, self.config.bars_per_day, self.dispersion_alpha,
+                fold_results,
+                self.config.bars_per_day,
+                self.dispersion_alpha,
             )
             # Homogeneous folds AND a pooled OOS edge significantly > 0: the
             # fixed std rule doubled as a (very strict) noise filter, so the

@@ -406,9 +406,7 @@ def _blob(**overrides: object) -> dict[str, object]:
     [(None, "NoneType"), ("nope", "str"), ({"a": 1}, "dict"), (3, "int")],
 )
 def test_short_entry_genes_must_be_a_list(value: object, type_name: str) -> None:
-    with pytest.raises(
-        ValueError, match=rf"short_entry_genes must be a list, got {type_name}"
-    ):
+    with pytest.raises(ValueError, match=rf"short_entry_genes must be a list, got {type_name}"):
         serializable_to_chromosome(_blob(direction="short", short_entry_genes=value))
 
 
@@ -438,9 +436,7 @@ def test_short_with_short_ma_key_raises() -> None:
     with pytest.raises(
         ValueError, match=r"short_ma_entry_genes is only valid for direction=both \(got short\)"
     ):
-        serializable_to_chromosome(
-            _blob(direction="short", short_ma_entry_genes=[{}])
-        )
+        serializable_to_chromosome(_blob(direction="short", short_ma_entry_genes=[{}]))
 
 
 def test_type_error_precedes_the_direction_check() -> None:

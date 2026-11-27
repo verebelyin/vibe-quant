@@ -95,8 +95,14 @@ def population(
     against buy-and-hold), not a failed transfer.
     """
     included: list[dict[str, Any]] = []
-    excluded = {"transfer_failed": 0, "no_next": 0, "no_symbols": 0, "transferred": 0,
-                "no_transfer": 0, "old_rule": 0}
+    excluded = {
+        "transfer_failed": 0,
+        "no_next": 0,
+        "no_symbols": 0,
+        "transferred": 0,
+        "no_transfer": 0,
+        "old_rule": 0,
+    }
     for row in burst.winner_rows(rows):
         trow = tmap.get(row["key"])
         if trow is None:
@@ -107,8 +113,10 @@ def population(
             excluded["no_next"] += 1
         elif not (trow.get("symbols") or {}):
             excluded["no_symbols"] += 1
-        elif "own" not in trow and burst._wins(trow["next"]) and all(
-            burst._wins(m) for m in trow["symbols"].values()
+        elif (
+            "own" not in trow
+            and burst._wins(trow["next"])
+            and all(burst._wins(m) for m in trow["symbols"].values())
         ):
             excluded["old_rule"] += 1
         elif burst.genome_transfers(trow):
@@ -120,8 +128,19 @@ def population(
 
 def _row(key: str, ledger: str, k: int, step: int | None, next_win: bool | None) -> dict[str, Any]:
     """The result row a measurement starts from (every field the report reads)."""
-    return {"key": key, "ledger": ledger, "K": k, "step": step, "windows": 0, "rets": [],
-            "trades": [], "profitable": 0, "passed": False, "error": None, "next_win": next_win}
+    return {
+        "key": key,
+        "ledger": ledger,
+        "K": k,
+        "step": step,
+        "windows": 0,
+        "rets": [],
+        "trades": [],
+        "profitable": 0,
+        "passed": False,
+        "error": None,
+        "next_win": next_win,
+    }
 
 
 def score(
@@ -136,9 +155,13 @@ def score(
     step, _windows = window_plan(cell, k)
     row = _row(base["key"], base["ledger"], k, step, base["next_win"])
     config = DiscoveryConfig(
-        symbols=[cell["symbol"]], timeframe=cell.get("timeframe", "1m"),
-        start_date=cell["start"], end_date=cell["end"],
-        train_test_split=0.0, wfa_oos_step_days=step, min_trades=MIN_TRADES,
+        symbols=[cell["symbol"]],
+        timeframe=cell.get("timeframe", "1m"),
+        start_date=cell["start"],
+        end_date=cell["end"],
+        train_test_split=0.0,
+        wfa_oos_step_days=step,
+        min_trades=MIN_TRADES,
     )
     chain = GateChain(config, GateEvidence(None, False, backtest_fn_factory=factory))
     try:
@@ -171,13 +194,20 @@ def _factory(cell: dict[str, Any]) -> Callable[[str, str], Any]:
     from vibe_quant.sizing_settings import SizingSettings
 
     fns = _make_cell_fns(
-        use_mock=False, needs_factory=True, symbols=[cell["symbol"]],
-        timeframe=cell.get("timeframe", "1m"), symbol_agg="portfolio", fee_schedule=FeeSchedule(),
+        use_mock=False,
+        needs_factory=True,
+        symbols=[cell["symbol"]],
+        timeframe=cell.get("timeframe", "1m"),
+        symbol_agg="portfolio",
+        fee_schedule=FeeSchedule(),
         entry_order="market",
         liquidation=LiquidationSettings(mode="isolated", leverage=int(cell["leverage"])),
         sizing=SizingSettings.from_params({"max_margin_pct": 0.5}),
-        train_start=cell["start"], train_end=cell["end"], eval_windows=None,
-        min_trades=MIN_TRADES, holdout=None,
+        train_start=cell["start"],
+        train_end=cell["end"],
+        eval_windows=None,
+        min_trades=MIN_TRADES,
+        holdout=None,
     )
     factory: Callable[[str, str], Any] = fns.backtest_fn_factory  # type: ignore[assignment]
     return factory
@@ -199,12 +229,19 @@ def run_one(spec: dict[str, Any], result_path: Path) -> int:
 
 def _launch(spec: dict[str, Any]) -> tuple[subprocess.Popen[bytes], Path, float]:
     tmp = Path(tempfile.mkdtemp(prefix="wfa-null-", dir="/tmp"))
-    env = {**os.environ, "VIBE_QUANT_DB": str(tmp / "state.db"),
-           "VIBE_QUANT_LOG_DIR": str(tmp / "logs"), "PYTHONPATH": str(REPO_ROOT)}
+    env = {
+        **os.environ,
+        "VIBE_QUANT_DB": str(tmp / "state.db"),
+        "VIBE_QUANT_LOG_DIR": str(tmp / "logs"),
+        "PYTHONPATH": str(REPO_ROOT),
+    }
     with (tmp / "stderr.log").open("wb") as err:
         proc = subprocess.Popen(  # noqa: S603
             [sys.executable, __file__, "one", json.dumps(spec), str(tmp / "result.json")],
-            cwd=REPO_ROOT, env=env, stdout=subprocess.DEVNULL, stderr=err,
+            cwd=REPO_ROOT,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=err,
         )
     return proc, tmp, time.monotonic()
 
@@ -231,11 +268,17 @@ def run(args: argparse.Namespace) -> int:
         path = Path(out)
         tmap = {row["key"]: row for row in burst.load_ledger(path / "transfer.jsonl")}
         included, excluded = population(burst.load_ledger(path / "ledger.jsonl"), tmap)
-        print(f"{path.name}: {len(included)} no-edge winners, "
-              f"excluded={json.dumps(excluded, sort_keys=True)}", flush=True)
+        print(
+            f"{path.name}: {len(included)} no-edge winners, "
+            f"excluded={json.dumps(excluded, sort_keys=True)}",
+            flush=True,
+        )
         specs.extend(
             {
-                "key": row["key"], "ledger": path.name, "K": k, "cell": row["cell"],
+                "key": row["key"],
+                "ledger": path.name,
+                "K": k,
+                "cell": row["cell"],
                 "chromosome": row["best"]["chromosome"],
                 "next_win": next_window_win(tmap[row["key"]]),
             }
@@ -243,8 +286,10 @@ def run(args: argparse.Namespace) -> int:
             for k in ks
         )
     todo = [spec for spec in specs if (spec["key"], spec["K"]) not in done]
-    print(f"wfa_null: {len(todo)} rows to run ({len(specs) - len(todo)} already in "
-          f"{result.name})", flush=True)
+    print(
+        f"wfa_null: {len(todo)} rows to run ({len(specs) - len(todo)} already in {result.name})",
+        flush=True,
+    )
     running: list[tuple[dict[str, Any], subprocess.Popen[bytes], Path, float]] = []
     with result.open("a") as fh:
         while todo or running:
@@ -265,9 +310,12 @@ def run(args: argparse.Namespace) -> int:
                 fh.write(json.dumps(row) + "\n")
                 fh.flush()
                 running.remove(item)
-                print(f"{row['ledger']} {row['key']} K={row['K']} step={row['step']} "
-                      f"{row['profitable']}/{row['windows']} pass={row['passed']} "
-                      f"error={row['error']} wall={wall:.0f}s", flush=True)
+                print(
+                    f"{row['ledger']} {row['key']} K={row['K']} step={row['step']} "
+                    f"{row['profitable']}/{row['windows']} pass={row['passed']} "
+                    f"error={row['error']} wall={wall:.0f}s",
+                    flush=True,
+                )
             time.sleep(0.5)
     return 0
 
@@ -299,35 +347,46 @@ def report(args: argparse.Namespace) -> int:
     print(f"wfa_null: rows={len(rows)} errors={len(errors)}", flush=True)
     for row in errors:
         print(f"ERROR {row['ledger']} {row['key']} K={row['K']}: {row['error']}")
-    print(f"\n## pass rate (no-edge winners; CP95 two-sided; one-sided 95% upper;"
-          f" PASS iff upper <= {THRESHOLD}); per ledger and pooled per K")
+    print(
+        f"\n## pass rate (no-edge winners; CP95 two-sided; one-sided 95% upper;"
+        f" PASS iff upper <= {THRESHOLD}); per ledger and pooled per K"
+    )
     ledgers = sorted({str(row["ledger"]) for row in rows})
     ks = sorted({int(row["K"]) for row in rows})
     for k in ks:
         for name in (*ledgers, "pooled"):
-            group = [r for r in ok if int(r["K"]) == k
-                     and (name == "pooled" or r["ledger"] == name)]
+            group = [
+                r for r in ok if int(r["K"]) == k and (name == "pooled" or r["ledger"] == name)
+            ]
             if not group:
                 continue
             n, passed = len(group), sum(1 for r in group if r["passed"])
             lo, hi = cp_bounds(passed, n)
-            print(f"{name} K={k} step={group[0]['step']} windows={group[0]['windows']}"
-                  f" {passed}/{n} rate={passed / n:.3f} CP95=({lo!r},{hi!r})"
-                  f" upper={cp_upper(passed, n)!r} {verdict(passed, n)}")
+            print(
+                f"{name} K={k} step={group[0]['step']} windows={group[0]['windows']}"
+                f" {passed}/{n} rate={passed / n:.3f} CP95=({lo!r},{hi!r})"
+                f" upper={cp_upper(passed, n)!r} {verdict(passed, n)}"
+            )
     print("\n## next window (passed, next_win) over rows that have one, pooled per K")
     for k in ks:
-        pairs = [(r["passed"], r["next_win"]) for r in ok
-                 if int(r["K"]) == k and r.get("next_win") is not None]
+        pairs = [
+            (r["passed"], r["next_win"])
+            for r in ok
+            if int(r["K"]) == k and r.get("next_win") is not None
+        ]
         counts = {pair: pairs.count(pair) for pair in dict.fromkeys(pairs)}
         cells = " ".join(
-            f"({('T' if p else 'F')},{('T' if w else 'F')})={c}" for (p, w), c in sorted(counts.items())
+            f"({('T' if p else 'F')},{('T' if w else 'F')})={c}"
+            for (p, w), c in sorted(counts.items())
         )
         print(f"K={k} {cells}")
     return 2 if errors else 0
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run")
     r.add_argument("--out", action="append", required=True, help="a burst ledger directory")

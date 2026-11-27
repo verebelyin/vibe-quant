@@ -60,9 +60,7 @@ class ExtractionCancelled(Exception):
 
     def __init__(self, *, grace_expired: bool) -> None:
         self.grace_expired = grace_expired
-        super().__init__(
-            "cancelled-after-timeout" if grace_expired else "cancelled by user"
-        )
+        super().__init__("cancelled-after-timeout" if grace_expired else "cancelled by user")
 
 
 # Per-thread binding of the current extraction's cancel Event. The worker's
@@ -83,6 +81,7 @@ def clear_thread_cancel_event() -> None:
 
 def _thread_cancel_event() -> threading.Event | None:
     return getattr(_cancel_ctx, "event", None)
+
 
 # Extraction runs on Sonnet 5 by default: it is fully capable at structured
 # text+vision extraction and far cheaper than the CLI's own default (Fable 5),
@@ -383,8 +382,7 @@ def _format_user_content(item: RawItem) -> str:
 
 def _build_prompt(item: RawItem) -> str:
     base = (
-        f"{_build_system_prompt()}\n\n"
-        f"<<<USER_CONTENT>>>\n{_format_user_content(item)}\n<<<END>>>\n"
+        f"{_build_system_prompt()}\n\n<<<USER_CONTENT>>>\n{_format_user_content(item)}\n<<<END>>>\n"
     )
     images = _image_paths(item)
     if not images:
@@ -524,7 +522,7 @@ def _strip_code_fence(text: str) -> str:
         return text
     body = s[first_nl + 1 :]
     if body.endswith("```"):
-        body = body[: -3]
+        body = body[:-3]
     return body.strip()
 
 
@@ -678,11 +676,13 @@ class ClaudePExtractor:
             return ExtractionBatch(
                 prompt="",
                 raw_response="",
-                results=[_single(
-                    status="skipped",
-                    confidence=0.0,
-                    rationale="empty input (no title/body/comments)",
-                )],
+                results=[
+                    _single(
+                        status="skipped",
+                        confidence=0.0,
+                        rationale="empty input (no title/body/comments)",
+                    )
+                ],
             )
 
         prompt = _build_prompt(item)
@@ -692,7 +692,9 @@ class ClaudePExtractor:
             return ExtractionBatch(
                 prompt=prompt,
                 raw_response="",
-                results=[_single(status="failed", parse_error=f"timeout after {self.timeout_seconds}s")],
+                results=[
+                    _single(status="failed", parse_error=f"timeout after {self.timeout_seconds}s")
+                ],
             )
         except ValueError as e:
             return ExtractionBatch(
@@ -714,12 +716,14 @@ class ClaudePExtractor:
             return ExtractionBatch(
                 prompt=prompt,
                 raw_response=raw_response,
-                results=[_single(
-                    status="skipped",
-                    confidence=0.0,
-                    rationale="model returned no findings",
-                    raw_response=raw_response,
-                )],
+                results=[
+                    _single(
+                        status="skipped",
+                        confidence=0.0,
+                        rationale="model returned no findings",
+                        raw_response=raw_response,
+                    )
+                ],
             )
 
         return ExtractionBatch(
@@ -774,9 +778,7 @@ class ClaudePExtractor:
             return proc.stdout
         return self._run_claude_cancellable(argv, cancel_event)
 
-    def _run_claude_cancellable(
-        self, argv: list[str], cancel_event: threading.Event
-    ) -> str:
+    def _run_claude_cancellable(self, argv: list[str], cancel_event: threading.Event) -> str:
         """Popen + communicate() variant that can be interrupted per job.
 
         Identical argv/cwd/text/timeout semantics as the subprocess.run path;

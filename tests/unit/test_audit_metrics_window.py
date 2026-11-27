@@ -92,7 +92,9 @@ class TestClampRunWindow:
         assert note is not None
 
     def test_start_before_data_is_clamped_forward(self, runner: ValidationRunner) -> None:
-        clamped, note = runner._clamp_run_window(_cfg(["BTCUSDT"], "2023-06-01", "2024-06-01"), "1m")
+        clamped, note = runner._clamp_run_window(
+            _cfg(["BTCUSDT"], "2023-06-01", "2024-06-01"), "1m"
+        )
         assert clamped["start_date"] == "2024-01-01"
         assert note is not None
 
@@ -116,21 +118,32 @@ class TestDetailResolution:
     # coarse timeframes take the same branch, and the runner edge covers 4h.
     @pytest.mark.parametrize("tf", ["5m", "4h"])
     def test_coarser_than_1m_uses_1m_detail(self, runner: ValidationRunner, tf: str) -> None:
-        assert runner._resolve_detail_timeframe(
-            _cfg(["BTCUSDT"], "2025-01-01", "2025-02-01"), tf, None
-        ) == "1m"
+        assert (
+            runner._resolve_detail_timeframe(
+                _cfg(["BTCUSDT"], "2025-01-01", "2025-02-01"), tf, None
+            )
+            == "1m"
+        )
 
     def test_1m_strategy_without_5s_data_has_no_detail(self, runner: ValidationRunner) -> None:
-        assert runner._resolve_detail_timeframe(
-            _cfg(["BTCUSDT"], "2025-01-01", "2025-02-01"), "1m", None
-        ) is None
+        assert (
+            runner._resolve_detail_timeframe(
+                _cfg(["BTCUSDT"], "2025-01-01", "2025-02-01"), "1m", None
+            )
+            is None
+        )
 
 
 def _validation_run(state: StateManager, symbols: list[str], end: str) -> int:
     sid = state.create_strategy(name="window_probe", dsl_config=DSL)
     return state.create_backtest_run(
-        strategy_id=sid, run_mode="validation", symbols=symbols, timeframe="4h",
-        start_date="2025-01-01", end_date=end, parameters={},
+        strategy_id=sid,
+        run_mode="validation",
+        symbols=symbols,
+        timeframe="4h",
+        start_date="2025-01-01",
+        end_date=end,
+        parameters={},
     )
 
 

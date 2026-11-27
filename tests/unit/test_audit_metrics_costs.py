@@ -112,8 +112,13 @@ def test_open_position_at_end_is_marked_not_dropped(latency_engine: BacktestEngi
     # engine slippage "on" disables post-fill SPEC slippage: same costs as screening
     venue.fill_config = SimpleNamespace(impact_coefficient=0.1, prob_slippage=1.0)  # type: ignore[assignment]
     result = extract_results(
-        1, "x", latency_engine.get_result(), latency_engine, venue,
-        primary_timeframe="1m", execution_timeframe="1m",
+        1,
+        "x",
+        latency_engine.get_result(),
+        latency_engine,
+        venue,
+        primary_timeframe="1m",
+        execution_timeframe="1m",
     )
     assert result.total_trades == 1
     trade = result.trades[0]
@@ -145,9 +150,7 @@ def test_post_fill_slippage_charged_on_both_legs() -> None:
     engine = fake_engine([position])
     venue = fake_venue(slippage=0.0, balance=100_000)
     result = ValidationResult(starting_balance=100_000.0)
-    extract_trades(
-        result, engine, venue, slippage=fake_slippage(0.0), cost_ledger=None
-    )
+    extract_trades(result, engine, venue, slippage=fake_slippage(0.0), cost_ledger=None)
 
     est = SlippageEstimator(impact_coefficient=0.1)
     factor = est.calculate(0.1, DEFAULT_AVG_BAR_VOLUME, DEFAULT_BAR_VOLATILITY, 0.0001)

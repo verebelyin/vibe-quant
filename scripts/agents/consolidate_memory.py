@@ -91,11 +91,17 @@ def shown_posts(job: str, material: str, top: int, now: float) -> list[dict[str,
     msgs = bus._all(bus.global_board_dir())
     hidden = bus.hidden_posts(msgs)
     own = [
-        m for m in msgs
-        if m.get("to") == "board" and m.get("job") == job and m.get("topic") != "needs-user" and str(m["id"]) not in hidden
+        m
+        for m in msgs
+        if m.get("to") == "board"
+        and m.get("job") == job
+        and m.get("topic") != "needs-user"
+        and str(m["id"]) not in hidden
     ]
     files = sorted(set(_FILE_TOKEN.findall(material)))
-    ranked = [m for _, m in bus.ranked_posts(msgs, top, now, files, set(), bus.comparability_breaks())]
+    ranked = [
+        m for _, m in bus.ranked_posts(msgs, top, now, files, set(), bus.comparability_breaks())
+    ]
     seen: set[str] = set()
     out = []
     for m in own + ranked:
@@ -106,10 +112,13 @@ def shown_posts(job: str, material: str, top: int, now: float) -> list[dict[str,
 
 
 def render_shown(posts: list[dict[str, object]]) -> str:
-    return "\n".join(
-        f"[{m['id']}] #{m.get('topic')} i{bus.importance_of(m)} {bus._age_of(m)}: {bus._first_chars(m['body'], 400)}"
-        for m in posts
-    ) or "(none)"
+    return (
+        "\n".join(
+            f"[{m['id']}] #{m.get('topic')} i{bus.importance_of(m)} {bus._age_of(m)}: {bus._first_chars(m['body'], 400)}"
+            for m in posts
+        )
+        or "(none)"
+    )
 
 
 def validate(ops: object, shown: set[str]) -> list[str]:
@@ -174,7 +183,9 @@ def route() -> tuple[str, str | None]:
         if isinstance(target, dict) and target.get("model"):
             effort = target.get("effort")
             return str(target["model"]), str(effort) if effort else None
-    raise SystemExit("consolidate_memory: no available claude model on route 'memory' (models.py route memory)")
+    raise SystemExit(
+        "consolidate_memory: no available claude model on route 'memory' (models.py route memory)"
+    )
 
 
 def call_claude(prompt: str) -> str:
@@ -184,10 +195,18 @@ def call_claude(prompt: str) -> str:
     if effort:
         cmd += ["--effort", effort]
     proc = subprocess.run(
-        cmd, input=prompt, capture_output=True, text=True, timeout=600, cwd=tempfile.gettempdir(), check=False
+        cmd,
+        input=prompt,
+        capture_output=True,
+        text=True,
+        timeout=600,
+        cwd=tempfile.gettempdir(),
+        check=False,
     )
     if proc.returncode != 0:
-        raise SystemExit(f"consolidate_memory: claude -p exited {proc.returncode}: {proc.stderr.strip()[:500]}")
+        raise SystemExit(
+            f"consolidate_memory: claude -p exited {proc.returncode}: {proc.stderr.strip()[:500]}"
+        )
     return proc.stdout
 
 
@@ -198,23 +217,37 @@ def propose(job: str, top: int, out: Path | None, ask: Callable[[str], str] = ca
         return 2
     material = job_material(jdir)
     shown = shown_posts(job, material, top, time.time())
-    reply = ask(PROMPT.replace("{shown}", render_shown(shown)).replace("{job}", job).replace("{material}", material))
+    reply = ask(
+        PROMPT.replace("{shown}", render_shown(shown))
+        .replace("{job}", job)
+        .replace("{material}", material)
+    )
     try:
         ops = parse_ops(reply)
     except ValueError as exc:  # json.JSONDecodeError is a ValueError
-        print(f"consolidate_memory: unusable model reply ({exc}); nothing written:\n{reply[:2000]}", file=sys.stderr)
+        print(
+            f"consolidate_memory: unusable model reply ({exc}); nothing written:\n{reply[:2000]}",
+            file=sys.stderr,
+        )
         return 1
     errors = validate(ops, {str(m["id"]) for m in shown})
     if errors:
-        print("consolidate_memory: rejected, nothing written:\n  " + "\n  ".join(errors), file=sys.stderr)
+        print(
+            "consolidate_memory: rejected, nothing written:\n  " + "\n  ".join(errors),
+            file=sys.stderr,
+        )
         return 1
     assert isinstance(ops, list)
     target = out or jdir / "memory-ops.json"
     doc = {"job": job, "shown": [str(m["id"]) for m in shown], "ops": ops}
     target.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     for op in ops:
-        print(f"{op['op']:9} {op.get('id', '')} {op.get('reason') or bus._first_chars(op.get('body', ''), 100)}")
-    print(f"{len(ops)} op(s) from {len(shown)} shown post(s) -> {target}; review it, then: consolidate_memory.py apply --ops {target}")
+        print(
+            f"{op['op']:9} {op.get('id', '')} {op.get('reason') or bus._first_chars(op.get('body', ''), 100)}"
+        )
+    print(
+        f"{len(ops)} op(s) from {len(shown)} shown post(s) -> {target}; review it, then: consolidate_memory.py apply --ops {target}"
+    )
     return 0
 
 
@@ -226,7 +259,10 @@ def apply(ops_file: Path, me: str) -> int:
         return 1
     errors = validate(ops, {str(s) for s in shown})
     if errors:
-        print("consolidate_memory: rejected, nothing written:\n  " + "\n  ".join(errors), file=sys.stderr)
+        print(
+            "consolidate_memory: rejected, nothing written:\n  " + "\n  ".join(errors),
+            file=sys.stderr,
+        )
         return 1
     assert isinstance(ops, list)
     gdir = bus.global_board_dir()
@@ -236,9 +272,13 @@ def apply(ops_file: Path, me: str) -> int:
         cid = f"consolidate-{job}-{digest}"
         extra: dict[str, object] = {"importance": op.get("importance"), "job": job}
         if op["op"] == "add":
-            msg = bus.post(gdir, me, "board", "info", op["body"], topic=op["topic"], extra=extra, client_id=cid)
+            msg = bus.post(
+                gdir, me, "board", "info", op["body"], topic=op["topic"], extra=extra, client_id=cid
+            )
         elif op["op"] == "supersede":
-            msg = bus.supersede(gdir, me, op["id"], op["topic"], op["body"], client_id=cid, extra=extra)
+            msg = bus.supersede(
+                gdir, me, op["id"], op["topic"], op["body"], client_id=cid, extra=extra
+            )
         else:
             msg = bus.retire(gdir, me, op["id"], op["reason"])
         print(bus.fmt(msg) if msg else f"(already hidden: {op['id']})")
@@ -250,7 +290,9 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("propose")
     p.add_argument("--job", required=True)
-    p.add_argument("--top", type=int, default=40, help="ranked global posts shown besides the job's own")
+    p.add_argument(
+        "--top", type=int, default=40, help="ranked global posts shown besides the job's own"
+    )
     p.add_argument("--out", type=Path, help="default <job dir>/memory-ops.json")
     a = sub.add_parser("apply")
     a.add_argument("--ops", type=Path, required=True)

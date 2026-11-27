@@ -59,8 +59,7 @@ def _restore_plugin_registry_state():
         "vibe_quant.dsl.plugins_ext.",
     )
     saved_modules = {
-        name: mod for name, mod in sys.modules.items()
-        if name.startswith(plugin_prefixes)
+        name: mod for name, mod in sys.modules.items() if name.startswith(plugin_prefixes)
     }
     try:
         yield
@@ -81,9 +80,7 @@ def _restore_plugin_registry_state():
 # ---------------------------------------------------------------------------
 
 
-def _install_fake_plugin_pkg(
-    tmp_path: Path, module_name: str, monkeypatch: MonkeyPatch
-) -> Path:
+def _install_fake_plugin_pkg(tmp_path: Path, module_name: str, monkeypatch: MonkeyPatch) -> Path:
     """Create ``<tmp>/<module_name>/__init__.py`` and wire it into sys.path.
 
     Also point ``plugin_loader``'s internal ``vibe_quant.dsl.plugins``
@@ -96,9 +93,7 @@ def _install_fake_plugin_pkg(
     """
     pkg_dir = tmp_path / module_name
     pkg_dir.mkdir()
-    (pkg_dir / "__init__.py").write_text(
-        '"""Fake plugins package for test."""\n'
-    )
+    (pkg_dir / "__init__.py").write_text('"""Fake plugins package for test."""\n')
     monkeypatch.syspath_prepend(str(tmp_path))
 
     # Build a synthetic ``vibe_quant.dsl.plugins`` module whose __path__
@@ -147,9 +142,7 @@ def test_load_builtin_plugins_discovers_dropin_files(
 # ---------------------------------------------------------------------------
 
 
-def test_underscore_prefixed_files_are_skipped(
-    tmp_path: Path, monkeypatch: MonkeyPatch
-) -> None:
+def test_underscore_prefixed_files_are_skipped(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     """``_helper.py`` must not be auto-imported (reserved for internal use)."""
     pkg_dir = _install_fake_plugin_pkg(tmp_path, "_p6test_underscore", monkeypatch)
     (pkg_dir / "_private_helper.py").write_text("MARKER = 'should-not-load'\n")
@@ -177,9 +170,7 @@ def test_plugin_exception_is_logged_and_swallowed(
     with the broken plugin's error logged.
     """
     pkg_dir = _install_fake_plugin_pkg(tmp_path, "_p6test_broken", monkeypatch)
-    (pkg_dir / "broken.py").write_text(
-        "raise RuntimeError('intentional failure from test')\n"
-    )
+    (pkg_dir / "broken.py").write_text("raise RuntimeError('intentional failure from test')\n")
     (pkg_dir / "working.py").write_text("MARKER = 'ok'\n")
 
     monkeypatch.delenv("VQ_PLUGINS_STRICT", raising=False)
@@ -190,9 +181,9 @@ def test_plugin_exception_is_logged_and_swallowed(
     assert "vibe_quant.dsl.plugins.broken" not in loaded
     # Error log must mention the broken module so debugging isn't a
     # guessing game.
-    assert any(
-        "broken" in record.getMessage() for record in caplog.records
-    ), "Expected a log entry referencing the broken plugin"
+    assert any("broken" in record.getMessage() for record in caplog.records), (
+        "Expected a log entry referencing the broken plugin"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -200,9 +191,7 @@ def test_plugin_exception_is_logged_and_swallowed(
 # ---------------------------------------------------------------------------
 
 
-def test_failed_plugin_is_recorded_in_load_errors(
-    tmp_path: Path, monkeypatch: MonkeyPatch
-) -> None:
+def test_failed_plugin_is_recorded_in_load_errors(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     """A broken plugin must be queryable via ``get_load_errors()`` so the
     catalog API can surface it to the frontend."""
     pkg_dir = _install_fake_plugin_pkg(tmp_path, "_p6test_errors", monkeypatch)
@@ -221,9 +210,7 @@ def test_failed_plugin_is_recorded_in_load_errors(
     assert "boom from test_failed_plugin_is_recorded" in err.message
 
 
-def test_load_errors_are_cleared_between_runs(
-    tmp_path: Path, monkeypatch: MonkeyPatch
-) -> None:
+def test_load_errors_are_cleared_between_runs(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     """Two consecutive ``load_builtin_plugins()`` calls must not
     accumulate errors — the second run snapshots the current state."""
     pkg_dir = _install_fake_plugin_pkg(tmp_path, "_p6test_clear", monkeypatch)
@@ -244,15 +231,11 @@ def test_load_errors_are_cleared_between_runs(
 # ---------------------------------------------------------------------------
 
 
-def test_strict_mode_reraises_plugin_load_failure(
-    tmp_path: Path, monkeypatch: MonkeyPatch
-) -> None:
+def test_strict_mode_reraises_plugin_load_failure(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     """``VQ_PLUGINS_STRICT=1`` converts the log-and-swallow behavior into
     a hard failure — CI-friendly."""
     pkg_dir = _install_fake_plugin_pkg(tmp_path, "_p6test_strict", monkeypatch)
-    (pkg_dir / "broken.py").write_text(
-        "raise RuntimeError('strict-mode failure')\n"
-    )
+    (pkg_dir / "broken.py").write_text("raise RuntimeError('strict-mode failure')\n")
     monkeypatch.setenv("VQ_PLUGINS_STRICT", "1")
 
     import pytest
@@ -266,9 +249,7 @@ def test_strict_mode_reraises_plugin_load_failure(
 # ---------------------------------------------------------------------------
 
 
-def test_reload_plugins_picks_up_edited_spec(
-    tmp_path: Path, monkeypatch: MonkeyPatch
-) -> None:
+def test_reload_plugins_picks_up_edited_spec(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     """Edit a plugin file on disk, call ``reload_plugins()``, and the
     updated spec must replace the previous one without re-raising a
     collision error."""
@@ -324,9 +305,7 @@ def test_reload_plugins_picks_up_edited_spec(
     indicator_registry.unregister("RELOAD_TEST")
 
 
-def test_reload_plugins_does_not_touch_builtins(
-    tmp_path: Path, monkeypatch: MonkeyPatch
-) -> None:
+def test_reload_plugins_does_not_touch_builtins(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     """Built-in specs must survive a plugin reload — only
     plugin-registered names get unregistered."""
     _install_fake_plugin_pkg(tmp_path, "_p6test_reload_builtins", monkeypatch)
@@ -345,9 +324,7 @@ def test_reload_plugins_does_not_touch_builtins(
 # ---------------------------------------------------------------------------
 
 
-def test_vq_plugin_path_loads_external_directory(
-    tmp_path: Path, monkeypatch: MonkeyPatch
-) -> None:
+def test_vq_plugin_path_loads_external_directory(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     """A ``.py`` file under a directory listed in VQ_PLUGIN_PATH is
     loaded and registers its spec just like a built-in plugin."""
     _install_fake_plugin_pkg(tmp_path, "_p6test_envpath_builtin", monkeypatch)
@@ -405,9 +382,7 @@ def test_vq_plugin_path_multiple_dirs_with_colon_separator(
             "    )\n"
             ")\n"
         )
-    monkeypatch.setenv(
-        "VQ_PLUGIN_PATH", f"{dir_a}{os.pathsep}{dir_b}"
-    )
+    monkeypatch.setenv("VQ_PLUGIN_PATH", f"{dir_a}{os.pathsep}{dir_b}")
     monkeypatch.delenv("VQ_PLUGINS_STRICT", raising=False)
 
     plugin_loader.load_builtin_plugins()
@@ -423,19 +398,13 @@ def test_vq_plugin_path_invalid_dir_logs_warning(
     take down the rest of the load."""
     _install_fake_plugin_pkg(tmp_path, "_p6test_envpath_bad", monkeypatch)
 
-    monkeypatch.setenv(
-        "VQ_PLUGIN_PATH", str(tmp_path / "does_not_exist")
-    )
+    monkeypatch.setenv("VQ_PLUGIN_PATH", str(tmp_path / "does_not_exist"))
     monkeypatch.delenv("VQ_PLUGINS_STRICT", raising=False)
 
-    with caplog.at_level(
-        logging.WARNING, logger="vibe_quant.dsl.plugin_loader"
-    ):
+    with caplog.at_level(logging.WARNING, logger="vibe_quant.dsl.plugin_loader"):
         plugin_loader.load_builtin_plugins()
 
-    assert any(
-        "not a directory" in r.getMessage() for r in caplog.records
-    )
+    assert any("not a directory" in r.getMessage() for r in caplog.records)
 
 
 def test_vq_plugin_path_broken_file_records_load_error(
@@ -446,19 +415,16 @@ def test_vq_plugin_path_broken_file_records_load_error(
 
     ext_dir = tmp_path / "ext"
     ext_dir.mkdir()
-    (ext_dir / "broken_ext.py").write_text(
-        "raise RuntimeError('external failure')\n"
-    )
+    (ext_dir / "broken_ext.py").write_text("raise RuntimeError('external failure')\n")
     monkeypatch.setenv("VQ_PLUGIN_PATH", str(ext_dir))
     monkeypatch.delenv("VQ_PLUGINS_STRICT", raising=False)
 
     plugin_loader.load_builtin_plugins()
 
     errors = plugin_loader.get_load_errors()
-    assert any(
-        "broken_ext" in e.module and e.error_type == "RuntimeError"
-        for e in errors
-    ), f"Expected external plugin failure in load_errors, got: {errors}"
+    assert any("broken_ext" in e.module and e.error_type == "RuntimeError" for e in errors), (
+        f"Expected external plugin failure in load_errors, got: {errors}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -466,9 +432,7 @@ def test_vq_plugin_path_broken_file_records_load_error(
 # ---------------------------------------------------------------------------
 
 
-def test_entry_points_plugin_is_loaded(
-    tmp_path: Path, monkeypatch: MonkeyPatch
-) -> None:
+def test_entry_points_plugin_is_loaded(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     """An entry-point registered under 'vibe_quant.indicators' is loaded
     — simulated here by stubbing ``importlib.metadata.entry_points``."""
     _install_fake_plugin_pkg(tmp_path, "_p6test_ep_builtin", monkeypatch)
@@ -505,9 +469,7 @@ def test_entry_points_plugin_is_loaded(
             return [_FakeEP()]
         return []
 
-    monkeypatch.setattr(
-        "importlib.metadata.entry_points", _fake_entry_points
-    )
+    monkeypatch.setattr("importlib.metadata.entry_points", _fake_entry_points)
     monkeypatch.delenv("VQ_PLUGINS_STRICT", raising=False)
 
     plugin_loader.load_builtin_plugins()
@@ -516,9 +478,7 @@ def test_entry_points_plugin_is_loaded(
     assert indicator_registry.get("EP_IND") is not None
 
 
-def test_entry_points_load_failure_is_recorded(
-    tmp_path: Path, monkeypatch: MonkeyPatch
-) -> None:
+def test_entry_points_load_failure_is_recorded(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     """If an entry-point raises on load, the error is logged and
     surfaced via get_load_errors() without taking down the rest."""
     _install_fake_plugin_pkg(tmp_path, "_p6test_ep_fail", monkeypatch)
@@ -536,18 +496,15 @@ def test_entry_points_load_failure_is_recorded(
             return [_BrokenEP()]
         return []
 
-    monkeypatch.setattr(
-        "importlib.metadata.entry_points", _fake_entry_points
-    )
+    monkeypatch.setattr("importlib.metadata.entry_points", _fake_entry_points)
     monkeypatch.delenv("VQ_PLUGINS_STRICT", raising=False)
 
     plugin_loader.load_builtin_plugins()
 
     errors = plugin_loader.get_load_errors()
-    assert any(
-        "broken_ep" in e.module and e.error_type == "RuntimeError"
-        for e in errors
-    ), f"Expected broken entry-point in load_errors, got: {errors}"
+    assert any("broken_ep" in e.module and e.error_type == "RuntimeError" for e in errors), (
+        f"Expected broken entry-point in load_errors, got: {errors}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -583,18 +540,15 @@ def test_plugin_cannot_overwrite_builtin_silently(
     monkeypatch.delenv("VQ_PLUGINS_STRICT", raising=False)
     real_rsi = indicator_registry.get("RSI")
     assert real_rsi is not None
-    with caplog.at_level(
-        logging.ERROR, logger="vibe_quant.dsl.plugin_loader"
-    ):
+    with caplog.at_level(logging.ERROR, logger="vibe_quant.dsl.plugin_loader"):
         plugin_loader.load_builtin_plugins()
 
     # The shadow plugin should have failed to load and be recorded as an
     # error. RSI must remain the built-in.
     errors = plugin_loader.get_load_errors()
-    assert any(
-        e.module.endswith("shadow_rsi") and e.error_type == "KeyError"
-        for e in errors
-    ), f"Expected KeyError on shadow_rsi, got: {errors}"
+    assert any(e.module.endswith("shadow_rsi") and e.error_type == "KeyError" for e in errors), (
+        f"Expected KeyError on shadow_rsi, got: {errors}"
+    )
     assert indicator_registry.get("RSI") is real_rsi
 
 
@@ -627,17 +581,14 @@ def test_plugin_can_override_builtin_with_explicit_flag(
     real_rsi = indicator_registry.get("RSI")
     assert real_rsi is not None
     try:
-        with caplog.at_level(
-            logging.INFO, logger="vibe_quant.dsl.indicators"
-        ):
+        with caplog.at_level(logging.INFO, logger="vibe_quant.dsl.indicators"):
             plugin_loader.load_builtin_plugins()
 
         shadowed = indicator_registry.get("RSI")
         assert shadowed is not None
         assert shadowed is not real_rsi, "RSI should have been overridden"
         assert any(
-            "RSI" in r.getMessage() and "overriding" in r.getMessage()
-            for r in caplog.records
+            "RSI" in r.getMessage() and "overriding" in r.getMessage() for r in caplog.records
         ), "Expected INFO log recording the override"
     finally:
         indicator_registry.register_spec(real_rsi, override=True)

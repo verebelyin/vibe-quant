@@ -160,9 +160,7 @@ def test_backtest_launch_without_leverage_passes() -> None:
 
 def test_backtest_launch_refuses_leverage_above_the_coin_maximum() -> None:
     with pytest.raises(ValidationError) as exc:
-        BacktestLaunchRequest(
-            **_backtest_body(symbols=["BNBUSDT"], parameters={"leverage": 76})
-        )
+        BacktestLaunchRequest(**_backtest_body(symbols=["BNBUSDT"], parameters={"leverage": 76}))
     assert "leverage 76x exceeds the Binance maximum for BNBUSDT (75x)" in str(exc.value)
 
 
@@ -182,9 +180,7 @@ def test_backtest_launch_symbol_missing_from_the_snapshot_is_refused() -> None:
 def test_new_coin_launch_above_75_refused() -> None:
     """The new coins' 75x cap flows through the same screening/discovery validators."""
     with pytest.raises(ValidationError) as backtest:
-        BacktestLaunchRequest(
-            **_backtest_body(symbols=["NEARUSDT"], parameters={"leverage": 76})
-        )
+        BacktestLaunchRequest(**_backtest_body(symbols=["NEARUSDT"], parameters={"leverage": 76}))
     assert "exceeds the Binance maximum for NEARUSDT (75x)" in str(backtest.value)
     with pytest.raises(ValidationError) as discovery:
         DiscoveryLaunchRequest(symbols=["HYPEUSDT"], leverage=76)
@@ -282,10 +278,14 @@ def test_cli_refuses_a_bankroll_leverage_above_the_coin_maximum(
 ) -> None:
     parser, args = _cli_args(
         [
-            "--symbols", "BNBUSDT",
-            "--bankroll-modes", "isolated",
-            "--bankroll-leverages", "1,76",
-            "--bankroll-max-margin-pcts", "0.5",
+            "--symbols",
+            "BNBUSDT",
+            "--bankroll-modes",
+            "isolated",
+            "--bankroll-leverages",
+            "1,76",
+            "--bankroll-max-margin-pcts",
+            "0.5",
         ]
     )
     with pytest.raises(SystemExit) as exc:
@@ -309,8 +309,16 @@ def test_cli_symbol_missing_from_the_snapshot_is_refused(
     [
         ["--symbols", "BTCUSDT", "--leverage", "200"],
         ["--symbols", "SOLUSDT", "--leverage", "3", "--liquidation-leverage", "101"],
-        ["--symbols", "BNBUSDT", "--bankroll-modes", "isolated",
-         "--bankroll-leverages", "200", "--bankroll-max-margin-pcts", "0.5"],
+        [
+            "--symbols",
+            "BNBUSDT",
+            "--bankroll-modes",
+            "isolated",
+            "--bankroll-leverages",
+            "200",
+            "--bankroll-max-margin-pcts",
+            "0.5",
+        ],
     ],
 )
 def test_cli_leaves_a_value_the_run_settings_refuse_to_them(argv: list[str]) -> None:
@@ -324,10 +332,14 @@ def test_cli_leaves_a_value_the_run_settings_refuse_to_them(argv: list[str]) -> 
     [
         ["--symbols", "BTCUSDT"],
         [
-            "--symbols", "BNBUSDT",
-            "--bankroll-modes", "isolated,cross",
-            "--bankroll-leverages", "1,5",
-            "--bankroll-max-margin-pcts", "0.25",
+            "--symbols",
+            "BNBUSDT",
+            "--bankroll-modes",
+            "isolated,cross",
+            "--bankroll-leverages",
+            "1,5",
+            "--bankroll-max-margin-pcts",
+            "0.25",
         ],
     ],
 )

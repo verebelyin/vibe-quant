@@ -227,7 +227,10 @@ def critical_daily_sharpe(
         return hi
     for _ in range(200):
         mid = 0.5 * (lo + hi)
-        if dsr.calculate(mid, num_trials, num_observations, skewness, kurtosis).p_value > significance:
+        if (
+            dsr.calculate(mid, num_trials, num_observations, skewness, kurtosis).p_value
+            > significance
+        ):
             lo = mid
         else:
             hi = mid
@@ -296,7 +299,7 @@ def inposition_lag1_autocorr(plan_name: str, n: int) -> float:
     A multi-day hold makes consecutive active days likely, so the indicator is
     autocorrelated and Lo's iid variance understates the Sharpe dispersion.
     """
-    indicator = (synth.train_mtm_values(synth.build_schedule(plan_name, n, 0.0, SEED_BASE)) != 0.0)
+    indicator = synth.train_mtm_values(synth.build_schedule(plan_name, n, 0.0, SEED_BASE)) != 0.0
     x = indicator.astype(np.float64) - float(indicator.mean())
     denom = float(np.dot(x, x))
     return float(np.dot(x[:-1], x[1:]) / denom) if denom > 0.0 else 0.0
@@ -447,7 +450,11 @@ def run_cell(
         if isinstance(kurt, float):
             kurt_samples.append(kurt)
         no_dsr = bool(
-            floor and m["min_trades"] and m["min_return"] and m["bootstrap"] and m["buy_hold"]
+            floor
+            and m["min_trades"]
+            and m["min_return"]
+            and m["bootstrap"]
+            and m["buy_hold"]
             and m["holdout"]
         )
         for n in trials:
@@ -538,7 +545,9 @@ def _null_schedule(
     return sched
 
 
-def _null_fitness(sched: synth.Schedule, chrom: StrategyChromosome, timeframe: str) -> FitnessResult:
+def _null_fitness(
+    sched: synth.Schedule, chrom: StrategyChromosome, timeframe: str
+) -> FitnessResult:
     """Fitness of one S = 0 null candidate from its (already blended) schedule."""
     plan = sched.plan
     windows = tuple(synth.make_window(sched, ws, we) for ws, we in plan.eval_windows)
@@ -875,9 +884,7 @@ def verdicts(report: Mapping[str, object]) -> dict[str, object]:
             "dominant": dominant,
         }
         s50[window] = {str(N): _s50(results, window, N) for N in trials}
-        neff[window] = {
-            str(N): _rate_of(result_cell, "chain_recent", N) for N in NEFF_TRIALS
-        }
+        neff[window] = {str(N): _rate_of(result_cell, "chain_recent", N) for N in NEFF_TRIALS}
         single_null[window] = max(
             (
                 _rate_of(cell, "chain_recent", SINGLE_NULL_N)
@@ -888,8 +895,7 @@ def verdicts(report: Mapping[str, object]) -> dict[str, object]:
         )
 
     selection_rates = {
-        f"{null['window']}:rho={null['rho']}": cast("float", null["fp_rate"])
-        for null in selection
+        f"{null['window']}:rho={null['rho']}": cast("float", null["fp_rate"]) for null in selection
     }
     single_max = max(single_null.values())
     selection_max = max(selection_rates.values())
@@ -981,7 +987,9 @@ def print_verdicts(report: Mapping[str, object]) -> None:
     def _fmt(rates: Mapping[str, float], unit: str) -> str:
         return " ".join(f"{w}@N={prod[w]}={rates[w]:.4f}{unit}" for w in WINDOWS)
 
-    print(f"V1(a) chain_recent: {_fmt(v1['a']['chain_recent'], '')} -> adequate={v1['a']['adequate']}")
+    print(
+        f"V1(a) chain_recent: {_fmt(v1['a']['chain_recent'], '')} -> adequate={v1['a']['adequate']}"
+    )
     print(
         f"V1(b) chain_recent_minus_bh: {_fmt(v1['b']['chain_recent_minus_bh'], '')} "
         f"-> adequate={v1['b']['adequate']}"
@@ -1002,7 +1010,8 @@ def print_verdicts(report: Mapping[str, object]) -> None:
         )
     for window in WINDOWS:
         line = " ".join(
-            f"N={N}:{'none' if s is None else f'{s:.3f}'}" for N, s in verdict["s50"][window].items()
+            f"N={N}:{'none' if s is None else f'{s:.3f}'}"
+            for N, s in verdict["s50"][window].items()
         )
         print(f"S50 {window}: {line}")
     for window in WINDOWS:
@@ -1136,9 +1145,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             else (QUICK_SELECTION_REPS if args.quick else SELECTION_REPS)
         )
         workers = (
-            args.workers
-            if args.workers is not None
-            else min(8, max(1, (os.cpu_count() or 2) - 2))
+            args.workers if args.workers is not None else min(8, max(1, (os.cpu_count() or 2) - 2))
         )
         closes = load_closes(Path(args.catalog))
         cell_results, null_results = run_grid(

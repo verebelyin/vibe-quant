@@ -36,7 +36,10 @@ def test_record_normalises_digits_and_counts_cumulatively() -> None:
     fallbacks.record("time filters")
 
     snap = fallbacks.snapshot()
-    assert snap["counts"] == {"open tick gaps through the take-profit at bar N": 2, "time filters": 1}
+    assert snap["counts"] == {
+        "open tick gaps through the take-profit at bar N": 2,
+        "time filters": 1,
+    }
     assert fallbacks.summary() == {
         "total": 3,
         "by_reason": {"open tick gaps through the take-profit at bar N": 2, "time filters": 1},

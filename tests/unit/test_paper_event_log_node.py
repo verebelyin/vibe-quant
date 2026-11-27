@@ -131,8 +131,6 @@ def _liquidation_alert(order: Any) -> tuple[str, str, bool]:
     )
 
 
-
-
 def test_record_returns_before_a_stalled_write_finishes(
     seeded: dict[str, Any],  # noqa: F811
 ) -> None:
@@ -238,8 +236,6 @@ async def test_write_after_shutdown_is_a_no_op(
     assert "late" not in before
 
 
-
-
 def test_sync_alert_site_never_waits_for_the_disk(
     seeded: dict[str, Any],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
@@ -272,8 +268,6 @@ def test_sync_alert_site_never_waits_for_the_disk(
     finally:
         writer.release.set()
         _stop_event_worker(node)
-
-
 
 
 async def test_failing_disk_never_skips_risk_evaluation(
@@ -359,8 +353,6 @@ def _closed_event() -> Any:
         closing_order_id=None,
         ts_event=1_713_365_300_000_000_000,
     )
-
-
 
 
 async def test_liquidation_write_timeout_alerts_raises_and_retries(
@@ -473,8 +465,6 @@ async def test_cancel_during_liquidation_wait_keeps_the_row(
         await node._shutdown()
 
 
-
-
 class _FailingWriter(EventWriter):
     def write(self, event: Event) -> None:
         raise OSError("disk ZZLEAK9")
@@ -526,8 +516,6 @@ async def test_stalled_event_log_refuses_start(
         release.set()
         monkeypatch.undo()
         await node._shutdown()
-
-
 
 
 async def test_shutdown_drains_in_order_then_closes(
@@ -665,8 +653,6 @@ async def test_shutdown_bounded_with_hung_event_write(
     assert actions[-3:] == ["queued", "queued", "stop"]
 
 
-
-
 async def test_event_write_not_behind_a_hung_checkpoint(
     seeded: dict[str, Any],  # noqa: F811
     tmp_path: Path,
@@ -691,8 +677,6 @@ async def test_event_write_not_behind_a_hung_checkpoint(
         persistence.release.set()
         node._db_worker.begin_stop(persistence.close)
         node._journal.event_log.worker.begin_stop(node._journal.writer.close)
-
-
 
 
 class _FlakyWriter(EventWriter):

@@ -70,7 +70,14 @@ def test_fixed_raw_decode_rounds_like_nt() -> None:
     of 2**64 and at the exact-tie and sticky-bit edges of the 53-bit rounding."""
     base = (2**53 + 1) << 40  # odd 53-bit significand, 40 bits below it
     raws = [
-        0, 1, 2**53 + 1, 2**63, 2**64 - 1, 2**64, 2**64 + 1, 2**65 - 1,
+        0,
+        1,
+        2**53 + 1,
+        2**63,
+        2**64 - 1,
+        2**64,
+        2**64 + 1,
+        2**65 - 1,
         base + (1 << 39),  # exact tie: rounds to the even neighbour (up)
         base - (2 << 40) + (1 << 39),  # exact tie below an even significand: rounds down
         base + (1 << 39) + 1,  # just above the tie: the sticky bit rounds up
@@ -108,7 +115,9 @@ def fixture_catalog(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def test_fast_decode_equals_the_nt_query(fixture_catalog: Path, bar_type: str, rows: int) -> None:
     got = nt_runner._decode_bar_file(str(fixture_catalog), bar_type)
     assert got is not None and len(got["ts_init"]) == rows
-    assert_arrays_bit_equal(got, nt_runner._load_bar_arrays(str(fixture_catalog), bar_type, None, None))
+    assert_arrays_bit_equal(
+        got, nt_runner._load_bar_arrays(str(fixture_catalog), bar_type, None, None)
+    )
 
 
 @pytest.mark.slow(reason="decodes ~3.6M real BTC 1m bars twice (NT objects ~5 s)")
@@ -208,7 +217,9 @@ def test_fast_decode_error_falls_back_to_nt(
     monkeypatch.setattr(nt_runner, "_FAST_DECODE_FALLBACKS", set())
     with caplog.at_level(logging.INFO, logger=nt_runner.logger.name):
         got = nt_runner._load_origin_arrays(str(fixture_catalog), HYPE_1M)
-    assert_arrays_bit_equal(got, nt_runner._load_bar_arrays(str(fixture_catalog), HYPE_1M, None, None))
+    assert_arrays_bit_equal(
+        got, nt_runner._load_bar_arrays(str(fixture_catalog), HYPE_1M, None, None)
+    )
     assert len(got["ts_init"]) == 2 * 1440
     assert "fast decode off: RuntimeError" in caplog.text
     assert "MARKER" not in caplog.text
@@ -313,8 +324,11 @@ def _hist(scale_after: int | None = None) -> dict[str, np.ndarray]:
 
 
 def _served(
-    arrays: dict[str, np.ndarray], kind: str, params: dict[str, Any],
-    memo_key: tuple[object, ...] | None = KEY, cap: int = 0,
+    arrays: dict[str, np.ndarray],
+    kind: str,
+    params: dict[str, Any],
+    memo_key: tuple[object, ...] | None = KEY,
+    cap: int = 0,
 ) -> dict[str, np.ndarray]:
     spec = indicator_registry.get(kind)
     assert spec is not None
@@ -322,7 +336,9 @@ def _served(
     return origin.replay(spec, origin.frame, params, cap)
 
 
-def _fresh(arrays: dict[str, np.ndarray], kind: str, params: dict[str, object]) -> dict[str, np.ndarray]:
+def _fresh(
+    arrays: dict[str, np.ndarray], kind: str, params: dict[str, object]
+) -> dict[str, np.ndarray]:
     spec = indicator_registry.get(kind)
     assert spec is not None
     return replay_pta_series(spec, OriginReplay(arrays).frame, params, 0)

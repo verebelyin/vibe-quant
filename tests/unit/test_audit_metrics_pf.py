@@ -107,11 +107,16 @@ def _venue_config() -> Any:
 
 
 PNLS = [10.0, -5.0, 10.0, -5.0]
+
+
 # Isolate from the real archive: an EMPTY archive -> no settlements crossed by
 # these 10-minute trades -> funding 0, so net PnL == realized PnL.
 def _runner(tmp_path: Path) -> NTScreeningRunner:
     return NTScreeningRunner(
-        dsl_dict={}, symbols=["BTCUSDT"], start_date="", end_date="",
+        dsl_dict={},
+        symbols=["BTCUSDT"],
+        start_date="",
+        end_date="",
         funding_archive_path=str(empty_archive(tmp_path / "empty.db")),
     )
 
@@ -125,9 +130,7 @@ def test_screening_pf_from_trades_not_daily_returns(tmp_path: Path) -> None:
 
 
 def test_validation_pf_from_trades_not_daily_returns() -> None:
-    result = extract_results(
-        1, "s", _bt_result(len(PNLS)), _fake_engine(PNLS), _venue_config()
-    )
+    result = extract_results(1, "s", _bt_result(len(PNLS)), _fake_engine(PNLS), _venue_config())
     assert result.profit_factor == 2.0
 
 
@@ -137,9 +140,7 @@ def test_screening_and_validation_pf_agree(tmp_path: Path) -> None:
     screening = runner._extract_metrics(
         {}, _bt_result(len(pnls)), _fake_engine(pnls), time.time(), starting_balance=1000.0
     )
-    validation = extract_results(
-        1, "s", _bt_result(len(pnls)), _fake_engine(pnls), _venue_config()
-    )
+    validation = extract_results(1, "s", _bt_result(len(pnls)), _fake_engine(pnls), _venue_config())
     assert screening.profit_factor == pytest.approx(23.5 / 12.25)
     assert validation.profit_factor == screening.profit_factor
 
@@ -163,9 +164,7 @@ def test_extract_trades_pf_uses_net_pnl_after_costs() -> None:
     engine = _fake_engine([10.0, -5.0])
     venue = _venue_config()
     venue.fill_config = SimpleNamespace(impact_coefficient=0.1, prob_slippage=0.0)
-    extract_trades(
-        result, engine, venue, slippage=fake_slippage(0.0), cost_ledger=None
-    )
+    extract_trades(result, engine, venue, slippage=fake_slippage(0.0), cost_ledger=None)
     expected = profit_factor([t.net_pnl for t in result.trades])
     assert result.profit_factor == expected
     assert result.profit_factor < 2.0  # slippage shrinks the winner, grows the loser

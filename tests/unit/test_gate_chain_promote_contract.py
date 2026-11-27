@@ -331,9 +331,7 @@ def test_long_exempt(monkeypatch: pytest.MonkeyPatch) -> None:
         "no-dates",
     ],
 )
-def test_fail_closed_shapes(
-    monkeypatch: pytest.MonkeyPatch, over: dict[str, object]
-) -> None:
+def test_fail_closed_shapes(monkeypatch: pytest.MonkeyPatch, over: dict[str, object]) -> None:
     """Every unreadable shape is a 409 with the pinned detail."""
     args: dict[str, Any] = {"entry": _short(_window()), "payload": _payload()}
     args.update(over)
@@ -389,12 +387,8 @@ def test_loader_error_is_neutral(
     ]
 
 
-@pytest.mark.parametrize(
-    "min_sharpe", [_MISSING, True, "x"], ids=["absent", "bool", "string"]
-)
-def test_min_sharpe_fallback(
-    monkeypatch: pytest.MonkeyPatch, min_sharpe: object
-) -> None:
+@pytest.mark.parametrize("min_sharpe", [_MISSING, True, "x"], ids=["absent", "bool", "string"])
+def test_min_sharpe_fallback(monkeypatch: pytest.MonkeyPatch, min_sharpe: object) -> None:
     """A missing / bool / non-numeric minimum falls back to 0.5."""
     out = _gate(
         monkeypatch,
@@ -432,9 +426,7 @@ def test_legacy_window_pairing(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.parametrize(
     ("symbols", "expected"), [('["BTCUSDT"]', "pass"), ("BTCUSDT", "pass"), ([], "409")]
 )
-def test_symbol_shapes(
-    monkeypatch: pytest.MonkeyPatch, symbols: object, expected: str
-) -> None:
+def test_symbol_shapes(monkeypatch: pytest.MonkeyPatch, symbols: object, expected: str) -> None:
     """A JSON list and a bare string both give BTCUSDT; [] fails closed."""
     out = _gate(
         monkeypatch,
@@ -490,9 +482,7 @@ def test_trades_short_table(entry: dict[str, object], expected: bool) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_recheck_legacy_tie_passes(
-    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_recheck_legacy_tie_passes(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """The legacy inclusive rule passes p == 0.05 (discovery's strict rule rejects it)."""
     out = _recheck(tmp_path, monkeypatch, norm_sf=0.05)
     assert out.passed_dsr is True

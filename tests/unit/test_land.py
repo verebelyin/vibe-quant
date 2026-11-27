@@ -240,20 +240,30 @@ def _build_same_word_job(repo: Path, tc_text: str) -> None:
     _write(repo, "NOTES.md", base)
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "init")
-    for name, text in (("ta", base.replace("x = 1", "x = 2")), ("tb", base.replace("x = 1", "x = 3")), ("tc", tc_text)):
+    for name, text in (
+        ("ta", base.replace("x = 1", "x = 2")),
+        ("tb", base.replace("x = 1", "x = 3")),
+        ("tc", tc_text),
+    ):
         _git(repo, "checkout", "-qb", name, "main")
         _write(repo, "NOTES.md", text)
         _git(repo, "commit", "-qam", f"wip {name}")
     _git(repo, "checkout", "-qb", "job", "ta")
     merge = subprocess.run(
-        ["git", "-C", str(repo), "merge", "--no-edit", "tb"], capture_output=True, text=True, env=_ENV
+        ["git", "-C", str(repo), "merge", "--no-edit", "tb"],
+        capture_output=True,
+        text=True,
+        env=_ENV,
     )
     assert merge.returncode != 0
     _write(repo, "NOTES.md", base.replace("x = 1", "x = 5"))
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "merge tb")
     merge = subprocess.run(
-        ["git", "-C", str(repo), "merge", "--no-edit", "tc"], capture_output=True, text=True, env=_ENV
+        ["git", "-C", str(repo), "merge", "--no-edit", "tc"],
+        capture_output=True,
+        text=True,
+        env=_ENV,
     )
     if merge.returncode != 0:  # tc edits a line next to x: resolve by hand
         _write(repo, "NOTES.md", tc_text.replace("x = 1", "x = 5"))
@@ -273,7 +283,11 @@ def test_conflict_on_a_path_a_later_task_touches_undoes_the_later_delta(
         ["--repo", str(repo), "--job", "j", "--verified", "job", f"ta={ma}", f"tb={mb}", f"tc={mc}"]
     )
     assert rc == 0
-    assert _git(repo, "log", "--format=%s", "-3").splitlines() == ["feat: tc", "feat: tb", "feat: ta"]
+    assert _git(repo, "log", "--format=%s", "-3").splitlines() == [
+        "feat: tc",
+        "feat: tb",
+        "feat: ta",
+    ]
     assert _git(repo, "show", "HEAD~1:NOTES.md") == "l1\nx = 5\nl3\nl4\nl5"
     assert _git(repo, "show", "HEAD:NOTES.md") == "l1\nx = 5\nl3\nl4\nl5c"
     out = capsys.readouterr().out  # type: ignore[attr-defined]
@@ -411,7 +425,9 @@ def test_a_task_that_only_lints_clean_with_a_later_task_is_refused_before_any_co
     _git(repo, "checkout", "-q", "main")
     ma, mb = _msgs(tmp_path, ("ta", "tb"))
     start = _git(repo, "rev-parse", "HEAD")
-    rc = land.main(["--repo", str(repo), "--job", "j", "--verified", "job", f"ta={ma}", f"tb@ta={mb}"])
+    rc = land.main(
+        ["--repo", str(repo), "--job", "j", "--verified", "job", f"ta={ma}", f"tb@ta={mb}"]
+    )
     assert rc == 2
     err = capsys.readouterr().err  # type: ignore[attr-defined]
     assert "ta (fork" in err and "F811" in err and "no task committed" in err

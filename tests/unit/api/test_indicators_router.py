@@ -75,6 +75,7 @@ def test_custom_plugin_appears_in_catalog(client: TestClient) -> None:
     """Register a throwaway spec at test time — it must immediately show
     up in a fresh catalog request. Confirms the "drop a plugin, restart,
     done" contract with zero schema edits."""
+
     def _noop_compute(df, params):  # noqa: ARG001
         return df["close"]
 
@@ -206,8 +207,16 @@ def test_catalog_lists_the_tradingview_ma_family(client: TestClient) -> None:
     entries = {e["type_name"]: e for e in resp.json()["indicators"]}
     expected = {
         "PRICE": ("overlay", ["value"], {"src": "str", "offset": "int"}),
-        "MA": ("overlay", ["value"], {"period": "int", "kind": "str", "src": "str", "offset": "int"}),
-        "HULL": ("overlay", ["value"], {"period": "int", "mode": "str", "src": "str", "offset": "int"}),
+        "MA": (
+            "overlay",
+            ["value"],
+            {"period": "int", "kind": "str", "src": "str", "offset": "int"},
+        ),
+        "HULL": (
+            "overlay",
+            ["value"],
+            {"period": "int", "mode": "str", "src": "str", "offset": "int"},
+        ),
         "MA_MACD": (
             "oscillator",
             ["macd", "signal", "histogram"],
@@ -220,7 +229,11 @@ def test_catalog_lists_the_tradingview_ma_family(client: TestClient) -> None:
                 "offset": "int",
             },
         ),
-        "AO": ("oscillator", ["value"], {"fast_period": "int", "slow_period": "int", "offset": "int"}),
+        "AO": (
+            "oscillator",
+            ["value"],
+            {"fast_period": "int", "slow_period": "int", "offset": "int"},
+        ),
     }
     for name, (placement, outputs, schema) in expected.items():
         entry = entries[name]
@@ -229,7 +242,12 @@ def test_catalog_lists_the_tradingview_ma_family(client: TestClient) -> None:
         assert entry["param_schema"] == schema, name
         assert entry["source_file"] is not None, name
         assert entry["is_proposed"] is False, name
-    assert entries["MA"]["default_params"] == {"period": 14, "kind": "sma", "src": "close", "offset": 0}
+    assert entries["MA"]["default_params"] == {
+        "period": 14,
+        "kind": "sma",
+        "src": "close",
+        "offset": 0,
+    }
     assert entries["HULL"]["default_params"]["period"] == 55
     assert entries["AO"]["default_params"] == {"fast_period": 5, "slow_period": 34, "offset": 0}
 

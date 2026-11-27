@@ -127,9 +127,7 @@ class _Api:
 
 
 @pytest.fixture()
-async def api(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> AsyncIterator[_Api]:
+async def api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_Api]:
     db = tmp_path / "api.db"
     monkeypatch.setattr("vibe_quant.db.connection.DEFAULT_DB_PATH", db)
     monkeypatch.setattr(
@@ -175,16 +173,12 @@ def _configured(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(ENV_TELEGRAM_CHAT_ID, CHAT)
 
 
-def _install_probe(
-    monkeypatch: pytest.MonkeyPatch, handler: Any
-) -> list[httpx.AsyncClient]:
+def _install_probe(monkeypatch: pytest.MonkeyPatch, handler: Any) -> list[httpx.AsyncClient]:
     """Patch the probe-client seam with a ``MockTransport``; return the recorded clients."""
     clients: list[httpx.AsyncClient] = []
 
     def _make(timeout_s: float) -> httpx.AsyncClient:
-        client = httpx.AsyncClient(
-            transport=httpx.MockTransport(handler), timeout=timeout_s + 1.0
-        )
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=timeout_s + 1.0)
         clients.append(client)
         return client
 
@@ -339,9 +333,7 @@ async def test_probe_http_rows(
 
 
 @pytest.mark.parametrize("token", [TOKEN + " ", "123:ZZQQK EN99ABCDE"], ids=["trailing", "inner"])
-async def test_whitespace_token_still_redacted(
-    token: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_whitespace_token_still_redacted(token: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """A token with whitespace is redacted raw, stripped and per long part."""
     long_part = max(token.split(), key=len)
     description = f"echo [{token}] [{token.strip()}] [{long_part}] tail"
@@ -724,9 +716,7 @@ async def test_concurrent_start_one_wins(api: _Api, monkeypatch: pytest.MonkeyPa
         api,
         monkeypatch,
         [
-            lambda: api.ac.post(
-                "/api/paper/start", json={"validation_run_id": api.validation_run}
-            )
+            lambda: api.ac.post("/api/paper/start", json={"validation_run_id": api.validation_run})
             for _ in range(2)
         ],
     )

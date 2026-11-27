@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 def _good_body() -> str:
     return (
         "def compute_my_ind(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:\n"
-        '    import pandas as pd\n'
+        "    import pandas as pd\n"
         '    period = int(params.get("period", 14) or 14)\n'
         '    return df["close"].rolling(period).mean()\n'
     )
@@ -153,9 +153,7 @@ def _spec(name: str = "MY_IND") -> IndicatorSpecArgs:
 
 
 def test_render_plugin_file_contains_required_header() -> None:
-    rendered = render_plugin_file(
-        _spec(), _good_body(), extraction_id=42, source_quote="from u/x"
-    )
+    rendered = render_plugin_file(_spec(), _good_body(), extraction_id=42, source_quote="from u/x")
     assert "AUTO-GENERATED FROM EXTRACTION 42" in rendered
     assert "RANGES: period=llm" in rendered  # range came from LLM dict
 
@@ -167,8 +165,7 @@ def test_render_plugin_file_includes_register_spec_call() -> None:
     assert "compute_fn=compute_my_ind" in rendered
 
 
-def test_render_plugin_file_strips_inner_imports_and_lifts_pd_to_module(
-) -> None:
+def test_render_plugin_file_strips_inner_imports_and_lifts_pd_to_module() -> None:
     """Imports inside the function body trip ruff I001. The
     scaffolder strips them and emits a single sorted module-level
     import block instead.
@@ -177,8 +174,8 @@ def test_render_plugin_file_strips_inner_imports_and_lifts_pd_to_module(
     """
     body = (
         "def compute_my_ind(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:\n"
-        '    import pandas as pd\n'
-        '    import numpy as np\n'
+        "    import pandas as pd\n"
+        "    import numpy as np\n"
         '    return df["close"].rolling(14).mean().fillna(np.nan)\n'
     )
     rendered = render_plugin_file(_spec(), body, extraction_id=1)
@@ -235,9 +232,7 @@ def test_synthesize_writes_file_when_body_is_safe(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     plugins = _isolate_plugins(tmp_path, monkeypatch)
-    monkeypatch.setattr(
-        indicator_scaffold, "_run_claude_codegen", lambda _p: _good_body()
-    )
+    monkeypatch.setattr(indicator_scaffold, "_run_claude_codegen", lambda _p: _good_body())
     # mypy + ruff are subprocesses — keep them green by stubbing too,
     # the goal of this test is to verify the happy path wiring, not to
     # validate the toolchain (covered separately).
@@ -251,9 +246,7 @@ def test_synthesize_writes_file_when_body_is_safe(
     assert path.read_text(encoding="utf-8").startswith('"""AUTO-GENERATED')
 
 
-def test_synthesize_raises_banned_import(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_synthesize_raises_banned_import(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _isolate_plugins(tmp_path, monkeypatch)
     bad = (
         "def compute_my_ind(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:\n"
@@ -262,9 +255,7 @@ def test_synthesize_raises_banned_import(
     )
     monkeypatch.setattr(indicator_scaffold, "_run_claude_codegen", lambda _p: bad)
     with pytest.raises(CodegenError) as e:
-        synthesize_and_write(
-            _spec(), formula="f", extraction_id=1, source_quote=None
-        )
+        synthesize_and_write(_spec(), formula="f", extraction_id=1, source_quote=None)
     assert e.value.code == "banned_import"
     # No file should have been written.
     assert not (tmp_path / "plugins" / "proposed_my_ind.py").exists()
@@ -274,26 +265,18 @@ def test_synthesize_raises_syntax_error_before_writing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _isolate_plugins(tmp_path, monkeypatch)
-    monkeypatch.setattr(
-        indicator_scaffold, "_run_claude_codegen", lambda _p: "def x(:\n"
-    )
+    monkeypatch.setattr(indicator_scaffold, "_run_claude_codegen", lambda _p: "def x(:\n")
     with pytest.raises(CodegenError) as e:
-        synthesize_and_write(
-            _spec(), formula="f", extraction_id=1, source_quote=None
-        )
+        synthesize_and_write(_spec(), formula="f", extraction_id=1, source_quote=None)
     assert e.value.code == "syntax_error"
     assert not (tmp_path / "plugins" / "proposed_my_ind.py").exists()
 
 
-def test_synthesize_raises_non_function(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_synthesize_raises_non_function(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _isolate_plugins(tmp_path, monkeypatch)
     monkeypatch.setattr(indicator_scaffold, "_run_claude_codegen", lambda _p: "x = 5\n")
     with pytest.raises(CodegenError) as e:
-        synthesize_and_write(
-            _spec(), formula="f", extraction_id=1, source_quote=None
-        )
+        synthesize_and_write(_spec(), formula="f", extraction_id=1, source_quote=None)
     assert e.value.code == "non_function"
 
 
@@ -301,18 +284,12 @@ def test_synthesize_deletes_file_on_mypy_fail(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     plugins = _isolate_plugins(tmp_path, monkeypatch)
-    monkeypatch.setattr(
-        indicator_scaffold, "_run_claude_codegen", lambda _p: _good_body()
-    )
-    monkeypatch.setattr(
-        indicator_scaffold, "run_mypy", lambda _p: (False, "incompatible types")
-    )
+    monkeypatch.setattr(indicator_scaffold, "_run_claude_codegen", lambda _p: _good_body())
+    monkeypatch.setattr(indicator_scaffold, "run_mypy", lambda _p: (False, "incompatible types"))
     monkeypatch.setattr(indicator_scaffold, "run_ruff", lambda _p: (True, ""))
 
     with pytest.raises(CodegenError) as e:
-        synthesize_and_write(
-            _spec(), formula="f", extraction_id=1, source_quote=None
-        )
+        synthesize_and_write(_spec(), formula="f", extraction_id=1, source_quote=None)
     assert e.value.code == "mypy_fail"
     assert not (plugins / "proposed_my_ind.py").exists()
 
@@ -321,18 +298,12 @@ def test_synthesize_deletes_file_on_ruff_fail(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     plugins = _isolate_plugins(tmp_path, monkeypatch)
-    monkeypatch.setattr(
-        indicator_scaffold, "_run_claude_codegen", lambda _p: _good_body()
-    )
+    monkeypatch.setattr(indicator_scaffold, "_run_claude_codegen", lambda _p: _good_body())
     monkeypatch.setattr(indicator_scaffold, "run_mypy", lambda _p: (True, ""))
-    monkeypatch.setattr(
-        indicator_scaffold, "run_ruff", lambda _p: (False, "F401 unused import")
-    )
+    monkeypatch.setattr(indicator_scaffold, "run_ruff", lambda _p: (False, "F401 unused import"))
 
     with pytest.raises(CodegenError) as e:
-        synthesize_and_write(
-            _spec(), formula="f", extraction_id=1, source_quote=None
-        )
+        synthesize_and_write(_spec(), formula="f", extraction_id=1, source_quote=None)
     assert e.value.code == "ruff_fail"
     assert not (plugins / "proposed_my_ind.py").exists()
 

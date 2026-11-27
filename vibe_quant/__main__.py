@@ -227,9 +227,7 @@ def cmd_plugin(_args: argparse.Namespace, extra: list[str] | None = None) -> int
     return plugin_main(extra or [])
 
 
-def cmd_extraction_worker(
-    _args: argparse.Namespace, extra: list[str] | None = None
-) -> int:
+def cmd_extraction_worker(_args: argparse.Namespace, extra: list[str] | None = None) -> int:
     """Forward to the research extraction-worker CLI."""
     from vibe_quant.research.worker import cli_main
 

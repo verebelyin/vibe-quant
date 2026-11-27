@@ -128,7 +128,9 @@ def test_untracked_file_in_a_linked_worktree_is_free_but_tracked_files_and_main_
     (wt / "test_zz_probe.py").write_text("")
     (main / "probe.py").write_text("")
     monkeypatch.setattr(guard, "_REPO", str(main.resolve()))
-    monkeypatch.setattr(guard, "temp_roots", lambda: ["/nonexistent-temp-root"])  # tmp_path is in $TMPDIR
+    monkeypatch.setattr(
+        guard, "temp_roots", lambda: ["/nonexistent-temp-root"]
+    )  # tmp_path is in $TMPDIR
     assert guard.decide("rm -f test_zz_probe.py", str(wt))[0] == "allow"
     assert guard.decide("rm kept.py", str(wt))[0] == "ask"
     assert guard.decide("rm -rf .", str(wt))[0] == "ask"

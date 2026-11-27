@@ -92,9 +92,7 @@ def test_incremental_update_excludes_in_progress_candle(
 
     archive = RawDataArchive(tmp_path / "incr.db")
     try:
-        archive.insert_klines(
-            "BTCUSDT", "1m", [_kline(seed_open, seed_open + 59_999)], "seed"
-        )
+        archive.insert_klines("BTCUSDT", "1m", [_kline(seed_open, seed_open + 59_999)], "seed")
         monkeypatch.setattr(
             ingest,
             "download_recent_klines",

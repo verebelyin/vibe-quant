@@ -70,13 +70,17 @@ def main(argv: list[str] | None = None) -> int:
 
                     extract_fn = get_default_extractor()
                 except ImportError:
-                    logger.warning("extractor module not available; running with --no-extract semantics")
+                    logger.warning(
+                        "extractor module not available; running with --no-extract semantics"
+                    )
                     extract_fn = None
                 except ConfigurationError as e:
                     print(f"error: {e}", file=sys.stderr)
                     return 1
                 except FileNotFoundError as e:
-                    logger.warning("extractor unavailable: %s; items will land at extraction_status=pending", e)
+                    logger.warning(
+                        "extractor unavailable: %s; items will land at extraction_status=pending", e
+                    )
                     extract_fn = None
             try:
                 summary = run_scrape(

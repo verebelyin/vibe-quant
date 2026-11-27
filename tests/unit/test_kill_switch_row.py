@@ -99,8 +99,6 @@ def _critical_records(caplog: pytest.LogCaptureFixture) -> list[str]:
     return [r.getMessage() for r in caplog.records if r.levelno == logging.CRITICAL]
 
 
-
-
 def test_fresh_db_seeds_disengaged(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """A brand-new database gets a disengaged row and no critical log."""
     with caplog.at_level(logging.CRITICAL):
@@ -112,8 +110,6 @@ def test_fresh_db_seeds_disengaged(tmp_path: Path, caplog: pytest.LogCaptureFixt
     assert state["kill_switch"] is False
     assert state["reason"] is None
     assert _critical_records(caplog) == []
-
-
 
 
 def test_fresh_manager_reseeds_engaged_once(
@@ -159,8 +155,6 @@ def test_fresh_manager_reseeds_engaged_once(
     assert _critical_records(caplog) == [], "an already re-created row logs nothing further"
 
 
-
-
 def test_cached_conn_reseeds_engaged(tmp_path: Path) -> None:
     """The row deleted under a live connection is re-created engaged by the
     very next read on that same connection."""
@@ -175,8 +169,6 @@ def test_cached_conn_reseeds_engaged(tmp_path: Path) -> None:
     assert state["reason"] == REASON
     assert (row[0], row[1], row[2], row[4]) == (1, 1, REASON, "system")
     assert row[3] is not None
-
-
 
 
 def test_unreseedable_row_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -197,8 +189,6 @@ def test_unreseedable_row_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         sm.close()
 
 
-
-
 def test_require_row_kwarg_removed(tmp_path: Path) -> None:
     """The ignored ``require_row`` kwarg is gone; the plain read of a
     deleted row is the engaged re-seed."""
@@ -212,8 +202,6 @@ def test_require_row_kwarg_removed(tmp_path: Path) -> None:
         sm.close()
     assert state["kill_switch"] is True
     assert state["reason"] == REASON
-
-
 
 
 def test_set_kill_upserts_missing_row(tmp_path: Path) -> None:
@@ -230,8 +218,6 @@ def test_set_kill_upserts_missing_row(tmp_path: Path) -> None:
     assert row[3] is not None
     assert state["kill_switch"] is True
     assert state["reason"] == "r"
-
-
 
 
 def test_clear_on_missing_row_reseeds_engaged_and_raises(tmp_path: Path) -> None:
@@ -279,8 +265,6 @@ def _raw_row(db: Path) -> tuple[Any, ...] | None:
     finally:
         raw.close()
     return tuple(row) if row is not None else None
-
-
 
 
 def test_cached_reseed_is_committed_for_other_connections(tmp_path: Path) -> None:
@@ -398,8 +382,6 @@ def test_cached_unreseedable_cause_is_original_error(tmp_path: Path) -> None:
     assert isinstance(exc_info.value.__cause__, sqlite3.OperationalError)
 
 
-
-
 @pytest.fixture()
 def tmp_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     db = tmp_path / "ks.db"
@@ -480,7 +462,9 @@ async def test_status_unavailable_503(api: dict[str, Any], monkeypatch: pytest.M
     assert r.json()["detail"] == f"kill switch state unavailable: {_UNRESEEDABLE}"
 
 
-async def test_status_operational_error_503(api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_status_operational_error_503(
+    api: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A raw ``sqlite3.OperationalError`` from the read is the SAME 503,
     not the 500 it used to be.
 
@@ -561,9 +545,7 @@ async def test_kill_not_persisted_still_cascades_503(
 async def test_unlock_missing_row_409(api: dict[str, Any]) -> None:
     """Unlocking a missing row is a 409 and leaves the row engaged."""
     _delete_row(api["state"])
-    r = await api["ac"].post(
-        "/api/system/unlock", json={"acknowledge": True, "cleared_by": "op"}
-    )
+    r = await api["ac"].post("/api/system/unlock", json={"acknowledge": True, "cleared_by": "op"})
     assert r.status_code == 409, r.text
     assert r.json()["detail"] == _CLEAR_MISSING
     state = api["state"].get_system_state()
@@ -605,7 +587,9 @@ async def test_fresh_unreseedable_status_503(api: dict[str, Any], tmp_db: Path) 
         fresh.close()
 
 
-async def test_kill_cascades_when_state_initializer_fails(api: dict[str, Any], tmp_db: Path) -> None:
+async def test_kill_cascades_when_state_initializer_fails(
+    api: dict[str, Any], tmp_db: Path
+) -> None:
     """The StateManager cannot
     initialise (reseed INSERT fails), yet /kill still queues exactly one kill
     command for the active paper job (trader id read from the run) and answers

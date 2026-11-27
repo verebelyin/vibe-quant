@@ -191,7 +191,9 @@ def test_partial_current_day_bar_is_not_a_close() -> None:
         aux_data._REF_DERIVED.clear()
         data = (np.r_[ts, part_ts], np.r_[c, 999.0])
         with _patch_series({"BTCUSDT": data}):
-            t = np.array([DAY0 + d * DAY, DAY0 + d * DAY + 4 * H, DAY0 + d * DAY + 16 * H], dtype=np.int64)
+            t = np.array(
+                [DAY0 + d * DAY, DAY0 + d * DAY + 4 * H, DAY0 + d * DAY + 16 * H], dtype=np.int64
+            )
             got = aux_data.ref_close_asof("BTCUSDT", t)
         assert np.all(got == close[-1]), tag
         assert 999.0 not in got
@@ -209,7 +211,9 @@ def test_ref_bars_per_call_path_does_not_reload() -> None:
     calls: list[object] = []
     with _patch_series({"BTCUSDT": _ref(close)}):
         aux_data.ref_close_asof("BTCUSDT", np.array([DAY0 + 30 * DAY], dtype=np.int64))
-        with patch("vibe_quant.validation.extraction.load_catalog_bars", lambda *a: calls.append(a)):
+        with patch(
+            "vibe_quant.validation.extraction.load_catalog_bars", lambda *a: calls.append(a)
+        ):
             aux_data.ref_trend_asof("BTCUSDT", np.array([DAY0 + 30 * DAY], dtype=np.int64), 10)
             aux_data.ref_trend_asof("BTCUSDT", np.array([DAY0 + 31 * DAY], dtype=np.int64), 10)
     assert calls == []
@@ -237,7 +241,10 @@ def test_context_nan_overrides_last_valid_value_in_generated_strategy() -> None:
 
     ctx = src("BTC_TREND")
     assert 'self._pta_values["x"] = float(_v)' in ctx
-    assert "if not pd.isna(_v)" not in ctx.split("def _update_pta_indicators")[1].split("\n    def ")[0]
+    assert (
+        "if not pd.isna(_v)"
+        not in ctx.split("def _update_pta_indicators")[1].split("\n    def ")[0]
+    )
     # NaN stored -> comparison False -> no entry on stale context
     assert not (float("nan") > 0) and not (float("nan") < 0)
 

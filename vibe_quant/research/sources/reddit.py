@@ -195,7 +195,11 @@ class RedditSource:
         num_comments = int(data.get("num_comments") or 0)
         comments = self._fetch_comments(post_id) if post_id and num_comments > 0 else []
         permalink = str(data.get("permalink") or "")
-        url = f"{REDDIT_URL_BASE}{permalink}" if permalink else f"{REDDIT_URL_BASE}/comments/{post_id}"
+        url = (
+            f"{REDDIT_URL_BASE}{permalink}"
+            if permalink
+            else f"{REDDIT_URL_BASE}/comments/{post_id}"
+        )
         extras: dict[str, Any] = {
             "subreddit": subreddit,
             "num_comments": num_comments,

@@ -46,8 +46,7 @@ import pandas as pd
 
 from vibe_quant.validation.extraction import load_catalog_bars
 
-COINS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "NEARUSDT", "SUIUSDT", "ZECUSDT",
-         "HYPEUSDT")
+COINS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "NEARUSDT", "SUIUSDT", "ZECUSDT", "HYPEUSDT")
 SIDE_COST = 0.0005
 DEC_START = pd.Timestamp("2023-01-01").value
 END = pd.Timestamp("2026-10-21").value
@@ -74,7 +73,9 @@ def load(sym: str, tf: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 def funding(con: sqlite3.Connection, sym: str) -> tuple[np.ndarray, np.ndarray]:
     rows = con.execute(
         "select funding_time, funding_rate from raw_funding_rates where symbol=? "
-        "order by funding_time", (sym,)).fetchall()
+        "order by funding_time",
+        (sym,),
+    ).fetchall()
     t = np.array([r[0] for r in rows], dtype=np.int64) * 1_000_000
     cum = np.concatenate(([0.0], np.cumsum([r[1] for r in rows])))
     return t, cum
@@ -124,18 +125,29 @@ def test_a(con: sqlite3.Connection, hold: int) -> dict[str, object]:
         net = gross - 2 * SIDE_COST - fund
         drift = float((op[hold:] / op[:-hold] - 1).mean())
         edge = net - drift
-        per[sym] = {"n": len(ent), "mean_net": float(net.mean()), "drift": drift,
-                    "mean_edge": float(edge.mean()), "mean_funding": float(fund.mean())}
+        per[sym] = {
+            "n": len(ent),
+            "mean_net": float(net.mean()),
+            "drift": drift,
+            "mean_edge": float(edge.mean()),
+            "mean_funding": float(fund.mean()),
+        }
         edges.append(edge)
         nets.append(net)
         months.append(pd.to_datetime(ts[ent]).to_period("M").astype(str).to_numpy())
     e_all, n_all, m_all = np.concatenate(edges), np.concatenate(nets), np.concatenate(months)
     p = cluster_p(e_all, m_all, np.random.default_rng(20261103))
     coins_pos = sum(v["mean_edge"] > 0 for v in per.values())  # type: ignore[index]
-    return {"hold": hold, "n": len(e_all), "mean_net": float(n_all.mean()),
-            "mean_edge": float(e_all.mean()), "p_edge": p, "coins_edge_pos": coins_pos,
-            "per_coin": per,
-            "pass": bool(n_all.mean() > 0 and e_all.mean() > 0 and p < 0.05 and coins_pos >= 5)}
+    return {
+        "hold": hold,
+        "n": len(e_all),
+        "mean_net": float(n_all.mean()),
+        "mean_edge": float(e_all.mean()),
+        "p_edge": p,
+        "coins_edge_pos": coins_pos,
+        "per_coin": per,
+        "pass": bool(n_all.mean() > 0 and e_all.mean() > 0 and p < 0.05 and coins_pos >= 5),
+    }
 
 
 def daily_series(con: sqlite3.Connection, tf: str) -> dict[str, pd.DataFrame]:
@@ -197,9 +209,17 @@ def test_bc(con: sqlite3.Connection, tf: str, per_year: float, start: int) -> di
     for k in ("B_rsi50", "C_band60_80"):
         beats = sum(1 for v in coin.values() if v and v[k] > v["bh"])
         p = block_p(pm[k].to_numpy(), pm["bh"].to_numpy(), per_year)
-        res[k] = {"coins_beat_bh": beats, "p_vs_bh": p, "pass": bool(
-            psh[k] > psh["bh"] and psh[k] > psh["null_sma20"] and psh[k] > psh["null_sma50"]
-            and beats >= 6 and p < 0.05)}
+        res[k] = {
+            "coins_beat_bh": beats,
+            "p_vs_bh": p,
+            "pass": bool(
+                psh[k] > psh["bh"]
+                and psh[k] > psh["null_sma20"]
+                and psh[k] > psh["null_sma50"]
+                and beats >= 6
+                and p < 0.05
+            ),
+        }
     return res
 
 

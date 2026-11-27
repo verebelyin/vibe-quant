@@ -57,9 +57,7 @@ def compute_rams(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
     lookback = int_param(params, "period", 50)
     close = df["close"]
 
-    macro = close.ewm(span=_MACRO_FAST, adjust=False).mean() / close.rolling(
-        _MACRO_SLOW
-    ).mean()
+    macro = close.ewm(span=_MACRO_FAST, adjust=False).mean() / close.rolling(_MACRO_SLOW).mean()
 
     # Least-squares slope over the lookback window, normalized by the
     # window mean. With x = 0..n-1, slope_t = dot(window_t, weights) where

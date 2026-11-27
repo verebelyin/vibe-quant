@@ -56,8 +56,13 @@ def state(tmp_path: Path) -> Iterator[StateManager]:
 def _screening(state: StateManager, rows: list[Row]) -> tuple[int, int]:
     sid = state.create_strategy(DSL_NAME, _dsl())
     run_id = state.create_backtest_run(
-        strategy_id=sid, run_mode="screening", symbols=["BTCUSDT"], timeframe="1m",
-        start_date="2024-01-01", end_date="2025-01-01", parameters={},
+        strategy_id=sid,
+        run_mode="screening",
+        symbols=["BTCUSDT"],
+        timeframe="1m",
+        start_date="2024-01-01",
+        end_date="2025-01-01",
+        parameters={},
     )
     state.update_backtest_run_status(run_id, "completed")
     for params, sharpe, trades in rows:
@@ -148,8 +153,13 @@ def test_uncompilable_dsl_keeps_the_dot_folded_comparison(
     """No config fields (DSL does not compile): the old exact match still works, quietly."""
     sid = state.create_strategy("s1", {"name": "s1"})
     run_id = state.create_backtest_run(
-        strategy_id=sid, run_mode="screening", symbols=["BTCUSDT"], timeframe="1m",
-        start_date="2024-01-01", end_date="2025-01-01", parameters={},
+        strategy_id=sid,
+        run_mode="screening",
+        symbols=["BTCUSDT"],
+        timeframe="1m",
+        start_date="2024-01-01",
+        end_date="2025-01-01",
+        parameters={},
     )
     state.update_backtest_run_status(run_id, "completed")
     state.conn.execute(
@@ -159,9 +169,7 @@ def test_uncompilable_dsl_keeps_the_dot_folded_comparison(
     )
     state.conn.commit()
     with caplog.at_level(logging.DEBUG, logger="vibe_quant.validation.consistency"):
-        ref = find_screening_reference(
-            state, sid, "s1", validated_params={"rsi_period": 12}
-        )
+        ref = find_screening_reference(state, sid, "s1", validated_params={"rsi_period": 12})
     assert ref is not None
     assert (ref.sharpe, ref.trades) == (1.0, 10)
     assert ref.source == f"screening_run:{run_id}"
@@ -267,8 +275,13 @@ def _editor_screening(
 ) -> tuple[int, int]:
     sid = state.create_strategy(EDITOR_NAME, _editor_dsl())
     run_id = state.create_backtest_run(
-        strategy_id=sid, run_mode="screening", symbols=["BTCUSDT"], timeframe="1h",
-        start_date="2024-01-01", end_date="2025-01-01", parameters=parameters,
+        strategy_id=sid,
+        run_mode="screening",
+        symbols=["BTCUSDT"],
+        timeframe="1h",
+        start_date="2024-01-01",
+        end_date="2025-01-01",
+        parameters=parameters,
     )
     state.update_backtest_run_status(run_id, "completed")
     for params, sharpe, trades in rows:
@@ -316,8 +329,13 @@ def test_editor_format_strategy_that_does_not_translate_keeps_the_dot_folded_com
     broken["conditions"] = {"entry": [{"left": "RSI(14)", "operator": "??", "right": "x"}]}
     sid = state.create_strategy("editor_broken", broken)
     run_id = state.create_backtest_run(
-        strategy_id=sid, run_mode="screening", symbols=["BTCUSDT"], timeframe="1h",
-        start_date="2024-01-01", end_date="2025-01-01", parameters={},
+        strategy_id=sid,
+        run_mode="screening",
+        symbols=["BTCUSDT"],
+        timeframe="1h",
+        start_date="2024-01-01",
+        end_date="2025-01-01",
+        parameters={},
     )
     state.update_backtest_run_status(run_id, "completed")
     for params, sharpe, trades in [({"rsi.period": 12}, 1.0, 10), ({"rsi.period": 14}, 3.0, 20)]:
@@ -327,9 +345,7 @@ def test_editor_format_strategy_that_does_not_translate_keeps_the_dot_folded_com
             (run_id, json.dumps(params), sharpe, trades),
         )
     state.conn.commit()
-    ref = find_screening_reference(
-        state, sid, "editor_broken", validated_params={"rsi_period": 12}
-    )
+    ref = find_screening_reference(state, sid, "editor_broken", validated_params={"rsi_period": 12})
     assert ref is not None
     assert (ref.sharpe, ref.trades) == (1.0, 10)
     assert ref.source == f"screening_run:{run_id}"

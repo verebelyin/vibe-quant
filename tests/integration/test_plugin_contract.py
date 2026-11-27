@@ -90,9 +90,7 @@ def test_contract_dsl_schema(synthetic_plugin) -> None:
         {
             "name": "citest_strategy",
             "timeframe": "5m",
-            "indicators": {
-                "ci": {"type": _PLUGIN_NAME, "period": 10, "gain": 2.0}
-            },
+            "indicators": {"ci": {"type": _PLUGIN_NAME, "period": 10, "gain": 2.0}},
             "entry_conditions": {"long": ["ci > 100"]},
             "exit_conditions": {"long": ["ci < 90"]},
             "stop_loss": {"type": "fixed_pct", "percent": 1.0},
@@ -160,9 +158,7 @@ def test_contract_api_catalog(synthetic_plugin) -> None:
         "requires_high_low",
         "requires_volume",
     }
-    assert expected_keys.issubset(entry.keys()), (
-        f"missing keys: {expected_keys - entry.keys()}"
-    )
+    assert expected_keys.issubset(entry.keys()), f"missing keys: {expected_keys - entry.keys()}"
     # Plugin-declared params flow into default_params + param_schema so
     # the picker can render them.
     assert entry["default_params"] == {"period": 10, "gain": 1.5}
@@ -183,9 +179,7 @@ def test_contract_compiler(synthetic_plugin) -> None:
         {
             "name": "citest_compile",
             "timeframe": "5m",
-            "indicators": {
-                "ci": {"type": _PLUGIN_NAME, "period": 10, "gain": 2.0}
-            },
+            "indicators": {"ci": {"type": _PLUGIN_NAME, "period": 10, "gain": 2.0}},
             "entry_conditions": {"long": ["ci > 100"]},
             "exit_conditions": {"long": ["ci < 90"]},
             "stop_loss": {"type": "fixed_pct", "percent": 1.0},

@@ -210,7 +210,10 @@ def test_settings_follow_the_plan_windows() -> None:
         assert cfg.dsr_rule == "emax"  # the DiscoveryConfig default is q95
         assert cfg.bootstrap_min_sharpe == 0.0
         assert (cfg.start_date, cfg.end_date) == (plan.train_start, plan.train_end)
-        assert (cfg.holdout_start_date, cfg.holdout_end_date) == (plan.holdout_start, plan.holdout_end)
+        assert (cfg.holdout_start_date, cfg.holdout_end_date) == (
+            plan.holdout_start,
+            plan.holdout_end,
+        )
         pipe = DiscoveryPipeline(cfg, backtest_fn=_null_backtest)
         assert pipe.cross_window_ranges() == plan.cross_windows
         assert pipe.wfa_window_ranges(cfg.start_date, cfg.end_date) == plan.wfa_windows
@@ -294,7 +297,10 @@ def test_chain_is_and_of_marginals() -> None:
 
     # the holdout marginal is read from the holdout metrics, not the train ones
     bad_holdout = _evaluate(
-        settings, windows, flat, _fit(mtm_daily_returns=_series(2.0, N_DAYS, 1)),
+        settings,
+        windows,
+        flat,
+        _fit(mtm_daily_returns=_series(2.0, N_DAYS, 1)),
         holdout_bt={**_pass_holdout(), "sharpe_ratio": 0.0},
     )
     assert bad_holdout["marginals"]["holdout"] is False
@@ -318,7 +324,10 @@ def test_chain_rejects_when_floor_or_windows_fail() -> None:
     # N, even though every other gate (incl. cross-window and WFA) passes
     for score in (0.0, -0.5):
         out = _evaluate(
-            settings, windows, flat, _fit(adjusted_score=score, mtm_daily_returns=_series(2.0, N_DAYS, 11))
+            settings,
+            windows,
+            flat,
+            _fit(adjusted_score=score, mtm_daily_returns=_series(2.0, N_DAYS, 11)),
         )
         m = out["marginals"]
         assert out["floor"] is False, score
@@ -366,7 +375,10 @@ def test_min_return_equality_and_isolation() -> None:
     # asserted through the public entry at both N
     for ret, expected in ((-1e-12, False), (0.0, True), (1e-12, True)):
         out = _evaluate(
-            settings, windows, flat, _fit(total_return=ret, mtm_daily_returns=_series(2.0, N_DAYS, 7))
+            settings,
+            windows,
+            flat,
+            _fit(total_return=ret, mtm_daily_returns=_series(2.0, N_DAYS, 7)),
         )
         assert out["marginals"]["min_return"] is expected, ret
 
@@ -476,6 +488,9 @@ def test_multi_symbol_buy_hold_reads_every_symbol_like_worst_mode() -> None:
     assert out["marginals"]["buy_hold"] is False
     assert out["buy_hold_record"]["symbols"]["ETHUSDT"]["passed"] is False
     same = _fit(mtm_daily_returns=good, symbol_mtm_daily={"BTCUSDT": good, "ETHUSDT": good})
-    assert _evaluate(settings, _window_factory({}, _flat_window()), closes, same)["marginals"][
-        "buy_hold"
-    ] is True
+    assert (
+        _evaluate(settings, _window_factory({}, _flat_window()), closes, same)["marginals"][
+            "buy_hold"
+        ]
+        is True
+    )

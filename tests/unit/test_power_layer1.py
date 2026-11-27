@@ -59,8 +59,6 @@ R4_BAR: dict[str, float] = {
 }
 
 
-
-
 def test_analytic_dsr_critical_sharpe() -> None:
     # The analytic critical S is the bisection root of DeflatedSharpeRatio at
     # p = 0.05, skew 0, kurtosis 3, annualized by sqrt(365). The design §2 table
@@ -70,16 +68,18 @@ def test_analytic_dsr_critical_sharpe() -> None:
             got = layer1.critical_sharpe_ann(T, N)
             assert got == pytest.approx(expected, abs=5e-5), (T, N, got, expected)
             # the bisection root really is p = 0.05 on the real repo function
-            p = DeflatedSharpeRatio(0.05).calculate(
-                observed_sharpe=layer1.critical_daily_sharpe(T, N),
-                num_trials=N,
-                num_observations=T,
-                skewness=0.0,
-                kurtosis=3.0,
-            ).p_value
+            p = (
+                DeflatedSharpeRatio(0.05)
+                .calculate(
+                    observed_sharpe=layer1.critical_daily_sharpe(T, N),
+                    num_trials=N,
+                    num_observations=T,
+                    skewness=0.0,
+                    kurtosis=3.0,
+                )
+                .p_value
+            )
             assert p == pytest.approx(0.05, abs=1e-9), (T, N, p)
-
-
 
 
 def test_analytic_power_matches_design_table() -> None:
@@ -266,8 +266,6 @@ def test_check_band_edges() -> None:
     )
 
 
-
-
 def _closes() -> dict[str, dict[int, float]]:
     """A deterministic BTC-like 1d close path covering both plan train ranges."""
     first = int(np.datetime64("2021-01-01", "D").astype("int64"))
@@ -299,8 +297,6 @@ def test_bh_bar_btc_windows() -> None:
         assert record["bh_sharpe_daily"] == pytest.approx(R4_BAR[window], rel=1e-12)
 
 
-
-
 @pytest.mark.slow(reason="two real quick power runs compared for determinism")
 def test_quick_run_is_deterministic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # SeedSequence([base, w, s, n]).spawn(reps), so the --quick JSON (minus
@@ -316,12 +312,8 @@ def test_quick_run_is_deterministic(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(layer1, "SELECTION_RHOS", (0.0,))
 
     def write(workers: int, name: str) -> dict[str, Any]:
-        cell_results, null_results = layer1.run_grid(
-            grid, 2, workers, closes, selection_reps=1
-        )
-        report = layer1.build_report(
-            cell_results, null_results, reps=2, selection_reps=1
-        )
+        cell_results, null_results = layer1.run_grid(grid, 2, workers, closes, selection_reps=1)
+        report = layer1.build_report(cell_results, null_results, reps=2, selection_reps=1)
         target = tmp_path / name
         layer1.write_report(report, target)
         return dict(json.loads(target.read_text()))
@@ -343,7 +335,9 @@ def test_quick_run_is_deterministic(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     # inputs (W3 and W6) with the literal values of the seed-independent schedule.
     by_cell = {(c["window"], c["n"], c["S"]): c for c in serial["cells"]}
     assert layer1.inposition_lag1_autocorr("W3", 150) == pytest.approx(0.242012422360248, rel=1e-12)
-    assert layer1.inposition_lag1_autocorr("W6", 150) == pytest.approx(0.6419126200920452, rel=1e-12)
+    assert layer1.inposition_lag1_autocorr("W6", 150) == pytest.approx(
+        0.6419126200920452, rel=1e-12
+    )
     for window, expected in (("W3", 0.242012422360248), ("W6", 0.6419126200920452)):
         entry = by_cell[(window, 150, 1.2)]
         assert entry["inposition_lag1"] == pytest.approx(expected, rel=1e-12)
@@ -353,8 +347,6 @@ def test_quick_run_is_deterministic(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         for reading in entry["r18"].values():
             assert reading["band_lo"] <= reading["band_hi"]
             assert set(reading) == {"empirical", "band_lo", "band_hi"}
-
-
 
 
 def _chrom(indicator: str) -> StrategyChromosome:
@@ -404,13 +396,18 @@ def test_selection_uses_production_top_k() -> None:
     assert len(layer1.select_picks(list(zip(chroms, distinct, strict=True)))) == 3
 
     # top_k = 5 caps the pick
-    many = [(_chrom(name), _fit(total_return=0.1 + 0.01 * i)) for i, name in enumerate(
-        ("RSI", "MACD", "BBANDS", "ATR", "CCI", "ROC", "NATR", "DONCHIAN")
-    )]
+    many = [
+        (_chrom(name), _fit(total_return=0.1 + 0.01 * i))
+        for i, name in enumerate(("RSI", "MACD", "BBANDS", "ATR", "CCI", "ROC", "NATR", "DONCHIAN"))
+    ]
     assert len(layer1.select_picks(many)) == 5
 
     # adjusted_score == 0 is the equality edge: ineligible (never picked)
-    scored = [(_chrom("RSI"), _fit(adjusted_score=0.0)), (_chrom("MACD"), _fit(adjusted_score=-0.5)), (_chrom("BBANDS"), _fit(adjusted_score=0.2))]
+    scored = [
+        (_chrom("RSI"), _fit(adjusted_score=0.0)),
+        (_chrom("MACD"), _fit(adjusted_score=-0.5)),
+        (_chrom("BBANDS"), _fit(adjusted_score=0.2)),
+    ]
     picked = layer1.select_picks(scored)
     assert [c for c, _ in picked] == [scored[2][0]]
 

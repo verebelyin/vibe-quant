@@ -137,7 +137,9 @@ def test_gtc_split_entry_keeps_one_protective_pair(engines: list[BacktestEngine]
         ("LIMIT", "0.004"),
         ("STOP_MARKET", "0.004"),
     ], [(o.order_type.name, str(o.quantity), o.status.name) for o in protective]
-    assert len(protective) == 2, [(o.order_type.name, str(o.quantity), o.status.name) for o in protective]
+    assert len(protective) == 2, [
+        (o.order_type.name, str(o.quantity), o.status.name) for o in protective
+    ]
     assert strat._outbox == []
 
 
@@ -213,7 +215,9 @@ def test_market_mode_keeps_queued_cancel_orders_in_sync(engines: list[BacktestEn
         entry_order="market",
         strategy_wrap=_sized("0.004", gtc_entry=True),
     )
-    (stop,) = [o for o in h._protective(engine) if o.is_open and o.order_type == OrderType.STOP_MARKET]
+    (stop,) = [
+        o for o in h._protective(engine) if o.is_open and o.order_type == OrderType.STOP_MARKET
+    ]
 
     # A queued cancel for the live SL must not hide it: the sync replaces it.
     strat._protective_orders = lambda: [stop]  # type: ignore[method-assign]

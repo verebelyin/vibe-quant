@@ -337,8 +337,11 @@ class TestKFoldRejectText:
         class StubCV:
             def run(self, n_samples: int, runner: object) -> CVResult:
                 return CVResult(
-                    fold_results=[], mean_oos_sharpe=0.4, std_oos_sharpe=1.2,
-                    mean_oos_return=0.0, is_robust=False,
+                    fold_results=[],
+                    mean_oos_sharpe=0.4,
+                    std_oos_sharpe=1.2,
+                    mean_oos_return=0.0,
+                    is_robust=False,
                 )
 
         _result, passed, reason = check_purged_kfold(

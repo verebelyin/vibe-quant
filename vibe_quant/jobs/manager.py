@@ -234,8 +234,7 @@ class BacktestJobManager:
                 ).fetchone()
                 if row and row["run_mode"] not in expected_modes:
                     raise ValueError(
-                        f"Run {run_id} has mode '{row['run_mode']}', "
-                        f"cannot launch as '{job_type}'"
+                        f"Run {run_id} has mode '{row['run_mode']}', cannot launch as '{job_type}'"
                     )
 
             # Check for existing active job

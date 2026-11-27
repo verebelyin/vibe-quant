@@ -35,7 +35,9 @@ GRID_MODES: tuple[str, ...] = ("isolated", "cross")
 MAX_CELLS = 12
 """The most cells one grid may have (user decision Q7)."""
 
-RUN_LEVEL_CONFLICT = "use either the bankroll grid or --liquidation-mode/--leverage/--max-margin-pct"
+RUN_LEVEL_CONFLICT = (
+    "use either the bankroll grid or --liquidation-mode/--leverage/--max-margin-pct"
+)
 
 
 class BankrollGridError(ValueError):
@@ -51,7 +53,9 @@ def _check_mode(mode: object) -> str:
 
 def _check_leverage(mode: str, leverage: object) -> float:
     try:
-        return LiquidationSettings(mode=cast("LiquidationMode", mode), leverage=cast("float", leverage)).leverage
+        return LiquidationSettings(
+            mode=cast("LiquidationMode", mode), leverage=cast("float", leverage)
+        ).leverage
     except LiquidationConfigError as exc:
         raise BankrollGridError(f"bankroll {exc}") from exc
 

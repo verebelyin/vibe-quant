@@ -1068,8 +1068,6 @@ async def test_explicit_trader_id_inherits_halt(
         await other._shutdown()
 
 
-
-
 async def test_garbled_high_water_mark_restores_error_halt(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
@@ -1181,7 +1179,7 @@ def test_null_field_is_none_no_problem() -> None:
 
 
 def test_garbled_high_water_mark_is_a_problem() -> None:
-    """"10600x" -> None + the exact problem string."""
+    """ "10600x" -> None + the exact problem string."""
     state, problems = RiskState.from_checkpoint(_full_risk(high_water_mark="10600x"))
     assert state.high_water_mark is None
     assert problems == ("high_water_mark='10600x'",)
@@ -1220,7 +1218,7 @@ def test_usable_decimal_values_restore(raw: object, expected: Decimal) -> None:
 
 
 def test_sub_unit_values_are_accepted_then_rejected_as_baselines() -> None:
-    """"-5"/"0" still parse to Decimals, but a non-positive
+    """ "-5"/"0" still parse to Decimals, but a non-positive
     high_water_mark / day_start_equity is a problem (last_equity stays unrestricted)."""
     state, problems = RiskState.from_checkpoint(_full_risk(last_equity="-5"))
     assert state.last_equity == Decimal("-5")

@@ -52,9 +52,7 @@ def test_bad_mode_is_rejected(mode: object) -> None:
     """P4: the mode is case-sensitive, and an explicit null is never a silent "off"."""
     with pytest.raises(LiquidationConfigError) as err:
         LiquidationSettings(mode=mode)  # type: ignore[arg-type]
-    assert str(err.value) == (
-        f"liquidation_mode must be one of {LIQUIDATION_MODES}, got {mode!r}"
-    )
+    assert str(err.value) == (f"liquidation_mode must be one of {LIQUIDATION_MODES}, got {mode!r}")
 
 
 def test_every_valid_mode_is_accepted() -> None:

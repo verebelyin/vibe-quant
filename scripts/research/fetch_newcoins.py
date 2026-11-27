@@ -43,8 +43,11 @@ def main(cov: str, out: str) -> None:
         if dest.exists():
             return "cached"
         q = urllib.parse.quote(sym)
-        url = (f"{VISION}data/futures/um/monthly/klines/{q}/15m/{q}-15m-{m}.zip" if kind == "klines"
-               else f"{VISION}data/futures/um/monthly/fundingRate/{q}/{q}-fundingRate-{m}.zip")
+        url = (
+            f"{VISION}data/futures/um/monthly/klines/{q}/15m/{q}-15m-{m}.zip"
+            if kind == "klines"
+            else f"{VISION}data/futures/um/monthly/fundingRate/{q}/{q}-fundingRate-{m}.zip"
+        )
         try:
             raw = _get(url)
         except urllib.error.HTTPError as e:
@@ -61,8 +64,12 @@ def main(cov: str, out: str) -> None:
 
     with ThreadPoolExecutor(16) as ex:
         res = list(ex.map(one, jobs))
-    summary = {"jobs": len(jobs), "ok": res.count("ok"), "cached": res.count("cached"),
-               "errors": [r for r in res if r not in ("ok", "cached")]}
+    summary = {
+        "jobs": len(jobs),
+        "ok": res.count("ok"),
+        "cached": res.count("cached"),
+        "errors": [r for r in res if r not in ("ok", "cached")],
+    }
     (root / "download_log.json").write_text(json.dumps(summary, indent=1))
     print(json.dumps(summary))
 

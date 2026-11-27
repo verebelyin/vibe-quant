@@ -194,7 +194,9 @@ class FastBacktestFn(NTBacktestFn):
         runner = self._make_runner(dsl_dict, start_date, end_date, run_symbols)
         runner._ensure_compiled()
         if runner._all_timeframes != {"1m"}:
-            raise FastTierUnsupported(f"loads {sorted(runner._all_timeframes)}: only 1m is replayed")
+            raise FastTierUnsupported(
+                f"loads {sorted(runner._all_timeframes)}: only 1m is replayed"
+            )
         catalog = str(runner._resolved_catalog_path.resolve())
         instrument_id = f"{run_symbols[0]}{_INSTRUMENT_SUFFIX}"
         instrument = load_instrument(catalog, instrument_id)

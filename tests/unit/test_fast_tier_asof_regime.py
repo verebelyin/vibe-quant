@@ -100,9 +100,7 @@ def _strategy(symbol: str, indicator: str, params: dict[str, object], cap: int) 
     module = StrategyCompiler().compile_to_module(dsl)
     cls = next(v for k, v in vars(module).items() if k.endswith("Strategy") and k != "Strategy")
     config_cls = getattr(module, cls.__name__.removesuffix("Strategy") + "Config")
-    harness = type(
-        "Wired", (cls,), {"config": config_cls(instrument_id=_instrument_id(symbol))}
-    )
+    harness = type("Wired", (cls,), {"config": config_cls(instrument_id=_instrument_id(symbol))})
     inst: Any = harness.__new__(harness)
     effective = {k: v for k, v in indicators["ind"].items() if k != "type"}
     inst._pta_values = {}
@@ -122,7 +120,10 @@ def _bars(symbol: str, start: str, end: str) -> list[Bar]:
 
 def _frame(bars: list[Bar]) -> pd.DataFrame:
     return pd.DataFrame(
-        {c: [float(getattr(b, c)) for b in bars] for c in ("open", "high", "low", "close", "volume")}
+        {
+            c: [float(getattr(b, c)) for b in bars]
+            for c in ("open", "high", "low", "close", "volume")
+        }
     )
 
 
@@ -420,23 +421,37 @@ def test_past_values_uses_only_daily_bars_at_or_before_the_close(
     )
 
     _patched_ref(monkeypatch, ts, closes)
-    before_roc, _ = _asof_column("BTCUSDT", "BTC_ROC", {"period": 1}, _syn_frame(len(close_ns)), close_ns)
-    before_trend, _ = _asof_column("BTCUSDT", "BTC_TREND", {"period": 2}, _syn_frame(len(close_ns)), close_ns)
+    before_roc, _ = _asof_column(
+        "BTCUSDT", "BTC_ROC", {"period": 1}, _syn_frame(len(close_ns)), close_ns
+    )
+    before_trend, _ = _asof_column(
+        "BTCUSDT", "BTC_TREND", {"period": 2}, _syn_frame(len(close_ns)), close_ns
+    )
 
     future = closes.copy()
     future[5:] = 1e9
     _patched_ref(monkeypatch, ts, future)
-    after_roc, _ = _asof_column("BTCUSDT", "BTC_ROC", {"period": 1}, _syn_frame(len(close_ns)), close_ns)
-    after_trend, _ = _asof_column("BTCUSDT", "BTC_TREND", {"period": 2}, _syn_frame(len(close_ns)), close_ns)
+    after_roc, _ = _asof_column(
+        "BTCUSDT", "BTC_ROC", {"period": 1}, _syn_frame(len(close_ns)), close_ns
+    )
+    after_trend, _ = _asof_column(
+        "BTCUSDT", "BTC_TREND", {"period": 2}, _syn_frame(len(close_ns)), close_ns
+    )
 
     assert np.array_equal(_bits(after_roc), _bits(before_roc)), "a future daily bar moved BTC_ROC"
-    assert np.array_equal(_bits(after_trend), _bits(before_trend)), "a future daily bar moved the trend"
+    assert np.array_equal(_bits(after_trend), _bits(before_trend)), (
+        "a future daily bar moved the trend"
+    )
 
     past = closes.copy()
     past[3] = 128.0
     _patched_ref(monkeypatch, ts, past)
-    moved_roc, _ = _asof_column("BTCUSDT", "BTC_ROC", {"period": 1}, _syn_frame(len(close_ns)), close_ns)
-    moved_trend, _ = _asof_column("BTCUSDT", "BTC_TREND", {"period": 2}, _syn_frame(len(close_ns)), close_ns)
+    moved_roc, _ = _asof_column(
+        "BTCUSDT", "BTC_ROC", {"period": 1}, _syn_frame(len(close_ns)), close_ns
+    )
+    moved_trend, _ = _asof_column(
+        "BTCUSDT", "BTC_TREND", {"period": 2}, _syn_frame(len(close_ns)), close_ns
+    )
 
     assert float(moved_roc[10]) == 1.0, "stale cache: a past daily bar did not reach the answer"
     assert not np.array_equal(_bits(moved_roc), _bits(before_roc)), "the probe does not bite"
@@ -472,9 +487,7 @@ def test_stale_daily_bar_is_nan_and_not_held(
     )
     _patched_ref(monkeypatch, ts, np.asarray([1024.0, 2048.0, 512.0, 256.0], dtype=np.float64))
 
-    column, first = _asof_column(
-        "ZECUSDT", "BTC_ROC", {"period": 1}, _frame(bars), close
-    )
+    column, first = _asof_column("ZECUSDT", "BTC_ROC", {"period": 1}, _frame(bars), close)
     assert first == 0
 
     nan_rows = np.flatnonzero(np.isnan(column))

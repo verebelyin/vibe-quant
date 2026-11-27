@@ -284,9 +284,7 @@ async def start_ctx(
 
 @pytest.mark.parametrize("flag", ["start_fresh", "confirm_fresh_live", "trade_alerts"])
 @pytest.mark.parametrize("bad", ["true", 1, None])
-async def test_start_rejects_non_bool_flags(
-    start_ctx: StartCtx, flag: str, bad: object
-) -> None:
+async def test_start_rejects_non_bool_flags(start_ctx: StartCtx, flag: str, bad: object) -> None:
     """T6/R21: strict bool — a string, an int and an explicit null are 422.
 
     The absent default is the only "false" spelling: the three strict flags all
@@ -315,10 +313,14 @@ async def test_start_records_trade_alerts_in_params_and_config(start_ctx: StartC
     assert run is not None
     assert run["parameters"]["trade_alerts"] is True
     assert start_ctx.config_for(run_id)["trade_alerts"] is True
-    assert load_config_from_json(start_ctx.tmp / "paper_configs" / f"paper_{run_id}.json").trade_alerts
+    assert load_config_from_json(
+        start_ctx.tmp / "paper_configs" / f"paper_{run_id}.json"
+    ).trade_alerts
 
     # Absent -> False everywhere: the field is not optional-true.
-    r2 = await start_ctx.ac.post("/api/paper/start", json={"validation_run_id": start_ctx.validation_run})
+    r2 = await start_ctx.ac.post(
+        "/api/paper/start", json={"validation_run_id": start_ctx.validation_run}
+    )
     assert r2.status_code == 201, r2.text
     run_id2 = r2.json()["run_id"]
     run2 = start_ctx.state.get_backtest_run(run_id2)

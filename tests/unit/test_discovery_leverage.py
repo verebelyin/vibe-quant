@@ -67,7 +67,8 @@ def _drives_every_runner(chrom: Any, fit: Any) -> Any:
         assert self._backtest_fn_factory is not None
         self._backtest_fn_factory("2024-02-01", "2024-03-01")
         return _result(
-            top=[(chrom, fit)], holdout_results=[_holdout()],
+            top=[(chrom, fit)],
+            holdout_results=[_holdout()],
             train_dates=("2024-01-01", "2024-11-01"),
             holdout_dates=("2024-11-01", "2025-01-01"),
         )
@@ -102,9 +103,7 @@ def test_default_run_runners_and_notes_are_ten(
     assert "liquidation" not in notes
 
 
-def test_cli_leverage_reaches_every_runner(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_cli_leverage_reaches_every_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """C7: --leverage 3, off -> every runner at 3 and notes.leverage == 3.0."""
     db = tmp_path / "c7.db"
     run_id = _create_run(db)

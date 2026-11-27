@@ -243,7 +243,16 @@ def _t3_db(path: Path, rows: list[dict[str, Any]]) -> Path:
         }
         con.execute(
             "insert into orchestration_v2_projection_subagents values (?,?,?,?,?,?,?,?)",
-            (f"s{i}", r["provider"], "app_owned", r["status"], r["start"], r.get("end"), json.dumps(payload), child),
+            (
+                f"s{i}",
+                r["provider"],
+                "app_owned",
+                r["status"],
+                r["start"],
+                r.get("end"),
+                json.dumps(payload),
+                child,
+            ),
         )
         for stamp in r.get("turn_items", []):
             con.execute(
@@ -258,93 +267,273 @@ def _cmd_session(d: Path, start: str, prompt: str, usages: list[tuple[int, int]]
     d.mkdir(parents=True, exist_ok=True)
     lines = [
         {"type": "session", "id": "x", "timestamp": start, "cwd": "/repo"},
-        {"type": "message", "id": "u1", "timestamp": start,
-         "message": {"role": "user", "content": [{"type": "text", "text": f"<t3_code_instructions>mode</t3_code_instructions>\n{prompt}"}]}},
+        {
+            "type": "message",
+            "id": "u1",
+            "timestamp": start,
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"<t3_code_instructions>mode</t3_code_instructions>\n{prompt}",
+                    }
+                ],
+            },
+        },
     ]
     for k, (i, o) in enumerate(usages):
-        lines.append({"type": "message", "id": f"a{k}", "timestamp": start,
-                      "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]},
-                      "usage": {"inputTokens": i, "outputTokens": o, "cacheReadTokens": i - 10}})
-    (d / f"{start[-6:-1]}.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines), encoding="utf-8")
+        lines.append(
+            {
+                "type": "message",
+                "id": f"a{k}",
+                "timestamp": start,
+                "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]},
+                "usage": {"inputTokens": i, "outputTokens": o, "cacheReadTokens": i - 10},
+            }
+        )
+    (d / f"{start[-6:-1]}.jsonl").write_text(
+        "".join(json.dumps(x) + "\n" for x in lines), encoding="utf-8"
+    )
 
 
-def _claude_subagent(d: Path, agent_id: str, name: str, prompt: str, final: str, error: str | None = None) -> None:
+def _claude_subagent(
+    d: Path, agent_id: str, name: str, prompt: str, final: str, error: str | None = None
+) -> None:
     sub = d / "sess1" / "subagents"
     sub.mkdir(parents=True, exist_ok=True)
-    (sub / f"agent-{agent_id}.meta.json").write_text(json.dumps({"agentType": "implementer", "name": name}), encoding="utf-8")
+    (sub / f"agent-{agent_id}.meta.json").write_text(
+        json.dumps({"agentType": "implementer", "name": name}), encoding="utf-8"
+    )
     msgs: list[dict[str, Any]] = [
-        {"type": "user", "timestamp": "2026-10-14T10:00:00.000Z", "message": {"role": "user", "content": prompt}},
+        {
+            "type": "user",
+            "timestamp": "2026-10-14T10:00:00.000Z",
+            "message": {"role": "user", "content": prompt},
+        },
         # the same API message is logged once per content block: usage must be counted once
-        {"type": "assistant", "timestamp": "2026-10-14T10:01:00.000Z", "message": {"id": "m1", "model": "claude-sonnet-5-5",
-         "content": [{"type": "thinking", "thinking": "x"}], "usage": {"input_tokens": 3, "cache_creation_input_tokens": 100,
-         "cache_read_input_tokens": 1000, "output_tokens": 50}}},
-        {"type": "assistant", "timestamp": "2026-10-14T10:01:00.000Z", "message": {"id": "m1", "model": "claude-sonnet-5-5",
-         "content": [{"type": "tool_use", "id": "t", "name": "Bash", "input": {}}], "usage": {"input_tokens": 3,
-         "cache_creation_input_tokens": 100, "cache_read_input_tokens": 1000, "output_tokens": 50}}},
-        {"type": "assistant", "timestamp": "2026-10-14T10:05:30.000Z", "message": {"id": "m2", "model": "claude-sonnet-5-5",
-         "content": [{"type": "text", "text": final}], "usage": {"input_tokens": 2, "cache_creation_input_tokens": 0,
-         "cache_read_input_tokens": 2000, "output_tokens": 70}}},
+        {
+            "type": "assistant",
+            "timestamp": "2026-10-14T10:01:00.000Z",
+            "message": {
+                "id": "m1",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "thinking", "thinking": "x"}],
+                "usage": {
+                    "input_tokens": 3,
+                    "cache_creation_input_tokens": 100,
+                    "cache_read_input_tokens": 1000,
+                    "output_tokens": 50,
+                },
+            },
+        },
+        {
+            "type": "assistant",
+            "timestamp": "2026-10-14T10:01:00.000Z",
+            "message": {
+                "id": "m1",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "tool_use", "id": "t", "name": "Bash", "input": {}}],
+                "usage": {
+                    "input_tokens": 3,
+                    "cache_creation_input_tokens": 100,
+                    "cache_read_input_tokens": 1000,
+                    "output_tokens": 50,
+                },
+            },
+        },
+        {
+            "type": "assistant",
+            "timestamp": "2026-10-14T10:05:30.000Z",
+            "message": {
+                "id": "m2",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "text", "text": final}],
+                "usage": {
+                    "input_tokens": 2,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 2000,
+                    "output_tokens": 70,
+                },
+            },
+        },
     ]
     if error:
-        msgs.append({"type": "assistant", "timestamp": "2026-10-14T10:06:00.000Z", "isApiErrorMessage": True,
-                     "message": {"id": "e", "model": "<synthetic>", "content": [{"type": "text", "text": error}]}})
-    (sub / f"agent-{agent_id}.jsonl").write_text("".join(json.dumps(m) + "\n" for m in msgs), encoding="utf-8")
+        msgs.append(
+            {
+                "type": "assistant",
+                "timestamp": "2026-10-14T10:06:00.000Z",
+                "isApiErrorMessage": True,
+                "message": {
+                    "id": "e",
+                    "model": "<synthetic>",
+                    "content": [{"type": "text", "text": error}],
+                },
+            }
+        )
+    (sub / f"agent-{agent_id}.jsonl").write_text(
+        "".join(json.dumps(m) + "\n" for m in msgs), encoding="utf-8"
+    )
     old = time.time() - 3600
     os.utime(sub / f"agent-{agent_id}.jsonl", (old, old))
 
 
 def _sources(tmp_path: Path) -> dict[str, Path]:
-    db = _t3_db(tmp_path / "t3.sqlite", [
-        {"cid": "cc-liq-e3-2", "provider": "commandcode_command", "status": "completed",
-         "start": "2026-10-14T09:00:00.000Z", "end": "2026-10-14T09:07:30.000Z", "model": "deepseek/deepseek-v4.1-flash",
-         "prompt": f"ROLE: Command Code worker (agent id cc-liq-e3), job {JOB}. Fix the docs.", "result": HANDOFF_COMMS,
-         "usage": {"totalTokens": 73591, "approximate": True}},
-        {"cid": "rev-liq-e3-r1-20261014", "provider": "codex", "status": "failed",
-         "start": "2026-10-14T09:10:00.000Z", "end": "2026-10-14T09:10:04.000Z", "model": "gpt-6.1-sol",
-         "prompt": f"You are the reviewer (agent id rev-liq-e3-r1), job {JOB}.",
-         "result": "You've hit your usage limit. Try again at 1:07 AM.", "usage": {"inputTokens": 900, "outputTokens": 9}},
-        {"cid": "cc-other-1", "provider": "commandcode_command", "status": "completed",
-         "start": "2026-10-14T09:00:00.000Z", "end": "2026-10-14T09:01:00.000Z", "model": "deepseek/deepseek-v4.1-flash",
-         "prompt": "job 20261001-unrelated", "result": "done"},
-        {"cid": "cc-running-1", "provider": "commandcode_command", "status": "running",
-         "start": "2026-10-14T09:00:00.000Z", "model": "deepseek/deepseek-v4.1-flash", "prompt": f"job {JOB}"},
-    ])
+    db = _t3_db(
+        tmp_path / "t3.sqlite",
+        [
+            {
+                "cid": "cc-liq-e3-2",
+                "provider": "commandcode_command",
+                "status": "completed",
+                "start": "2026-10-14T09:00:00.000Z",
+                "end": "2026-10-14T09:07:30.000Z",
+                "model": "deepseek/deepseek-v4.1-flash",
+                "prompt": f"ROLE: Command Code worker (agent id cc-liq-e3), job {JOB}. Fix the docs.",
+                "result": HANDOFF_COMMS,
+                "usage": {"totalTokens": 73591, "approximate": True},
+            },
+            {
+                "cid": "rev-liq-e3-r1-20261014",
+                "provider": "codex",
+                "status": "failed",
+                "start": "2026-10-14T09:10:00.000Z",
+                "end": "2026-10-14T09:10:04.000Z",
+                "model": "gpt-6.1-sol",
+                "prompt": f"You are the reviewer (agent id rev-liq-e3-r1), job {JOB}.",
+                "result": "You've hit your usage limit. Try again at 1:07 AM.",
+                "usage": {"inputTokens": 900, "outputTokens": 9},
+            },
+            {
+                "cid": "cc-other-1",
+                "provider": "commandcode_command",
+                "status": "completed",
+                "start": "2026-10-14T09:00:00.000Z",
+                "end": "2026-10-14T09:01:00.000Z",
+                "model": "deepseek/deepseek-v4.1-flash",
+                "prompt": "job 20261001-unrelated",
+                "result": "done",
+            },
+            {
+                "cid": "cc-running-1",
+                "provider": "commandcode_command",
+                "status": "running",
+                "start": "2026-10-14T09:00:00.000Z",
+                "model": "deepseek/deepseek-v4.1-flash",
+                "prompt": f"job {JOB}",
+            },
+        ],
+    )
     cmd = tmp_path / "cmd"
-    _cmd_session(cmd / "proj", "2026-10-14T09:00:01.500Z",
-                 f"ROLE: Command Code worker (agent id cc-liq-e3), job {JOB}. Fix the docs.", [(1000, 20), (2000, 30)])
+    _cmd_session(
+        cmd / "proj",
+        "2026-10-14T09:00:01.500Z",
+        f"ROLE: Command Code worker (agent id cc-liq-e3), job {JOB}. Fix the docs.",
+        [(1000, 20), (2000, 30)],
+    )
     claude = tmp_path / "claude"
-    _claude_subagent(claude, "a1", "impl-liq-t2a-opus5",
-                     f"TELEMETRY: task=liq-t2a round=5\nROLE: implementer, job {JOB}", HANDOFF_COMMS)
-    _claude_subagent(claude, "a2", "rev-liq-t3-r2", f"ROLE: reviewer, job {JOB}", "verdict BLOCK\ncomms: asked=0 dms=1 replies=0; board posts relied on: none",
-                     error="API Error: You've hit your session limit")
+    _claude_subagent(
+        claude,
+        "a1",
+        "impl-liq-t2a-opus5",
+        f"TELEMETRY: task=liq-t2a round=5\nROLE: implementer, job {JOB}",
+        HANDOFF_COMMS,
+    )
+    _claude_subagent(
+        claude,
+        "a2",
+        "rev-liq-t3-r2",
+        f"ROLE: reviewer, job {JOB}",
+        "verdict BLOCK\ncomms: asked=0 dms=1 replies=0; board posts relied on: none",
+        error="API Error: You've hit your session limit",
+    )
     return {"t3_db": db, "cmd_dir": cmd, "claude_dir": claude}
 
 
-def test_ingest_runs_reads_t3_command_code_and_claude(_isolated_ledger: Path, tmp_path: Path) -> None:
+def test_ingest_runs_reads_t3_command_code_and_claude(
+    _isolated_ledger: Path, tmp_path: Path
+) -> None:
     src = _sources(tmp_path)
     added = tel.ingest_runs(JOB, **src)
     rows = {r["source"]: r for r in _ledger_rows(_isolated_ledger)}
-    assert len(added) == 4 and set(rows) == {"t3:cc-liq-e3-2", "t3:rev-liq-e3-r1-20261014", "claude:a1", "claude:a2"}
+    assert len(added) == 4 and set(rows) == {
+        "t3:cc-liq-e3-2",
+        "t3:rev-liq-e3-r1-20261014",
+        "claude:a1",
+        "claude:a2",
+    }
     cc = rows["t3:cc-liq-e3-2"]
-    assert (cc["job"], cc["task"], cc["agent"], cc["round"], cc["runtime"]) == (JOB, "liq-e3", "cc-liq-e3", 2, "cmd")
+    assert (cc["job"], cc["task"], cc["agent"], cc["round"], cc["runtime"]) == (
+        JOB,
+        "liq-e3",
+        "cc-liq-e3",
+        2,
+        "cmd",
+    )
     # T3's Command Code usage is a last-context approximation: tokens come from the session file
-    assert (cc["tokens_in"], cc["tokens_out"], cc["wall_s"], cc["outcome"]) == (3000, 50, 450.0, "done")
-    assert (cc["comms_asked"], cc["comms_dms"], cc["comms_replies"], cc["board_relied"]) == (1, 2, 0, 2)
+    assert (cc["tokens_in"], cc["tokens_out"], cc["wall_s"], cc["outcome"]) == (
+        3000,
+        50,
+        450.0,
+        "done",
+    )
+    assert (cc["comms_asked"], cc["comms_dms"], cc["comms_replies"], cc["board_relied"]) == (
+        1,
+        2,
+        0,
+        2,
+    )
     cdx = rows["t3:rev-liq-e3-r1-20261014"]
-    assert (cdx["runtime"], cdx["task"], cdx["outcome"], cdx["tokens_in"], cdx["tokens_out"]) == ("codex", "review:liq-e3", "error", 900, 9)
+    assert (cdx["runtime"], cdx["task"], cdx["outcome"], cdx["tokens_in"], cdx["tokens_out"]) == (
+        "codex",
+        "review:liq-e3",
+        "error",
+        900,
+        9,
+    )
     assert "usage limit" in cdx["note"]
     a1 = rows["claude:a1"]  # TELEMETRY line beats the name heuristic
-    assert (a1["task"], a1["round"], a1["agent"], a1["model"]) == ("liq-t2a", 5, "impl-liq-t2a-opus5", "claude-sonnet-5-5")
-    assert (a1["tokens_in"], a1["tokens_out"], a1["wall_s"]) == (1103 + 2002, 120, 330.0)  # m1 counted once
+    assert (a1["task"], a1["round"], a1["agent"], a1["model"]) == (
+        "liq-t2a",
+        5,
+        "impl-liq-t2a-opus5",
+        "claude-sonnet-5-5",
+    )
+    assert (a1["tokens_in"], a1["tokens_out"], a1["wall_s"]) == (
+        1103 + 2002,
+        120,
+        330.0,
+    )  # m1 counted once
     assert a1["board_relied"] == 2
     a2 = rows["claude:a2"]
-    assert (a2["outcome"], a2["task"], a2["round"], a2["board_relied"]) == ("error", "review:liq-t3", 2, 0)
+    assert (a2["outcome"], a2["task"], a2["round"], a2["board_relied"]) == (
+        "error",
+        "review:liq-t3",
+        2,
+        0,
+    )
     assert "session limit" in a2["note"]
 
 
-def test_ingest_runs_is_idempotent_and_skips_manual_records(_isolated_ledger: Path, tmp_path: Path) -> None:
+def test_ingest_runs_is_idempotent_and_skips_manual_records(
+    _isolated_ledger: Path, tmp_path: Path
+) -> None:
     src = _sources(tmp_path)
-    tel.main(["record", "--job", JOB, "--task", "liq-e3", "--agent", "cc-liq-e3", "--runtime", "cmd", "--round", "2"])
+    tel.main(
+        [
+            "record",
+            "--job",
+            JOB,
+            "--task",
+            "liq-e3",
+            "--agent",
+            "cc-liq-e3",
+            "--runtime",
+            "cmd",
+            "--round",
+            "2",
+        ]
+    )
     first = tel.ingest_runs(JOB, **src)
     assert {r["source"] for r in first} == {"t3:rev-liq-e3-r1-20261014", "claude:a1", "claude:a2"}
     assert tel.ingest_runs(JOB, **src) == []  # nothing new on a re-run

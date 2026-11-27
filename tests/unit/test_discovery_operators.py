@@ -98,6 +98,7 @@ class TestPerturb:
         import random
 
         from vibe_quant.discovery.operators import _perturb
+
         random.seed(42)
         lo, hi = -0.05, 0.05
         results = [_perturb(0.0, 0.2, lo, hi) for _ in range(200)]
@@ -117,6 +118,7 @@ class TestPerturb:
         import random
 
         from vibe_quant.discovery.operators import _perturb
+
         random.seed(42)
         results = [_perturb(0.0, 0.2) for _ in range(100)]
         # Should produce values in [-0.2, 0.2]
@@ -137,19 +139,28 @@ class TestRepairChromosome:
             _repair_chromosome,
             is_valid_chromosome,
         )
+
         _ensure_pool()
         # NATR with RSI-scale threshold (impossible: NATR GA range ~0.9-1.2)
         bad_gene = StrategyGene(
-            indicator_type="NATR", parameters={"period": 14.0},
-            condition=ConditionType.GT, threshold=72.0,
+            indicator_type="NATR",
+            parameters={"period": 14.0},
+            condition=ConditionType.GT,
+            threshold=72.0,
         )
         chrom = StrategyChromosome(
             entry_genes=[bad_gene],
-            exit_genes=[StrategyGene(
-                indicator_type="RSI", parameters={"period": 14.0},
-                condition=ConditionType.LT, threshold=50.0,
-            )],
-            stop_loss_pct=2.0, take_profit_pct=5.0, direction=Direction.LONG,
+            exit_genes=[
+                StrategyGene(
+                    indicator_type="RSI",
+                    parameters={"period": 14.0},
+                    condition=ConditionType.LT,
+                    threshold=50.0,
+                )
+            ],
+            stop_loss_pct=2.0,
+            take_profit_pct=5.0,
+            direction=Direction.LONG,
         )
         assert not is_valid_chromosome(chrom)
         repaired = _repair_chromosome(chrom)
@@ -167,14 +178,19 @@ class TestRepairChromosome:
             _repair_chromosome,
             is_valid_chromosome,
         )
+
         gene = StrategyGene(
-            indicator_type="RSI", parameters={"period": 14.0},
-            condition=ConditionType.GT, threshold=50.0,
+            indicator_type="RSI",
+            parameters={"period": 14.0},
+            condition=ConditionType.GT,
+            threshold=50.0,
         )
         chrom = StrategyChromosome(
             entry_genes=[gene],
             exit_genes=[gene.clone()],
-            stop_loss_pct=2.0, take_profit_pct=5.0, direction=Direction.LONG,
+            stop_loss_pct=2.0,
+            take_profit_pct=5.0,
+            direction=Direction.LONG,
         )
         assert is_valid_chromosome(chrom)
         repaired = _repair_chromosome(chrom)
@@ -187,6 +203,7 @@ class TestGen1Viability:
         import random
 
         from vibe_quant.discovery.operators import initialize_population, is_valid_chromosome
+
         random.seed(42)
         pop = initialize_population(100)
         valid_count = sum(1 for c in pop if is_valid_chromosome(c))
@@ -201,6 +218,7 @@ class TestGen1Viability:
             initialize_population,
             is_valid_chromosome,
         )
+
         random.seed(42)
         pop = initialize_population(20)
         invalid_count = 0

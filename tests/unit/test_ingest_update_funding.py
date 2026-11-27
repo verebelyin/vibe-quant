@@ -83,8 +83,13 @@ def test_1d_in_aggregation_path(tmp_path: Path) -> None:
         t = day0 + i * 60_000
         klines.append(
             {
-                "open_time": t, "open": 100 + i, "high": 200 + i, "low": 50 + i,
-                "close": 101 + i, "volume": 1.0, "close_time": t + 59_999,
+                "open_time": t,
+                "open": 100 + i,
+                "high": 200 + i,
+                "low": 50 + i,
+                "close": 101 + i,
+                "volume": 1.0,
+                "close_time": t + 59_999,
             }
         )
     inst = create_instrument("BTCUSDT")
@@ -94,8 +99,11 @@ def test_1d_in_aggregation_path(tmp_path: Path) -> None:
     from vibe_quant.data.catalog import aggregate_bars
 
     daily = aggregate_bars(
-        bars_1m, get_bar_type("BTCUSDT", "1d"), ingest._interval_to_minutes("1d"),
-        inst.size_precision, inst.price_precision,
+        bars_1m,
+        get_bar_type("BTCUSDT", "1d"),
+        ingest._interval_to_minutes("1d"),
+        inst.size_precision,
+        inst.price_precision,
     )
     assert len(daily) == 2
     assert daily[0].ts_event == day0 * 1_000_000

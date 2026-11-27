@@ -168,9 +168,7 @@ def refine_resting_exits(
             shared[(ex.key, ex.order_id, n)] = found
         r, is_refined = found
         if r > n:
-            raise ValueError(
-                f"{ex.key} fill {ex.fill_index}: refined {r} is after the NT fill {n}"
-            )
+            raise ValueError(f"{ex.key} fill {ex.fill_index}: refined {r} is after the NT fill {n}")
         prev = last.get(ex.key)
         # distinct orders refine independently and must advance; only one order's fills at
         # one NT timestamp may share a scan timestamp (R28/R28b)

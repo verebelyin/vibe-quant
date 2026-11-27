@@ -124,9 +124,7 @@ def auto_screen_extraction(
     try:
         metrics = _run_single_metrics(dsl_dict, start_date, end_date)
     except _ScreenTimeout:
-        logger.warning(
-            "auto_screen: timeout for extraction %s (run %d)", extraction_id, run_id
-        )
+        logger.warning("auto_screen: timeout for extraction %s (run %d)", extraction_id, run_id)
         sm.update_backtest_run_status(run_id, "failed", error_message="auto-screen timeout")
         sm.update_extraction_screen_results(
             extraction_id,

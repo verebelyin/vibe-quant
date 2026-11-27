@@ -45,20 +45,31 @@ def _discovery_run(tmp_path: Path, *, sharpe: float, evaluated: int) -> tuple[Pa
     sm.save_backtest_result(
         run_id,
         {
-            "sharpe_ratio": sharpe, "total_return": 0.4, "max_drawdown": 0.1,
-            "profit_factor": 1.5, "total_trades": 120, "skewness": 0.0, "kurtosis": 3.0,
-            "notes": json.dumps({
-                "type": "discovery",
-                "evaluated": evaluated,
-                "train_dates": ["2024-01-01", "2025-09-05"],
-                "top_strategies": [{
-                    "dsr": {
-                        "input": "pooled_mtm_daily_returns", "observations": 612,
-                        "sharpe_daily": deannualize_sharpe(sharpe),
-                        "skewness": 0.0, "kurtosis": 3.0,
-                    },
-                }],
-            }),
+            "sharpe_ratio": sharpe,
+            "total_return": 0.4,
+            "max_drawdown": 0.1,
+            "profit_factor": 1.5,
+            "total_trades": 120,
+            "skewness": 0.0,
+            "kurtosis": 3.0,
+            "notes": json.dumps(
+                {
+                    "type": "discovery",
+                    "evaluated": evaluated,
+                    "train_dates": ["2024-01-01", "2025-09-05"],
+                    "top_strategies": [
+                        {
+                            "dsr": {
+                                "input": "pooled_mtm_daily_returns",
+                                "observations": 612,
+                                "sharpe_daily": deannualize_sharpe(sharpe),
+                                "skewness": 0.0,
+                                "kurtosis": 3.0,
+                            },
+                        }
+                    ],
+                }
+            ),
         },
     )
     sm.close()
@@ -76,8 +87,11 @@ def test_dsr_on_ga_champion_uses_discovery_trials_and_mtm_series_length(tmp_path
     series_days = 612  # train days (613) minus NT's dropped first day
     assert c.dsr_result.num_observations == series_days
     ref = DeflatedSharpeRatio().calculate(
-        observed_sharpe=deannualize_sharpe(2.2), num_trials=6000,
-        num_observations=series_days, skewness=0.0, kurtosis=3.0,
+        observed_sharpe=deannualize_sharpe(2.2),
+        num_trials=6000,
+        num_observations=series_days,
+        skewness=0.0,
+        kurtosis=3.0,
     )
     assert c.dsr_result.p_value == ref.p_value
     # 6000 GA trials: a 2.2 Sharpe is not significant (with N=1 it "passed")
@@ -85,7 +99,8 @@ def test_dsr_on_ga_champion_uses_discovery_trials_and_mtm_series_length(tmp_path
 
 
 def test_overfitting_cli_forwards_total_trials(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from vibe_quant.overfitting.__main__ import main
 
@@ -96,22 +111,44 @@ def test_overfitting_cli_forwards_total_trials(
         from vibe_quant.overfitting.types import PipelineResult
 
         return PipelineResult(
-            config=kwargs["config"], total_candidates=0, passed_dsr=0,
-            passed_wfa=0, passed_cv=0, passed_all=0,
+            config=kwargs["config"],
+            total_candidates=0,
+            passed_dsr=0,
+            passed_wfa=0,
+            passed_cv=0,
+            passed_all=0,
         )
 
     monkeypatch.setattr(OverfittingPipeline, "run", fake_run)
     db, run_id = _discovery_run(tmp_path, sharpe=2.2, evaluated=10)
-    assert main(["run", "--run-id", str(run_id), "--db", str(db), "--filters", "dsr",
-                 "--total-trials", "777"]) == 0
+    assert (
+        main(
+            [
+                "run",
+                "--run-id",
+                str(run_id),
+                "--db",
+                str(db),
+                "--filters",
+                "dsr",
+                "--total-trials",
+                "777",
+            ]
+        )
+        == 0
+    )
     assert seen["total_trials"] == 777
     assert "num_observations" not in seen  # the dead DSR override is gone
 
 
 def _metrics(sr: float, trades: int = 100) -> BacktestMetrics:
     m = BacktestMetrics(
-        parameters={}, sharpe_ratio=sr, profit_factor=1.5, max_drawdown=0.1,
-        total_trades=trades, total_return=0.1,
+        parameters={},
+        sharpe_ratio=sr,
+        profit_factor=1.5,
+        max_drawdown=0.1,
+        total_trades=trades,
+        total_return=0.1,
     )
     if sr != -999.0:  # the crash sentinel has no MTM statistics (nothing was measured)
         # market-valued stats of the same Sharpe over the 365-day window
@@ -120,8 +157,9 @@ def _metrics(sr: float, trades: int = 100) -> BacktestMetrics:
     return m
 
 
-def _screen(results: list[BacktestMetrics], start: str = "2024-01-01",
-            end: str = "2024-12-31") -> Any:
+def _screen(
+    results: list[BacktestMetrics], start: str = "2024-01-01", end: str = "2024-12-31"
+) -> Any:
     from types import SimpleNamespace
 
     pipe = ScreeningPipeline.__new__(ScreeningPipeline)
@@ -191,7 +229,10 @@ def test_wfa_overall_losing_strategy_fails() -> None:
     full = sum(pnl(i) for i in range(731))
     assert full == pytest.approx(270 * -0.0012 + 461 * 0.0003, abs=1e-12)  # -0.1857
     r = WalkForwardAnalysis(WFAConfig.default(), _PathRunner(start, pnl)).run(
-        "x", start, date(2025, 12, 31), {},
+        "x",
+        start,
+        date(2025, 12, 31),
+        {},
     )
     assert r.consistency_ratio == 1.0  # every OOS window is green ...
     assert r.is_robust is False  # ... but the strategy loses overall
@@ -199,6 +240,7 @@ def test_wfa_overall_losing_strategy_fails() -> None:
 
 def test_wfa_fails_when_concatenated_oos_loses() -> None:
     """3/4 OOS windows slightly green, one big loss: overall OOS negative -> fail."""
+
     class _BigLoss:
         calls = 0
 
@@ -221,12 +263,23 @@ def _seed_screening_run(tmp_path: Path, start: str, end: str) -> tuple[Path, int
     sm = StateManager(db)
     sid = sm.create_strategy("s", {"timeframe": "4h", "indicators": {}})
     rid = sm.create_backtest_run(sid, "screening", ["BTCUSDT"], "4h", start, end, {})
-    sm.save_sweep_results_batch(rid, [
-        {"parameters": {"rsi_period": 14}, "sharpe_ratio": 2.0, "total_return": 0.3,
-         "total_trades": 100},
-        {"parameters": {"rsi_period": 2}, "sharpe_ratio": 1.9, "total_return": 0.3,
-         "total_trades": 100},
-    ])
+    sm.save_sweep_results_batch(
+        rid,
+        [
+            {
+                "parameters": {"rsi_period": 14},
+                "sharpe_ratio": 2.0,
+                "total_return": 0.3,
+                "total_trades": 100,
+            },
+            {
+                "parameters": {"rsi_period": 2},
+                "sharpe_ratio": 1.9,
+                "total_return": 0.3,
+                "total_trades": 100,
+            },
+        ],
+    )
     sm.close()
     return db, rid
 
@@ -240,8 +293,11 @@ def _stub_tick_resolve(monkeypatch: pytest.MonkeyPatch) -> None:
         # A real resolve stamps the window it covered; the runner rejects a set
         # whose [start_ns, end_ns] does not cover the run window.
         return FillTickSet(
-            tf, {s: f"/ticks/{s}" for s in symbols}, {},
-            start_ns=date_to_ns(start), end_ns=date_to_ns(end),
+            tf,
+            {s: f"/ticks/{s}" for s in symbols},
+            {},
+            start_ns=date_to_ns(start),
+            end_ns=date_to_ns(end),
         )
 
     monkeypatch.setattr("vibe_quant.data.fill_ticks.resolve_fill_ticks", _resolve)
@@ -255,10 +311,18 @@ def test_wfa_on_2022_run_uses_2022_dates(tmp_path: Path, monkeypatch: pytest.Mon
     sizings: list[Any] = []
 
     class _Rec:
-        def __init__(self, dsl_dict: Any, symbols: Any, start_date: str, end_date: str,
-                     catalog_path: Any = None, fill_ticks: Any = None,
-                     collect_daily_returns: bool = False,
-                     launch: Any = None, pta_precompute: bool = True) -> None:
+        def __init__(
+            self,
+            dsl_dict: Any,
+            symbols: Any,
+            start_date: str,
+            end_date: str,
+            catalog_path: Any = None,
+            fill_ticks: Any = None,
+            collect_daily_returns: bool = False,
+            launch: Any = None,
+            pta_precompute: bool = True,
+        ) -> None:
             seen.append((start_date, end_date))
             sizings.append(launch.sizing)
 
@@ -268,11 +332,29 @@ def test_wfa_on_2022_run_uses_2022_dates(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.setattr(ntr, "NTScreeningRunner", _Rec)
     _stub_tick_resolve(monkeypatch)
     db, rid = _seed_screening_run(tmp_path, "2022-01-01", "2022-12-31")
-    assert main([
-        "run", "--run-id", str(rid), "--db", str(db), "--filters", "wfa", "--real-wfa",
-        "--wfa-is-days", "60", "--wfa-oos-days", "30", "--wfa-step-days", "60",
-        "--wfa-min-windows", "2",
-    ]) == 0
+    assert (
+        main(
+            [
+                "run",
+                "--run-id",
+                str(rid),
+                "--db",
+                str(db),
+                "--filters",
+                "wfa",
+                "--real-wfa",
+                "--wfa-is-days",
+                "60",
+                "--wfa-oos-days",
+                "30",
+                "--wfa-step-days",
+                "60",
+                "--wfa-min-windows",
+                "2",
+            ]
+        )
+        == 0
+    )
     assert seen
     assert min(s for s, _ in seen) == "2022-01-01"
     assert max(e for _, e in seen) <= "2022-12-31"
@@ -281,7 +363,8 @@ def test_wfa_on_2022_run_uses_2022_dates(tmp_path: Path, monkeypatch: pytest.Mon
 
 
 def test_cv_runner_forwards_each_candidates_params(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import pandas as pd
 
@@ -292,17 +375,28 @@ def test_cv_runner_forwards_each_candidates_params(
     sizings: list[Any] = []
 
     class _Fake:
-        def __init__(self, dsl_dict: Any, symbols: Any, start_date: str, end_date: str,
-                     catalog_path: Any = None, fill_ticks: Any = None,
-                     collect_daily_returns: bool = False,
-                     launch: Any = None, pta_precompute: bool = True) -> None:
+        def __init__(
+            self,
+            dsl_dict: Any,
+            symbols: Any,
+            start_date: str,
+            end_date: str,
+            catalog_path: Any = None,
+            fill_ticks: Any = None,
+            collect_daily_returns: bool = False,
+            launch: Any = None,
+            pta_precompute: bool = True,
+        ) -> None:
             sizings.append(launch.sizing)
 
         def __call__(self, params: dict[str, Any]) -> Any:
             calls.append(dict(params))
             good = params.get("rsi_period", 14) == 14
-            return type("M", (), {"sharpe_ratio": 2.0 if good else -1.5,
-                                  "total_return": 0.1 if good else -0.1})()
+            return type(
+                "M",
+                (),
+                {"sharpe_ratio": 2.0 if good else -1.5, "total_return": 0.1 if good else -0.1},
+            )()
 
     monkeypatch.setattr(ntr, "NTScreeningRunner", _Fake)
     _stub_tick_resolve(monkeypatch)
@@ -333,19 +427,24 @@ def test_cv_runner_forwards_each_candidates_params(
 
 
 def test_nan_metrics_fail_hard_filters() -> None:
-    nan_m = BacktestMetrics(sharpe_ratio=float("nan"), profit_factor=float("nan"),
-                            max_drawdown=0.05, total_trades=60)
-    nan_dd = BacktestMetrics(sharpe_ratio=2.0, profit_factor=2.0,
-                             max_drawdown=float("nan"), total_trades=60)
-    inf_pf = BacktestMetrics(sharpe_ratio=2.0, profit_factor=float("inf"),
-                             max_drawdown=0.05, total_trades=60)
+    nan_m = BacktestMetrics(
+        sharpe_ratio=float("nan"), profit_factor=float("nan"), max_drawdown=0.05, total_trades=60
+    )
+    nan_dd = BacktestMetrics(
+        sharpe_ratio=2.0, profit_factor=2.0, max_drawdown=float("nan"), total_trades=60
+    )
+    inf_pf = BacktestMetrics(
+        sharpe_ratio=2.0, profit_factor=float("inf"), max_drawdown=0.05, total_trades=60
+    )
     f = MetricFilters(min_sharpe=1.0, min_profit_factor=1.5, min_trades=10)
     assert filter_by_metrics([nan_m, nan_dd, inf_pf], f) == [inf_pf]
 
 
 def test_rank_by_sharpe_puts_nan_last_and_sorts_the_rest() -> None:
-    ms = [BacktestMetrics(sharpe_ratio=s) for s in [0.5, float("nan"), 2.0, 1.0,
-                                                    float("nan"), 3.0, 0.1]]
+    ms = [
+        BacktestMetrics(sharpe_ratio=s)
+        for s in [0.5, float("nan"), 2.0, 1.0, float("nan"), 3.0, 0.1]
+    ]
     ranked = [m.sharpe_ratio for m in rank_by_sharpe(ms)]
     assert ranked[:5] == [3.0, 2.0, 1.0, 0.5, 0.1]
     assert all(math.isnan(x) for x in ranked[5:])
@@ -363,11 +462,11 @@ def test_pareto_front_excludes_nan_rows() -> None:
 @pytest.mark.parametrize(
     ("disc_sharpe", "scr_sharpe", "flagged"),
     [
-        (1.0, 1.1, False),    # within band
-        (1.0, 5.0, True),     # much "better" than discovery: still drift
-        (-1.0, -2.0, True),   # same sign, twice as bad (old check: ratio 2 -> clean)
-        (1.0, -1.0, True),    # sign flip
-        (1.0, 0.85, False),   # inside [0.8, 1.25]
+        (1.0, 1.1, False),  # within band
+        (1.0, 5.0, True),  # much "better" than discovery: still drift
+        (-1.0, -2.0, True),  # same sign, twice as bad (old check: ratio 2 -> clean)
+        (1.0, -1.0, True),  # sign flip
+        (1.0, 0.85, False),  # inside [0.8, 1.25]
     ],
 )
 def test_replay_drift_two_sided(disc_sharpe: float, scr_sharpe: float, flagged: bool) -> None:

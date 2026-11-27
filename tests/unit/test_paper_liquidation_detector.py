@@ -401,8 +401,6 @@ async def _until(predicate: Callable[[], bool], *, timeout_s: float = 10.0) -> N
     raise AssertionError("condition never became true")
 
 
-
-
 async def test_force_order_writes_liquidation_event_and_critical_alert_without_orders(
     monkeypatch: pytest.MonkeyPatch,
     seeded: dict[str, Any],
@@ -457,8 +455,6 @@ async def test_force_order_writes_liquidation_event_and_critical_alert_without_o
 
     assert harness.events(EventType.ORDER) == [], "report only: no order is ever submitted"
     assert harness.actions("halt") == [], "report only: a liquidation never halts the node"
-
-
 
 
 async def test_watcher_never_submits_cancels_closes_or_halts(
@@ -532,8 +528,6 @@ async def test_mode_follows_the_resolved_margin_type(
     await harness.node._shutdown()
 
 
-
-
 async def test_missing_event_writer_raises_so_the_cycle_retries(
     monkeypatch: pytest.MonkeyPatch,
     seeded: dict[str, Any],
@@ -560,8 +554,6 @@ async def test_missing_event_writer_raises_so_the_cycle_retries(
     await watcher.poll_once()
     assert len(harness.events(EventType.LIQUIDATION)) == 1, "the row is delivered on retry"
     await node._shutdown()
-
-
 
 
 async def test_the_checkpoint_carries_the_live_watch_state(
@@ -640,7 +632,6 @@ def test_checkpoint_timestamp_is_read_as_utc(monkeypatch: pytest.MonkeyPatch, ho
     finally:
         monkeypatch.undo()
         time.tzset()
-
 
 
 _STORED_WATCH = {
@@ -848,8 +839,6 @@ async def test_halted_error_shutdown_checkpoint_keeps_the_polled_watch(
     ), "run2 starts from run1's polled cursor (minus the overlap)"
 
 
-
-
 async def test_watcher_build_failure_reports_one_risk_check_and_one_critical_alert(
     monkeypatch: pytest.MonkeyPatch,
     seeded: dict[str, Any],
@@ -909,8 +898,6 @@ async def test_watcher_run_failure_reports_the_same_way(
     await node._shutdown()
 
 
-
-
 async def test_key_is_delivered_once_per_process_and_again_after_a_restart(
     monkeypatch: pytest.MonkeyPatch,
     seeded: dict[str, Any],
@@ -946,8 +933,6 @@ async def test_key_is_delivered_once_per_process_and_again_after_a_restart(
     assert len(restarted.events(EventType.LIQUIDATION)) == 1, "re-alerted after the restart"
     assert len(restarted.alerts.calls) == 1
     await restarted.node._shutdown()
-
-
 
 
 async def test_degraded_then_recovered_report_risk_checks_and_critical_alerts(

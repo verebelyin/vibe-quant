@@ -208,7 +208,9 @@ def test_reverse_strategy_compiles_to_golden_source() -> None:
 def test_reverse_hooks_are_absent_when_the_key_is_absent_or_null() -> None:
     without = {k: v for k, v in REVERSE_EMA_CROSS_DSL.items() if k != "position_mode"}
     absent = _normalize(StrategyCompiler().compile(validate_strategy_dict(without)))
-    null = _normalize(StrategyCompiler().compile(validate_strategy_dict({**without, "position_mode": None})))
+    null = _normalize(
+        StrategyCompiler().compile(validate_strategy_dict({**without, "position_mode": None}))
+    )
 
     assert absent == null
     assert "ReversalIntent" not in absent and "_begin_reverse" not in absent

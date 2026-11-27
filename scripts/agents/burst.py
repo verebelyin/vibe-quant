@@ -72,7 +72,14 @@ PAIRS: tuple[tuple[str, ...], ...] = (
 )
 DIRECTIONS = ("long", "short", "both")
 SYMBOLS = (
-    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "HYPEUSDT", "NEARUSDT", "SUIUSDT", "ZECUSDT",
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "BNBUSDT",
+    "HYPEUSDT",
+    "NEARUSDT",
+    "SUIUSDT",
+    "ZECUSDT",
 )
 # [start, end): the engine's end date is exclusive, so each month ends on the next 1st.
 MONTHS: tuple[tuple[str, str], ...] = (
@@ -101,9 +108,14 @@ class PortSelectionError(ValueError):
 def default_grid() -> dict[str, Any]:
     """The grid factors (each overridable on the ``run`` command line)."""
     return {
-        "pairs": PAIRS, "directions": DIRECTIONS, "symbols": SYMBOLS,
-        "windows": MONTHS, "leverages": LEVERAGES, "timeframes": TIMEFRAMES,
-        "eval_windows": 1, "ports": (),
+        "pairs": PAIRS,
+        "directions": DIRECTIONS,
+        "symbols": SYMBOLS,
+        "windows": MONTHS,
+        "leverages": LEVERAGES,
+        "timeframes": TIMEFRAMES,
+        "eval_windows": 1,
+        "ports": (),
     }
 
 
@@ -178,24 +190,44 @@ def all_cells(seeds: int = 1, grid: dict[str, Any] | None = None) -> list[dict[s
     if g.get("ports"):
         return [
             {
-                "port": port, "symbol": s,
-                "start": m[0], "end": m[1], "leverage": lev, "timeframe": tf, "seed": seed,
+                "port": port,
+                "symbol": s,
+                "start": m[0],
+                "end": m[1],
+                "leverage": lev,
+                "timeframe": tf,
+                "seed": seed,
                 "eval_windows": g["eval_windows"],
             }
             for port, s, m, lev, tf, seed in itertools.product(
-                g["ports"], g["symbols"], windows, g["leverages"],
-                g["timeframes"], range(1, seeds + 1),
+                g["ports"],
+                g["symbols"],
+                windows,
+                g["leverages"],
+                g["timeframes"],
+                range(1, seeds + 1),
             )
         ]
     return [
         {
-            "pair": list(pair), "direction": d, "symbol": s,
-            "start": m[0], "end": m[1], "leverage": lev, "timeframe": tf, "seed": seed,
+            "pair": list(pair),
+            "direction": d,
+            "symbol": s,
+            "start": m[0],
+            "end": m[1],
+            "leverage": lev,
+            "timeframe": tf,
+            "seed": seed,
             "eval_windows": g["eval_windows"],
         }
         for pair, d, s, m, lev, tf, seed in itertools.product(
-            g["pairs"], g["directions"], g["symbols"], windows, g["leverages"],
-            g["timeframes"], range(1, seeds + 1),
+            g["pairs"],
+            g["directions"],
+            g["symbols"],
+            windows,
+            g["leverages"],
+            g["timeframes"],
+            range(1, seeds + 1),
         )
     ]
 
@@ -214,18 +246,33 @@ def sizing_params(cell: dict[str, Any]) -> dict[str, float | str]:
     if cell.get("sizing") == "allin":
         return {"max_position_pct": lev, "risk_per_trade": 0.5, "max_margin_pct": 1.0}
     if cell.get("sizing") == "atr":
-        return {"max_position_pct": lev, "risk_per_trade": float(cell["atr_risk"]),
-                "max_margin_pct": 1.0, "sizing_mode": "atr"}
+        return {
+            "max_position_pct": lev,
+            "risk_per_trade": float(cell["atr_risk"]),
+            "max_margin_pct": 1.0,
+            "sizing_mode": "atr",
+        }
     return {"max_margin_pct": 0.5}
 
 
 def cell_key(cell: dict[str, Any]) -> str:
     if "port" in cell:
-        parts = [f"port:{port_name(cell)}", cell["symbol"], cell["start"],
-                 f"{cell['leverage']}x", f"s{cell['seed']}"]
+        parts = [
+            f"port:{port_name(cell)}",
+            cell["symbol"],
+            cell["start"],
+            f"{cell['leverage']}x",
+            f"s{cell['seed']}",
+        ]
     else:
-        parts = ["+".join(cell["pair"]), cell["direction"], cell["symbol"], cell["start"],
-                 f"{cell['leverage']}x", f"s{cell['seed']}"]
+        parts = [
+            "+".join(cell["pair"]),
+            cell["direction"],
+            cell["symbol"],
+            cell["start"],
+            f"{cell['leverage']}x",
+            f"s{cell['seed']}",
+        ]
     if cell.get("eval_windows", 1) != 1:
         parts.append(f"to{cell['end']}|ew{cell['eval_windows']}")
     if cell.get("tier", "nt") != "nt":
@@ -283,30 +330,56 @@ def _discovery_argv(cell: dict[str, Any], run_id: int, db: Path) -> list[str]:
     pop, gens = str(cell.get("pop", 6)), str(cell.get("gens", 1))
     return [
         "discovery",
-        "--run-id", str(run_id),
-        "--db", str(db),
-        "--symbols", cell["symbol"],
-        "--timeframe", cell.get("timeframe", "1m"),
-        "--start-date", cell["start"],
-        "--end-date", cell["end"],
-        "--population-size", pop,
-        "--max-generations", gens,
-        "--convergence-generations", gens,
-        "--eval-windows", str(cell.get("eval_windows", 1)),
-        "--train-test-split", "0",
-        *(["--port", cell["port"]] if "port" in cell else [
-            "--direction", cell["direction"],
-            "--indicator-pool", ",".join(cell["pair"]),
-        ]),
-        "--max-workers", "1",
-        "--seed", str(cell["seed"]),
-        "--no-bootstrap-ci", "--no-dsr", "--no-buy-hold-gate",
-        "--liquidation-mode", "isolated",
-        "--leverage", str(cell["leverage"]),
+        "--run-id",
+        str(run_id),
+        "--db",
+        str(db),
+        "--symbols",
+        cell["symbol"],
+        "--timeframe",
+        cell.get("timeframe", "1m"),
+        "--start-date",
+        cell["start"],
+        "--end-date",
+        cell["end"],
+        "--population-size",
+        pop,
+        "--max-generations",
+        gens,
+        "--convergence-generations",
+        gens,
+        "--eval-windows",
+        str(cell.get("eval_windows", 1)),
+        "--train-test-split",
+        "0",
+        *(
+            ["--port", cell["port"]]
+            if "port" in cell
+            else [
+                "--direction",
+                cell["direction"],
+                "--indicator-pool",
+                ",".join(cell["pair"]),
+            ]
+        ),
+        "--max-workers",
+        "1",
+        "--seed",
+        str(cell["seed"]),
+        "--no-bootstrap-ci",
+        "--no-dsr",
+        "--no-buy-hold-gate",
+        "--liquidation-mode",
+        "isolated",
+        "--leverage",
+        str(cell["leverage"]),
         *[
             arg
             for name, value in sizing_params(cell).items()
-            for arg in (f"--{name.replace('_', '-')}", value if isinstance(value, str) else repr(value))
+            for arg in (
+                f"--{name.replace('_', '-')}",
+                value if isinstance(value, str) else repr(value),
+            )
         ],
     ]
 
@@ -339,8 +412,13 @@ def run_cell(cell: dict[str, Any], result_path: Path) -> int:
     state = StateManager(db)
     try:
         run_id = state.create_backtest_run(
-            strategy_id=None, run_mode="discovery", symbols=[cell["symbol"]],
-            timeframe=timeframe, start_date=cell["start"], end_date=cell["end"], parameters={},
+            strategy_id=None,
+            run_mode="discovery",
+            symbols=[cell["symbol"]],
+            timeframe=timeframe,
+            start_date=cell["start"],
+            end_date=cell["end"],
+            parameters={},
         )
     finally:
         state.close()
@@ -401,7 +479,9 @@ def run_cell(cell: dict[str, Any], result_path: Path) -> int:
         NTBacktestFn.__call__ = original  # type: ignore[method-assign]
     for key, whole in full_range.items():  # report-only: never the winner rule's number
         if key in evals:
-            evals[key]["full"] = {k: whole[k] for k in ("trades", "ret", "sharpe", "pf", "dd", "error")}
+            evals[key]["full"] = {
+                k: whole[k] for k in ("trades", "ret", "sharpe", "pf", "dd", "error")
+            }
     out = {
         "rc": rc,
         "wall_s": round(time.perf_counter() - t0, 1),
@@ -423,7 +503,10 @@ def _launch(cell: dict[str, Any]) -> tuple[subprocess.Popen[bytes], Path, float]
     with (tmp / "stderr.log").open("wb") as err:
         proc = subprocess.Popen(  # noqa: S603
             [sys.executable, __file__, "cell", json.dumps(cell), str(tmp / "result.json")],
-            cwd=REPO_ROOT, env=env, stdout=subprocess.DEVNULL, stderr=err,
+            cwd=REPO_ROOT,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=err,
         )
     return proc, tmp, time.monotonic()
 
@@ -468,9 +551,12 @@ def detach(out: Path, argv: list[str]) -> int:
     log, pidfile = out / f"{argv[0]}.log", out / f"{argv[0]}.pid"
     with log.open("ab") as fh:
         proc = subprocess.Popen(  # noqa: S603
-            [sys.executable, __file__, *argv], cwd=REPO_ROOT,
+            [sys.executable, __file__, *argv],
+            cwd=REPO_ROOT,
             env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
-            stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            stdout=fh,
+            stderr=subprocess.STDOUT,
             start_new_session=True,
         )
     pidfile.write_text(f"{proc.pid}\n")
@@ -537,7 +623,9 @@ def run(args: argparse.Namespace) -> int:
     grid["windows"] = tuple(windows)
     cells = with_budget(
         sample_cells(args.cells, args.sample_seed, args.seeds, grid),
-        args.pop, args.gens, args.tier,
+        args.pop,
+        args.gens,
+        args.tier,
     )
     if getattr(args, "allin", False) and getattr(args, "atr_risk", None) is not None:
         print("burst: --allin and --atr-risk exclude each other", file=sys.stderr)
@@ -596,7 +684,9 @@ def run(args: argparse.Namespace) -> int:
     return 0
 
 
-def _month_bh(closes: dict[str, dict[int, float]], symbol: str, start: str, end: str) -> float | None:
+def _month_bh(
+    closes: dict[str, dict[int, float]], symbol: str, start: str, end: str
+) -> float | None:
     from datetime import date
 
     def day(s: str) -> int:
@@ -646,9 +736,7 @@ def winner_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [r for r in rows if not r.get("failed") and r.get("best")]
 
 
-def transfer_jobs(
-    winners: list[dict[str, Any]], symbols: list[str]
-) -> list[dict[str, Any]]:
+def transfer_jobs(winners: list[dict[str, Any]], symbols: list[str]) -> list[dict[str, Any]]:
     """One transfer job per winner: other symbols (same window) + next window."""
     return [
         {
@@ -708,8 +796,13 @@ def _transfer_run(fn: Any, chromosome: Any) -> tuple[dict[str, Any], Any]:
     try:
         res = fn(chromosome)
     except Exception as exc:  # a data gap is a failed transfer, not a dead job
-        return {"ret": 0.0, "trades": 0, "sharpe": 0.0, "dd": None,
-                "error": f"{type(exc).__name__}: {exc}"}, None
+        return {
+            "ret": 0.0,
+            "trades": 0,
+            "sharpe": 0.0,
+            "dd": None,
+            "error": f"{type(exc).__name__}: {exc}",
+        }, None
     return _eval_metrics(res), res.get("mtm_daily_returns")
 
 
@@ -736,8 +829,13 @@ def _bh_verdict(
 
 
 def _transfer_point(
-    cell: dict[str, Any], symbol: str, start: str, end: str, chromosome: Any,
-    closes: dict[str, dict[int, float]], direction: str,
+    cell: dict[str, Any],
+    symbol: str,
+    start: str,
+    end: str,
+    chromosome: Any,
+    closes: dict[str, dict[int, float]],
+    direction: str,
 ) -> dict[str, Any]:
     """One transfer test of the genome on ``symbol`` over ``[start, end)``.
 
@@ -786,11 +884,18 @@ def transfer_one(spec: dict[str, Any], result_path: Path) -> int:
         genome = serializable_to_chromosome(spec["chromosome"])
         direction = cell["direction"]
     try:
-        closes = load_daily_closes([cell["symbol"], *spec["symbols"]], REPO_ROOT / "data" / "catalog")
+        closes = load_daily_closes(
+            [cell["symbol"], *spec["symbols"]], REPO_ROOT / "data" / "catalog"
+        )
     except ValueError:  # a coin without 1d bars: its buy-and-hold verdict fails closed
         closes = {}
-    row: dict[str, Any] = {"key": spec["key"], "own": None, "symbols": {}, "next": None,
-                           "next_full": None}
+    row: dict[str, Any] = {
+        "key": spec["key"],
+        "own": None,
+        "symbols": {},
+        "next": None,
+        "next_full": None,
+    }
     row["own"] = _transfer_point(
         cell, cell["symbol"], cell["start"], cell["end"], genome, closes, direction
     )
@@ -821,7 +926,10 @@ def _launch_transfer(spec: dict[str, Any]) -> tuple[subprocess.Popen[bytes], Pat
     with (tmp / "stderr.log").open("wb") as err:
         proc = subprocess.Popen(  # noqa: S603
             [sys.executable, __file__, "transfer-one", json.dumps(spec), str(tmp / "result.json")],
-            cwd=REPO_ROOT, env=env, stdout=subprocess.DEVNULL, stderr=err,
+            cwd=REPO_ROOT,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=err,
         )
     return proc, tmp, time.monotonic()
 
@@ -842,11 +950,7 @@ def _finish_transfer(
 
 def _wins(m: dict[str, Any]) -> bool:
     """One transfer eval passes by the cell's own winner rule: no error, enough trades, ret > 0."""
-    return (
-        not m.get("error")
-        and (m.get("trades") or 0) >= MIN_TRADES
-        and (m.get("ret") or 0) > 0
-    )
+    return not m.get("error") and (m.get("trades") or 0) >= MIN_TRADES and (m.get("ret") or 0) > 0
 
 
 def passes(m: dict[str, Any]) -> bool:
@@ -874,7 +978,9 @@ def genome_transfers(row: dict[str, Any]) -> bool:
     )
 
 
-def _positive_share(evals: list[dict[str, Any]], rule: Callable[[dict[str, Any]], bool] = _wins) -> str:
+def _positive_share(
+    evals: list[dict[str, Any]], rule: Callable[[dict[str, Any]], bool] = _wins
+) -> str:
     if not evals:
         return "n/a"
     return f"{sum(1 for e in evals if rule(e)) / len(evals):.3f}"
@@ -927,8 +1033,11 @@ def transfer(args: argparse.Namespace) -> int:
     todo = [j for j in transfer_jobs(with_chromosome, symbols) if j["key"] not in done]
     old_rule = sum(1 for row in load_ledger(tpath) if not row.get("failed") and "own" not in row)
     if old_rule:  # resume never re-tests them; they count as no transfer (use a fresh --out)
-        print(f"transfer: WARNING {old_rule} rows in transfer.jsonl predate the buy-and-hold"
-              " rule and will never count as a transfer; re-run in a fresh --out", flush=True)
+        print(
+            f"transfer: WARNING {old_rule} rows in transfer.jsonl predate the buy-and-hold"
+            " rule and will never count as a transfer; re-run in a fresh --out",
+            flush=True,
+        )
     print(
         f"transfer: {len(with_chromosome)} winners, {len(todo)} to evaluate "
         f"({len(done)} already in transfer.jsonl), skipped {skipped} without a "
@@ -1001,10 +1110,7 @@ def _wall_line(rows: list[dict[str, Any]]) -> str:
     """Median cell wall time (the cell result's ``wall_s``), so rounds compare."""
     walls = [float(r["wall_s"]) for r in rows if r.get("wall_s") is not None]
     median = f"{statistics.median(walls):.2f}s" if walls else "n/a"
-    return (
-        f"wall: median={median} cells={len(walls)}"
-        f" rows_without_wall={len(rows) - len(walls)}"
-    )
+    return f"wall: median={median} cells={len(walls)} rows_without_wall={len(rows) - len(walls)}"
 
 
 def _unsplittable(row: dict[str, Any]) -> str | None:
@@ -1042,7 +1148,9 @@ def report(args: argparse.Namespace) -> int:
     from vibe_quant.discovery.buyhold import load_daily_closes
     from vibe_quant.utils import split_into_windows
 
-    closes = load_daily_closes(sorted({r["cell"]["symbol"] for r in rows}), REPO_ROOT / "data" / "catalog")
+    closes = load_daily_closes(
+        sorted({r["cell"]["symbol"] for r in rows}), REPO_ROOT / "data" / "catalog"
+    )
     for r in rows:
         c = r["cell"]
         r["bh_ret"] = _month_bh(closes, c["symbol"], c["start"], c["end"])
@@ -1074,9 +1182,7 @@ def report(args: argparse.Namespace) -> int:
     xfer_wins = sum(1 for r in tested_all if genome_transfers(tmap[r["key"]]))
     tested_families = {family_of(r["cell"]) for r in tested_all}
     xfer_base = (
-        Fraction(xfer_wins, len(winners_all))
-        if len(tested_families) > 1 and winners_all
-        else None
+        Fraction(xfer_wins, len(winners_all)) if len(tested_families) > 1 and winners_all else None
     )
     factors: dict[str, Callable[[dict[str, Any]], str]] = {
         "tier": lambda c: c.get("tier", "nt"),
@@ -1115,7 +1221,9 @@ def report(args: argparse.Namespace) -> int:
                 if name == "pair"
                 else ""
             )
-            print(f"{level:22s} {len(rs):4d} | {win / n if n else 0:.3f} | {len(with_win)}/{len(rs)} | {med}{extra}")
+            print(
+                f"{level:22s} {len(rs):4d} | {win / n if n else 0:.3f} | {len(with_win)}/{len(rs)} | {med}{extra}"
+            )
     old_rule = sum(1 for r in transfer_rows if not r.get("failed") and "own" not in r)
     print(
         "\n## transfer (family = indicator pair): winners | transfer-tested |"
@@ -1150,7 +1258,9 @@ def report(args: argparse.Namespace) -> int:
         " worst-of-N cells: sharpe/ret are the worst sub-window's, bh_sub = each sub-window's B&H,"
         " full_ret = the whole window, report-only)"
     )
-    top = sorted((r for r in rows if r["best"]), key=lambda r: r["best"]["sharpe"], reverse=True)[: args.top]
+    top = sorted((r for r in rows if r["best"]), key=lambda r: r["best"]["sharpe"], reverse=True)[
+        : args.top
+    ]
     for r in top:
         b = r["best"]
         bh = r["bh_ret"]
@@ -1167,7 +1277,9 @@ def report(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run")
     r.add_argument("--out", required=True)
@@ -1181,10 +1293,13 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--seeds", type=int, default=1, help="GA seeds per grid point")
     r.add_argument("--pop", type=int, default=6)
     r.add_argument("--gens", type=int, default=1)
-    r.add_argument("--tier", choices=("nt", "fast"), default="nt", help="fast = vibe_quant.fast_tier")
+    r.add_argument(
+        "--tier", choices=("nt", "fast"), default="nt", help="fast = vibe_quant.fast_tier"
+    )
     r.add_argument("--pairs", default="", help="e.g. KAMA+NATR,ROC+PRICE_POSITION")
     r.add_argument(
-        "--ports", default="",
+        "--ports",
+        default="",
         help="TradingView port folder(s), e.g. scripts/research/tv_ports/03_supertrend; 'all' ="
         " every tv_ports subfolder with a port.yaml. Replaces --pairs x --directions and"
         " excludes them; needs --tier nt",
@@ -1193,25 +1308,34 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--symbols", default="", help="e.g. ZECUSDT,NEARUSDT")
     r.add_argument("--windows", default="", help="start:end[,start:end] (end exclusive)")
     r.add_argument("--leverages", default="", help="e.g. 10")
-    r.add_argument("--timeframes", default="", help="e.g. 15m,1h (default 1m; 15m+ needs --tier nt)")
+    r.add_argument(
+        "--timeframes", default="", help="e.g. 15m,1h (default 1m; 15m+ needs --tier nt)"
+    )
     r.add_argument("--eval-windows", type=int, default=1, help="worst-of-N sub-windows per cell")
     r.add_argument(
-        "--max-trades", type=int, default=None,
+        "--max-trades",
+        type=int,
+        default=None,
         help="a genome with more trades than this is not a winner (low-frequency search)",
     )
     r.add_argument(
-        "--allin", action="store_true",
+        "--allin",
+        action="store_true",
         help="every entry is L x balance at venue leverage L (see sizing_params)",
     )
     r.add_argument(
-        "--atr-risk", type=float, default=None,
+        "--atr-risk",
+        type=float,
+        default=None,
         help="ATR sizing: risk this fraction of balance per entry over ATR(14) x 2, capped"
         " at L x balance (see sizing_params; excludes --allin)",
     )
     rep = sub.add_parser("report")
     rep.add_argument("--out", required=True)
     rep.add_argument("--top", type=int, default=15)
-    rep.add_argument("--filter", default="", help="only ledger keys containing this, e.g. '|ew3|fast'")
+    rep.add_argument(
+        "--filter", default="", help="only ledger keys containing this, e.g. '|ew3|fast'"
+    )
     tr = sub.add_parser("transfer")
     tr.add_argument("--out", required=True, help="the run's ledger directory")
     tr.add_argument(

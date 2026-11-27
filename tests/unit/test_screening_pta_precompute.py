@@ -181,9 +181,7 @@ def test_metrics_identical_with_and_without_precompute_kama_adx_two_symbols() ->
     assert off.total_trades > 5
     assert_same_metrics(on, off)
     # one install per (strategy, tf): each symbol has its own strategy and its own bars
-    assert_fully_fed(
-        on_runner, {("BTCUSDT-PERP.BINANCE", "1m"), ("ETHUSDT-PERP.BINANCE", "1m")}
-    )
+    assert_fully_fed(on_runner, {("BTCUSDT-PERP.BINANCE", "1m"), ("ETHUSDT-PERP.BINANCE", "1m")})
 
 
 @needs_catalog
@@ -203,7 +201,10 @@ def _strategy_239_dsl() -> dict[str, Any] | None:
     try:
         common = subprocess.run(
             ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-            capture_output=True, text=True, check=True, cwd=REPO,
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=REPO,
         ).stdout.strip()
     except (subprocess.CalledProcessError, OSError):  # not a git checkout (mutation sandbox)
         return None
@@ -326,7 +327,9 @@ def test_precompute_longer_than_the_run_warns_without_a_failure(
 
     def longer(*args: Any) -> dict[str, np.ndarray]:
         arrays = real(*args)
-        extra = {k: np.append(v, v[-1] + 1) for k, v in arrays.items()}  # one bar the engine never feeds
+        extra = {
+            k: np.append(v, v[-1] + 1) for k, v in arrays.items()
+        }  # one bar the engine never feeds
         return extra
 
     monkeypatch.setattr(nt_runner, "_pta_bar_arrays", longer)
@@ -335,7 +338,9 @@ def test_precompute_longer_than_the_run_warns_without_a_failure(
     (entry,) = runner.last_pta_precompute
     n = int(entry["n"])  # type: ignore[call-overload]
     assert entry["failed_at"] is None and entry["fed"] == n - 1
-    assert f"PTA precompute fell back for BTCUSDT-PERP.BINANCE 1m at bar {n - 1} of {n}" in caplog.text
+    assert (
+        f"PTA precompute fell back for BTCUSDT-PERP.BINANCE 1m at bar {n - 1} of {n}" in caplog.text
+    )
     assert_same_metrics(on, off)
 
 

@@ -309,7 +309,9 @@ def _live_halt_under_a_newer_testnet_row(db: Path) -> None:
 
 def _rotation(halt: str) -> Callable[[Path], None]:
     def seed(db: Path) -> None:
-        _put(db, "PAPER-007", account=ACCOUNT_B, risk=_risk(), halt=halt, message="X", state="halted")
+        _put(
+            db, "PAPER-007", account=ACCOUNT_B, risk=_risk(), halt=halt, message="X", state="halted"
+        )
 
     return seed
 
@@ -326,7 +328,9 @@ def _rotation_of_a_risk_halt(db: Path) -> None:
 
 
 def _other_trader_on_another_key(db: Path) -> None:
-    _put(db, "PAPER-041", account=ACCOUNT_B, risk=_risk(), halt="error", message="X", state="halted")
+    _put(
+        db, "PAPER-041", account=ACCOUNT_B, risk=_risk(), halt="error", message="X", state="halted"
+    )
 
 
 def _foreign_own_row_under_an_account_row(db: Path) -> None:
@@ -673,8 +677,6 @@ def test_inherited_halt_message_strips_both_prefixes(message: str, expected: str
     assert inherited_halt_message("PAPER-041", message) == expected
 
 
-
-
 _INHERIT_HINT = (
     " (limits inherited from PAPER-041; start fresh skips that trader id's risk state; "
     "this trader id's own saved limits and halt still carry)"
@@ -823,8 +825,6 @@ async def test_same_trader_other_environment_carries_nothing(
         assert "KEY-A" not in caplog.text
     finally:
         await node._shutdown()
-
-
 
 
 async def test_two_restarts_chain(

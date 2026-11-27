@@ -141,9 +141,7 @@ async def test_hung_symbols_time_out_together_not_one_after_another() -> None:
             in_flight -= 1
         return []
 
-    watcher = _make_watcher(
-        fetch, recorder, symbols=("BTCUSDT", *hung), fetch_timeout_s=0.05
-    )
+    watcher = _make_watcher(fetch, recorder, symbols=("BTCUSDT", *hung), fetch_timeout_s=0.05)
 
     await asyncio.wait_for(watcher.poll_once(), timeout=2)
 
@@ -165,8 +163,11 @@ async def test_request_weight_per_minute_counts_every_watched_symbol(
     recorder = _Recorder()
     symbols = [f"S{i}USDT" for i in range(n_symbols)]
     watcher = _make_watcher(
-        _FakeFetch(), recorder, symbols=symbols[:1],
-        cursors={s: _START_MS for s in symbols}, interval_s=interval_s,
+        _FakeFetch(),
+        recorder,
+        symbols=symbols[:1],
+        cursors={s: _START_MS for s in symbols},
+        interval_s=interval_s,
     )
 
     assert watcher.weight_per_minute() == weight

@@ -80,7 +80,8 @@ def _chrom(**kw: Any) -> StrategyChromosome:
 
 def _genes(n: int) -> tuple[list[StrategyGene], list[StrategyGene]]:
     entry = [
-        StrategyGene("RSI", {"period": 14.0}, ConditionType.LT, 20.0 + i, None) for i in range(n // 2)
+        StrategyGene("RSI", {"period": 14.0}, ConditionType.LT, 20.0 + i, None)
+        for i in range(n // 2)
     ]
     exit_ = [
         StrategyGene("RSI", {"period": 14.0}, ConditionType.GT, 60.0 + i, None)
@@ -306,7 +307,9 @@ def test_requires_returns_flag_controls_input() -> None:
 def test_dsr_legacy_fitness_input() -> None:
     cfg = _cfg(require_dsr=True)
     chrom = _chrom()
-    kept, rejections, records, _ = _screen(cfg, _plain, False, [(chrom, _fit(sharpe_ratio=0.1))], 10)
+    kept, rejections, records, _ = _screen(
+        cfg, _plain, False, [(chrom, _fit(sharpe_ratio=0.1))], 10
+    )
 
     record = records[chrom.uid]
     assert list(record) == ["input", "trials", "observations", "p_value", "significant"]
@@ -365,12 +368,8 @@ def test_pool_order_invariant() -> None:
     series = _series(2.5)
     items = [(str(i), _fit(mtm_daily_returns=series)) for i in range(3)]
 
-    _, _, _, forward = _screen(
-        cfg, _plain, False, [(_chrom(), _fit())], 40, dict(items)
-    )
-    _, _, _, backward = _screen(
-        cfg, _plain, False, [(_chrom(), _fit())], 40, dict(reversed(items))
-    )
+    _, _, _, forward = _screen(cfg, _plain, False, [(_chrom(), _fit())], 40, dict(items))
+    _, _, _, backward = _screen(cfg, _plain, False, [(_chrom(), _fit())], 40, dict(reversed(items)))
     assert forward == backward
     assert forward is not None
     assert forward["raw"] == 40
@@ -473,7 +472,9 @@ def test_pooled_rewrite(monkeypatch: pytest.MonkeyPatch) -> None:
     ]
     dsr_reasons = merged.guardrail_rejections[1]["reasons"]
     assert len(dsr_reasons) == 1
-    assert dsr_reasons[0] == (  # legacy spread -> the legacy rule decided (regression: vibe-quant-xw2en)
+    assert dsr_reasons[
+        0
+    ] == (  # legacy spread -> the legacy rule decided (regression: vibe-quant-xw2en)
         "Multi-seed pooled N=200: DSR not significant: p=0.9836 >= 0.05 "
         "(pooled daily SR=0.241 ann √365, T=400, N=67)"
     )
@@ -563,20 +564,14 @@ def test_pooled_buy_hold_record_equals_own_run_verdict(
     b_fit = _fit(sharpe_ratio=3.0, mtm_daily_returns=strong)
 
     def own(chrom: StrategyChromosome, fitness: FitnessResult) -> dict[str, object]:
-        gates = GateChain(
-            cfg, GateEvidence(fn, True, buy_hold_closes_fn=lambda _symbols: closes)
-        )
+        gates = GateChain(cfg, GateEvidence(fn, True, buy_hold_closes_fn=lambda _symbols: closes))
         gates.apply_buy_hold([(chrom, fitness)])
         return gates.buy_hold_records[chrom.uid]
 
     own_a, own_b = own(a_chrom, a_fit), own(b_chrom, b_fit)
     seeds = [
-        _SeedOut(
-            (a_chrom, a_fit), cache={a_chrom.uid: a_fit}, buy_hold={a_chrom.uid: own_a}
-        ),
-        _SeedOut(
-            (b_chrom, b_fit), cache={b_chrom.uid: b_fit}, buy_hold={b_chrom.uid: own_b}
-        ),
+        _SeedOut((a_chrom, a_fit), cache={a_chrom.uid: a_fit}, buy_hold={a_chrom.uid: own_a}),
+        _SeedOut((b_chrom, b_fit), cache={b_chrom.uid: b_fit}, buy_hold={b_chrom.uid: own_b}),
     ]
     calls: list[tuple[object, ...]] = []
 
@@ -619,7 +614,9 @@ def test_pooled_requires_returns_rule(monkeypatch: pytest.MonkeyPatch) -> None:
     assert record["input"] == "fitness_sharpe"
     assert record["trials"] == 100
     assert not any(
-        "DSR input missing" in r for row in plain_merged.guardrail_rejections for r in row["reasons"]
+        "DSR input missing" in r
+        for row in plain_merged.guardrail_rejections
+        for r in row["reasons"]
     )
 
     no_dsr = _pooled(

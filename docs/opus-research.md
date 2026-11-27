@@ -131,8 +131,9 @@ All evaluated frameworks support Binance integration through multiple pathways:
 **CCXT integration** (recommended approach):
 ```python
 import ccxt
-exchange = ccxt.binance({'enableRateLimit': True})
-ohlcv = exchange.fetch_ohlcv('BTC/USDT', '1h', since=from_ts, limit=1000)
+
+exchange = ccxt.binance({"enableRateLimit": True})
+ohlcv = exchange.fetch_ohlcv("BTC/USDT", "1h", since=from_ts, limit=1000)
 ```
 
 The unified CCXT interface provides **108+ exchange support** with consistent OHLCV format `[timestamp, open, high, low, close, volume]`. Rate limits are handled automatically with 1,200 requests per minute for Binance.
@@ -164,9 +165,9 @@ Ethereal's decentralized perpetual futures exchange uses **EIP-712 message signi
 # EIP-712 Domain Configuration
 domain = {
     "name": "Ethereal",
-    "version": "1", 
+    "version": "1",
     "chainId": 5064014,
-    "verifyingContract": "0xB3cDC82035C495c484C9fF11eD5f3Ff6d342e3cc"
+    "verifyingContract": "0xB3cDC82035C495c484C9fF11eD5f3Ff6d342e3cc",
 }
 ```
 

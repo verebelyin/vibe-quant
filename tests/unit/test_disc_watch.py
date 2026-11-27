@@ -35,9 +35,7 @@ def _make_db(path: Path, statuses: dict[str, str]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.execute("CREATE TABLE backtest_runs (id TEXT PRIMARY KEY, status TEXT, run_mode TEXT)")
-    conn.executemany(
-        "INSERT INTO backtest_runs VALUES (?, ?, 'discovery')", list(statuses.items())
-    )
+    conn.executemany("INSERT INTO backtest_runs VALUES (?, ?, 'discovery')", list(statuses.items()))
     conn.commit()
     conn.close()
     return path

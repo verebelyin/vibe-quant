@@ -14,7 +14,9 @@ def _orphan(exe: Path) -> int:
     """Start ``exe 300`` detached from this process (its parent exits, so ppid becomes 1)."""
     out = subprocess.run(
         ["bash", "-c", f'"{exe}" 300 >/dev/null 2>&1 & echo $!'],
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
     )
     pid = int(out.stdout.strip())
     deadline = time.monotonic() + 5

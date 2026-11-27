@@ -105,8 +105,6 @@ def _validation_run(seeded: dict[str, Any], parameters: dict[str, Any]) -> int:
     return rid
 
 
-
-
 def test_validated_run_liquidation_absent_uses_the_shared_default() -> None:
     """No stored leverage -> the shared default 10 (no second NULL rule)."""
     absent = {"id": 1, "parameters": {}}
@@ -155,8 +153,6 @@ async def test_validated_leverage_125_trips_max_leverage_cap(
     assert fake.instances == []
 
 
-
-
 @pytest.mark.parametrize("bad", _INVALID_LEVERAGES, ids=_INVALID_LEVERAGE_IDS)
 async def test_stored_fractional_or_garbage_leverage_fails_paper_start(
     request: pytest.FixtureRequest, bad: object
@@ -166,13 +162,13 @@ async def test_stored_fractional_or_garbage_leverage_fails_paper_start(
     fake: type[Any] = request.getfixturevalue("_audit_fake_tradingnode")
     rid = _validation_run(seeded, {"leverage": bad})
     node = PaperTradingNode(_config(seeded, validation_run_id=rid))
-    expected = f"Validation run {rid} has invalid liquidation settings: {_LEV_INVALID_PREFIX}{bad!r}"
+    expected = (
+        f"Validation run {rid} has invalid liquidation settings: {_LEV_INVALID_PREFIX}{bad!r}"
+    )
     with pytest.raises(ConfigurationError) as excinfo:
         await node._initialize()
     assert str(excinfo.value) == expected
     assert fake.instances == [], "an invalid leverage must not build a node"
-
-
 
 
 @pytest.mark.parametrize("mode", ["ISOLATED", None], ids=["uppercase", "null"])
@@ -206,8 +202,6 @@ async def test_cfg_level_leverage_override_is_validated_by_the_shared_rule(
         await node._initialize()
     assert str(excinfo.value) == expected
     assert fake.instances == []
-
-
 
 
 @pytest.fixture(autouse=True)

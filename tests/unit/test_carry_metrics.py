@@ -287,7 +287,11 @@ def test_cost_identity_single_leg() -> None:
     assert report.summary["funding_paid_total"] == 1.5
     assert report.summary["total_return"] == pytest.approx(93.45 / 10_000.0)
     equity_end = report.daily[-1][1]
-    identity = report.summary["price_pnl_total"] - report.summary["funding_paid_total"] - report.summary["fees_total"]
+    identity = (
+        report.summary["price_pnl_total"]
+        - report.summary["funding_paid_total"]
+        - report.summary["fees_total"]
+    )
     assert identity == pytest.approx(equity_end - 10_000.0, abs=1e-9 * 10_000.0)
     assert equity_end - 10_000.0 == pytest.approx(93.45, abs=1e-9 * 10_000.0)
 
@@ -357,7 +361,11 @@ def test_flip_attribution() -> None:
     assert short_leg["price_pnl"] == 50.0
     assert short_leg["fees"] == 0.275
     equity_end = report.daily[-1][1]
-    identity = report.summary["price_pnl_total"] - report.summary["funding_paid_total"] - report.summary["fees_total"]
+    identity = (
+        report.summary["price_pnl_total"]
+        - report.summary["funding_paid_total"]
+        - report.summary["fees_total"]
+    )
     assert identity == pytest.approx(equity_end - 10_000.0, abs=1e-9 * 10_000.0)
 
 
@@ -408,8 +416,12 @@ def test_by_year_sums_to_totals() -> None:
     summary = report.summary
     tolerance = 1e-9 * 10_000.0
 
-    assert sum(leg["price_pnl"] for leg in report.legs) == pytest.approx(summary["price_pnl_total"], abs=tolerance)
-    assert sum(leg["fees"] for leg in report.legs) == pytest.approx(summary["fees_total"], abs=tolerance)
+    assert sum(leg["price_pnl"] for leg in report.legs) == pytest.approx(
+        summary["price_pnl_total"], abs=tolerance
+    )
+    assert sum(leg["fees"] for leg in report.legs) == pytest.approx(
+        summary["fees_total"], abs=tolerance
+    )
     assert sum(leg["funding_paid"] for leg in report.legs) == pytest.approx(
         summary["funding_paid_total"], abs=tolerance
     )
@@ -420,16 +432,18 @@ def test_by_year_sums_to_totals() -> None:
     assert sum(row["price_pnl"] for row in report.by_year) == pytest.approx(
         summary["price_pnl_total"], abs=tolerance
     )
-    assert sum(row["fees"] for row in report.by_year) == pytest.approx(summary["fees_total"], abs=tolerance)
+    assert sum(row["fees"] for row in report.by_year) == pytest.approx(
+        summary["fees_total"], abs=tolerance
+    )
     assert sum(row["funding_paid"] for row in report.by_year) == pytest.approx(
         summary["funding_paid_total"], abs=tolerance
     )
     assert sum(row["turnover"] for row in report.by_year) == pytest.approx(
         summary["turnover_total"], abs=tolerance
     )
-    assert summary["price_pnl_total"] - summary["funding_paid_total"] - summary["fees_total"] == pytest.approx(
-        report.daily[-1][1] - 10_000.0, abs=tolerance
-    )
+    assert summary["price_pnl_total"] - summary["funding_paid_total"] - summary[
+        "fees_total"
+    ] == pytest.approx(report.daily[-1][1] - 10_000.0, abs=tolerance)
     assert isinstance(summary["funding_estimated"], bool)
 
 
@@ -441,9 +455,7 @@ def _boundary_run(fills: list[CarryFill], decisions: tuple[Decision, ...]) -> Ca
     """
     spec = CarrySpec(symbols=(_BTC, _ETH), start_ns=_EVE2024, end_ns=_Y2024 + _DAY)
     prices = {_EVE2024 + index * _DAY: 51000.0 for index in range(3)}
-    return carry_metrics(
-        _run(spec, fills, [], decisions), _inputs(spec, {_BTC: prices, _ETH: {}})
-    )
+    return carry_metrics(_run(spec, fills, [], decisions), _inputs(spec, {_BTC: prices, _ETH: {}}))
 
 
 def test_by_year_turnover_follows_the_fill_not_the_decision() -> None:
@@ -532,7 +544,9 @@ def test_dispersion_and_fee_ratio() -> None:
     inputs = _inputs(spec, {_BTC: {}, _ETH: {}})
     decisions = (
         _decision(_Y2025, 10_000.0, signals={_BTC: 0.002, _ETH: 0.0}, weights={_BTC: 0.5}),
-        _decision(_Y2025 + 7 * _DAY, 10_000.0, signals={_BTC: 0.001, _ETH: 0.0}, weights={_BTC: 0.5}),
+        _decision(
+            _Y2025 + 7 * _DAY, 10_000.0, signals={_BTC: 0.001, _ETH: 0.0}, weights={_BTC: 0.5}
+        ),
     )
     report = carry_metrics(_run(spec, fills, [], decisions), inputs)
 
@@ -548,7 +562,11 @@ def test_dispersion_and_fee_ratio() -> None:
 def test_summary_keys_and_liquidation(monkeypatch: pytest.MonkeyPatch) -> None:
     """The summary carries exactly the contract keys; liquidation off never imports the
     scanner (R38)."""
-    for name in [m for m in sys.modules if m == "vibe_quant.liquidation" or m.startswith("vibe_quant.liquidation.")]:
+    for name in [
+        m
+        for m in sys.modules
+        if m == "vibe_quant.liquidation" or m.startswith("vibe_quant.liquidation.")
+    ]:
         monkeypatch.delitem(sys.modules, name)
     spec = CarrySpec(symbols=(_BTC, _ETH), start_ns=_START, end_ns=_START + _DAY)
     inputs = _inputs(spec, {_BTC: {}, _ETH: {}})
@@ -640,7 +658,9 @@ def _path_run(prices: dict[int, float], days: int) -> CarryReport:
     """
     spec = CarrySpec(symbols=(_BTC, _ETH), start_ns=_START, end_ns=_START + days * _DAY)
     fills = [_fill(_BTC, _START + _HOUR, 100, price=100000.0)]
-    inputs = _inputs(spec, {_BTC: {_START + i * _DAY: price for i, price in prices.items()}, _ETH: {}})
+    inputs = _inputs(
+        spec, {_BTC: {_START + i * _DAY: price for i, price in prices.items()}, _ETH: {}}
+    )
     decisions = (_decision(_START, 10_000.0, weights={_BTC: 0.5}),)
     return carry_metrics(_run(spec, fills, [], decisions), inputs)
 
@@ -680,7 +700,11 @@ def test_short_cover_attribution() -> None:
     assert (short["symbol"], short["side"]) == (_BTC, "short")
     assert short["price_pnl"] == 70.0
     assert short["fees"] == 1.065
-    identity = report.summary["price_pnl_total"] - report.summary["funding_paid_total"] - report.summary["fees_total"]
+    identity = (
+        report.summary["price_pnl_total"]
+        - report.summary["funding_paid_total"]
+        - report.summary["fees_total"]
+    )
     assert identity == pytest.approx(report.daily[-1][1] - 10_000.0, abs=1e-9 * 10_000.0)
 
 
@@ -694,14 +718,18 @@ def test_by_year_weekly_sharpe_uses_weeks_in_the_year() -> None:
     start = _START + 343 * _DAY
     spec = CarrySpec(symbols=(_BTC, _ETH), start_ns=start, end_ns=start + 28 * _DAY)
     prices = [100000.0, 110000.0, 105000.0, 115000.0, 112000.0]
-    inputs = _inputs(spec, {_BTC: {start + i * _DAY: prices[i // 7] for i in range(1, 29)}, _ETH: {}})
+    inputs = _inputs(
+        spec, {_BTC: {start + i * _DAY: prices[i // 7] for i in range(1, 29)}, _ETH: {}}
+    )
     fills = [_fill(_BTC, start + _HOUR, 100, price=100000.0)]
     decisions = (_decision(start, 10_000.0, weights={_BTC: 0.5}),)
     report = carry_metrics(_run(spec, fills, [], decisions), inputs)
 
     assert report.summary["weeks"] == 4
     assert [row["year"] for row in report.by_year] == [2025, 2026]
-    assert report.by_year[0]["weekly_sharpe"] == _weekly_sharpe([row[1] for row in report.weekly][:3])
+    assert report.by_year[0]["weekly_sharpe"] == _weekly_sharpe(
+        [row[1] for row in report.weekly][:3]
+    )
     assert report.by_year[0]["weekly_sharpe"] == 4.356777141448447
     assert report.by_year[1]["weekly_sharpe"] is None
     assert report.summary["weekly_sharpe"] == 2.8795432666091827
@@ -720,7 +748,9 @@ def test_summary_sharpe_and_lo_se_wiring() -> None:
     assert report.summary["weeks"] == 3
     assert report.summary["weekly_sharpe"] == 4.163331998932265
     assert report.summary["weekly_sharpe_lo_se"] == 12.944325225965066
-    assert report.summary["weekly_sharpe_lo_se"] == _lo_se(report.summary["weekly_sharpe"], report.summary["weeks"])
+    assert report.summary["weekly_sharpe_lo_se"] == _lo_se(
+        report.summary["weekly_sharpe"], report.summary["weeks"]
+    )
     assert report.by_year[0]["weekly_sharpe"] == 4.163331998932265
 
 
@@ -733,7 +763,10 @@ def test_daily_sharpe_365_value_and_minimum() -> None:
 
     assert report.summary["daily_sharpe_365"] == mean / stdev * math.sqrt(365.0)
     assert report.summary["daily_sharpe_365"] == 2.333113338097617
-    assert _path_run({1: 110000.0, 2: 90000.0, 3: 108000.0}, 3).summary["daily_sharpe_365"] == 3.8012523980739235
+    assert (
+        _path_run({1: 110000.0, 2: 90000.0, 3: 108000.0}, 3).summary["daily_sharpe_365"]
+        == 3.8012523980739235
+    )
     assert _path_run({1: 110000.0, 2: 90000.0}, 2).summary["daily_sharpe_365"] is None
 
 
@@ -747,7 +780,9 @@ def test_dispersion_skips_decisions_with_fewer_than_two_rankable() -> None:
     inputs = _inputs(spec, {_BTC: {}, _ETH: {}})
     one_rankable = (
         _decision(_Y2025, 10_000.0, signals={_BTC: 0.002, _ETH: None}, weights={_BTC: 0.5}),
-        _decision(_Y2025 + 7 * _DAY, 10_000.0, signals={_BTC: 0.001, _ETH: 0.003}, weights={_BTC: 0.5}),
+        _decision(
+            _Y2025 + 7 * _DAY, 10_000.0, signals={_BTC: 0.001, _ETH: 0.003}, weights={_BTC: 0.5}
+        ),
     )
     row = carry_metrics(_run(spec, fills, [], one_rankable), inputs).by_year[0]
 
@@ -757,9 +792,16 @@ def test_dispersion_skips_decisions_with_fewer_than_two_rankable() -> None:
 
     none_rankable = (
         _decision(_Y2025, 10_000.0, signals={_BTC: 0.002, _ETH: None}, weights={_BTC: 0.5}),
-        _decision(_Y2025 + 7 * _DAY, 10_000.0, signals={_BTC: 0.001, _ETH: None}, weights={_BTC: 0.5}),
+        _decision(
+            _Y2025 + 7 * _DAY, 10_000.0, signals={_BTC: 0.001, _ETH: None}, weights={_BTC: 0.5}
+        ),
     )
-    assert carry_metrics(_run(spec, fills, [], none_rankable), inputs).by_year[0]["funding_dispersion_ann"] is None
+    assert (
+        carry_metrics(_run(spec, fills, [], none_rankable), inputs).by_year[0][
+            "funding_dispersion_ann"
+        ]
+        is None
+    )
 
 
 def test_rounding_drift_mean_and_max() -> None:
@@ -768,7 +810,9 @@ def test_rounding_drift_mean_and_max() -> None:
     inputs = _inputs(spec, {_BTC: {}, _ETH: {}})
     drifts = (0.002, 0.005, 0.001)
     decisions = tuple(
-        _decision(_START + index * _DAY, 10_000.0, weights={_BTC: 0.0, _ETH: 0.0}, rounding_drift=drift)
+        _decision(
+            _START + index * _DAY, 10_000.0, weights={_BTC: 0.0, _ETH: 0.0}, rounding_drift=drift
+        )
         for index, drift in enumerate(drifts)
     )
     summary = carry_metrics(_run(spec, [], [], decisions), inputs).summary
@@ -1099,7 +1143,9 @@ def test_trend_cost_identity_carries_the_spread() -> None:
     assert identity == pytest.approx(equity_end - 10_000.0, abs=1e-9 * 10_000.0)
 
     funding = CarrySpec(symbols=(_BTC, _ETH), start_ns=_START, end_ns=_START + 2 * _DAY)
-    plain = carry_metrics(_run(funding, [], [], decisions[:1]), _inputs(funding, {_BTC: {}, _ETH: {}}))
+    plain = carry_metrics(
+        _run(funding, [], [], decisions[:1]), _inputs(funding, {_BTC: {}, _ETH: {}})
+    )
     assert "spread_total" not in plain.summary
     assert "spread" not in plain.by_year[0]
 

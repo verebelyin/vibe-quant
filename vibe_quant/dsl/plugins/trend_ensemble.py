@@ -117,9 +117,7 @@ def compute_trend_ensemble(df: pd.DataFrame, params: dict[str, object]) -> pd.Se
         signal[close < lower] = -1.0
         # Carry each signal forward: the state at t is the sign of the most
         # recent breakout at or before t, and 0 before the first one.
-        last_breakout = np.maximum.accumulate(
-            np.where(signal != 0.0, bar_index, -1)
-        )
+        last_breakout = np.maximum.accumulate(np.where(signal != 0.0, bar_index, -1))
         carried = signal[np.maximum(last_breakout, 0)].copy()
         carried[last_breakout < 0] = 0.0
         carried[(bar_index - last_breakout) >= _MEMORY_MULTIPLE * lookback] = 0.0

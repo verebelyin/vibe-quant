@@ -149,9 +149,7 @@ class TestDSREmpiricalVarianceFix:
             num_trials=96,  # pop=8, gen=12
             num_observations=2190,  # 4h bars, 1 year
         )
-        assert result.is_significant, (
-            f"Sharpe 3.74 should pass DSR: p={result.p_value:.4f}"
-        )
+        assert result.is_significant, f"Sharpe 3.74 should pass DSR: p={result.p_value:.4f}"
 
     def test_lucky_low_sharpe_still_rejected(self) -> None:
         """DSR still rejects lucky low Sharpe from massive trial count."""

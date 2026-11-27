@@ -738,9 +738,7 @@ class TestValidationRunner:
 class TestDetailTimeframe:
     """Tests for sub-bar detail timeframe resolution."""
 
-    def test_resolve_detail_explicit_override(
-        self, temp_db: Path, temp_logs: Path
-    ) -> None:
+    def test_resolve_detail_explicit_override(self, temp_db: Path, temp_logs: Path) -> None:
         """Explicit detail_timeframe override is used directly."""
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
         result = runner._resolve_detail_timeframe(
@@ -773,9 +771,7 @@ class TestDetailTimeframe:
         assert result == "5s"
         runner.close()
 
-    def test_resolve_detail_no_dates_returns_none(
-        self, temp_db: Path, temp_logs: Path
-    ) -> None:
+    def test_resolve_detail_no_dates_returns_none(self, temp_db: Path, temp_logs: Path) -> None:
         """Missing run dates prevents auto-detection (returns None)."""
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
         result = runner._resolve_detail_timeframe(
@@ -822,9 +818,7 @@ class TestInitialBalanceRule:
     silently running at 1000, and the dead top-level
     ``run_config["starting_balance"]`` fallback is gone."""
 
-    def test_venue_config_uses_the_launch_balance(
-        self, temp_db: Path, temp_logs: Path
-    ) -> None:
+    def test_venue_config_uses_the_launch_balance(self, temp_db: Path, temp_logs: Path) -> None:
         """10000.0 reaches the venue as the int 10000 ("10000 USDT" then)."""
         from vibe_quant.validation.venue import create_backtest_venue_config
 
@@ -1252,8 +1246,7 @@ class TestLaunchErrorPrecedence:
             ),
             (
                 {"fee_tier": "VIP99"},
-                "invalid fee schedule parameters: unknown fee tier 'VIP99'; "
-                "known tiers: ['VIP0']",
+                "invalid fee schedule parameters: unknown fee tier 'VIP99'; known tiers: ['VIP0']",
             ),
         ],
         ids=["balance", "leverage", "liquidation", "sizing", "fee"],
@@ -1314,8 +1307,7 @@ class TestLaunchErrorPrecedence:
             runner.close()
 
         expected = (
-            "invalid fee schedule parameters: unknown fee tier 'VIP99'; "
-            "known tiers: ['VIP0']"
+            "invalid fee schedule parameters: unknown fee tier 'VIP99'; known tiers: ['VIP0']"
         )
         assert str(excinfo.value) == expected
         assert "running" not in statuses
@@ -1329,8 +1321,7 @@ _RUN_END = "2025-02-01"
 
 #: The clamp's missing-detail text (runner.clamp_run_window); the tail is not pinned.
 _DETAIL_MISSING = (
-    "No 1m bars for BTCUSDT in the catalog. Validation needs 1m data for "
-    "intrabar fills/latency"
+    "No 1m bars for BTCUSDT in the catalog. Validation needs 1m data for intrabar fills/latency"
 )
 
 _COVERED = (datetime(2024, 1, 1, tzinfo=UTC), datetime(2026, 3, 17, tzinfo=UTC))

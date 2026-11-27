@@ -381,9 +381,7 @@ def reconcile(
 
     matched_paper_ids = {m.paper.position_id for m in matches}
     paper_only = [p for p in paper_list if p.position_id not in matched_paper_ids]
-    validation_only = [
-        v for i, v in enumerate(validation_list) if i not in consumed_validation
-    ]
+    validation_only = [v for i, v in enumerate(validation_list) if i not in consumed_validation]
 
     return ReconciliationReport(
         matches=matches,

@@ -239,9 +239,7 @@ def test_coverage_error_names_the_last_tick_and_the_cutoff(tmp_path: Path) -> No
 
 
 def test_coverage_error_names_the_first_tick_and_the_cutoff(tmp_path: Path) -> None:
-    cat = _write_catalog(
-        tmp_path / "catalog", _minutes(DAY0 + 2 * HOUR, 5 * 60), symbol="ETHUSDT"
-    )
+    cat = _write_catalog(tmp_path / "catalog", _minutes(DAY0 + 2 * HOUR, 5 * 60), symbol="ETHUSDT")
     with pytest.raises(MissingBarDataError) as exc:
         resolve_fill_ticks(["ETHUSDT"], "1h", DAY0, DAY0 + 5 * HOUR, cat)
     assert str(exc.value) == (

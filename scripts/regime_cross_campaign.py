@@ -91,7 +91,9 @@ def _load_plan_from_db(campaign_id: str, state: StateManager) -> CampaignPlan | 
             label = str(params.get("window_label", ""))
             discovery_runs[label] = int(row[0])
             train_windows_map[label] = (
-                str(row[5]), str(row[6]), str(params.get("direction", "both"))
+                str(row[5]),
+                str(row[6]),
+                str(params.get("direction", "both")),
             )
             pop = int(params.get("population_size", pop))
             gens = int(params.get("max_generations", gens))
@@ -114,8 +116,7 @@ def _load_plan_from_db(campaign_id: str, state: StateManager) -> CampaignPlan | 
         for label, (s, e, d) in train_windows_map.items()
     ]
     oos_windows = [
-        OOSWindow(label=label, start=s, end=e)
-        for label, (s, e) in oos_windows_map.items()
+        OOSWindow(label=label, start=s, end=e) for label, (s, e) in oos_windows_map.items()
     ]
     config = RegimeCrossConfig(
         name=campaign_name or campaign_id,
@@ -179,7 +180,9 @@ def cmd_run_all(args: argparse.Namespace) -> int:
     try:
         config = RegimeCrossConfig.from_yaml(args.config)
         plan = plan_campaign(config, state)
-        logger.info("campaign %s planned: %d discoveries", plan.campaign_id, len(plan.discovery_runs))
+        logger.info(
+            "campaign %s planned: %d discoveries", plan.campaign_id, len(plan.discovery_runs)
+        )
         run_campaign(plan, state, log_dir=args.log_dir, skip_existing=True)
         report = build_matrix_report(plan.campaign_id, state)
     finally:

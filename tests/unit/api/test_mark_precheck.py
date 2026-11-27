@@ -75,9 +75,9 @@ def _ns(value: str) -> int:
 def _encode_price(price: float) -> bytes:
     """NT fixed-point price: 128-bit little-endian int, low 8 bytes first."""
     raw = int(round(price * _PRICE_SCALE))
-    return (raw & (2**64 - 1)).to_bytes(8, "little") + (
-        (raw >> 64) & (2**64 - 1)
-    ).to_bytes(8, "little")
+    return (raw & (2**64 - 1)).to_bytes(8, "little") + ((raw >> 64) & (2**64 - 1)).to_bytes(
+        8, "little"
+    )
 
 
 def _write_bars(catalog: Path, bar_type: str, ts_ns: list[int], base: float = 100.0) -> None:
@@ -170,9 +170,7 @@ def _launch_body(
     start: str = "2025-01-01",
     end: str = "2025-01-02",
 ) -> dict[str, object]:
-    strategy_id = state.create_strategy(
-        name=name, dsl_config=_DSL_1M if dsl is None else dsl
-    )
+    strategy_id = state.create_strategy(name=name, dsl_config=_DSL_1M if dsl is None else dsl)
     body: dict[str, object] = {
         "strategy_id": strategy_id,
         "symbols": ["BTCUSDT"] if symbols is None else symbols,
@@ -215,9 +213,7 @@ def _assert_not_mark_422(text: str) -> None:
 # --- M1/M2/M3/M4: the windows and symbols each checker uses ---
 
 
-def test_screening_window_is_half_open(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_screening_window_is_half_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """M1: end exclusive -- the last required bar opens at end - 60 s."""
     start, end = "2025-01-01", "2025-01-02"
     start_ns, end_ns = _ns(start), _ns(end)
@@ -237,9 +233,7 @@ def test_screening_window_is_half_open(
     assert "BTCUSDT: MARK coverage ends" in exc.value.detail
 
 
-def test_validation_uses_clamped_window(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_validation_uses_clamped_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """M2: the checked window is the runner's clamped one, not the request dates."""
     symbol = "BTCUSDT"
     request = ("2026-03-01", "2026-10-02")  # request end is past the 1m data
@@ -269,9 +263,7 @@ def test_validation_uses_clamped_window(
     assert "missing 2026-03) before requested end" in exc.value.detail
 
 
-def test_discovery_checks_full_span(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_discovery_checks_full_span(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """M3: every stage's sub-window lies in [start, end), so the span is checked."""
     start, end = "2025-01-01", "2025-01-02"
     start_ns, end_ns = _ns(start), _ns(end)
@@ -321,9 +313,7 @@ def test_frontend_format_fixture_requires_mark(
         _bars_every_minute(_ns(start), _ns(end)),
     )
     with pytest.raises(HTTPException) as exc:
-        mark_precheck.precheck_validation(
-            "isolated", ["BTCUSDT"], start, end, dsl, "legacy_ui", {}
-        )
+        mark_precheck.precheck_validation("isolated", ["BTCUSDT"], start, end, dsl, "legacy_ui", {})
     assert exc.value.status_code == 422
     assert "BTCUSDT: no MARK price bars available" in exc.value.detail
 
@@ -391,8 +381,9 @@ async def test_detail_reuses_mark_text(
 
     assert r.status_code == 422, r.text
     assert r.json()["detail"] == expected
-    assert "BTCUSDT: no MARK price bars available for 2025-01-01T00:00Z..2025-01-02T00:00Z" in (
-        r.json()["detail"]
+    assert (
+        "BTCUSDT: no MARK price bars available for 2025-01-01T00:00Z..2025-01-02T00:00Z"
+        in (r.json()["detail"])
     )
     assert popen.call_count == 0
 
@@ -581,9 +572,7 @@ async def test_concurrent_prechecks_serialize_decode(
 
     bodies = [_launch_body(state, f"ser{i}", mode="isolated") for i in range(4)]
     with patch.object(mark_precheck, "check_mark_coverage", _counting_check), _PopenPatch(_job_mgr):
-        rs = await asyncio.gather(
-            *(ac.post("/api/backtest/screening", json=b) for b in bodies)
-        )
+        rs = await asyncio.gather(*(ac.post("/api/backtest/screening", json=b) for b in bodies))
         assert max_active == 1, f"{max_active} coverage checks ran concurrently"
         assert all(r.status_code == 201 for r in rs), [r.text for r in rs]
 

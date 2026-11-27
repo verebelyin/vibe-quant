@@ -170,7 +170,9 @@ def test_param_immigrants_replace_non_elite_members_with_port_genomes(tmp_path: 
     known: list[Any] = [_fit(adjusted_score=0.5)] * 6
     new_pop, new_known = pipe._maybe_inject_immigrants(clones, known)  # type: ignore[arg-type]
     old_pop: list[Any] = clones
-    replaced = [i for i, (old, new) in enumerate(zip(old_pop, new_pop, strict=True)) if old is not new]
+    replaced = [
+        i for i, (old, new) in enumerate(zip(old_pop, new_pop, strict=True)) if old is not new
+    ]
     assert len(replaced) == 3
     assert 0 not in replaced  # the elite slot is protected
     assert all(isinstance(new_pop[i], ParamGenome) for i in replaced)
@@ -205,8 +207,13 @@ def test_port_run_refuses_direction_and_indicator_pool(tmp_path: Path) -> None:
 
 
 def _flat_backtest(_genome: Any) -> dict[str, float | int]:
-    return {"sharpe_ratio": 1.0, "max_drawdown": 0.1, "profit_factor": 1.5,
-            "total_trades": 200, "total_return": 0.3}
+    return {
+        "sharpe_ratio": 1.0,
+        "max_drawdown": 0.1,
+        "profit_factor": 1.5,
+        "total_trades": 200,
+        "total_return": 0.3,
+    }
 
 
 def test_dsr_raw_count_is_distinct_rendered_bodies(tmp_path: Path) -> None:

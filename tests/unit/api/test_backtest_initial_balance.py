@@ -101,9 +101,10 @@ async def test_invalid_initial_balance_is_422_and_never_launches(
     ac, state, job_mgr, _db = client
     before = _run_count(state)
 
-    with patch.object(job_mgr, "is_process_alive", return_value=True), patch(
-        "subprocess.Popen"
-    ) as mock_popen:
+    with (
+        patch.object(job_mgr, "is_process_alive", return_value=True),
+        patch("subprocess.Popen") as mock_popen,
+    ):
         mock_popen.return_value.pid = 12345
         response = await _post(ac, endpoint, _body(state, {"initial_balance": 1000.5}))
 
@@ -131,9 +132,10 @@ async def test_valid_initial_balance_launches_and_is_stored_unchanged(
     """A valid balance is accepted and stored exactly as sent."""
     ac, state, job_mgr, _db = client
 
-    with patch.object(job_mgr, "is_process_alive", return_value=True), patch(
-        "subprocess.Popen"
-    ) as mock_popen:
+    with (
+        patch.object(job_mgr, "is_process_alive", return_value=True),
+        patch("subprocess.Popen") as mock_popen,
+    ):
         mock_popen.return_value.pid = 12345
         response = await _post(ac, endpoint, _body(state, {"initial_balance": value}))
 
@@ -150,9 +152,10 @@ async def test_absent_initial_balance_still_launches(
     """The key is optional; a missing key means the 1000 default at run time."""
     ac, state, job_mgr, _db = client
 
-    with patch.object(job_mgr, "is_process_alive", return_value=True), patch(
-        "subprocess.Popen"
-    ) as mock_popen:
+    with (
+        patch.object(job_mgr, "is_process_alive", return_value=True),
+        patch("subprocess.Popen") as mock_popen,
+    ):
         mock_popen.return_value.pid = 12345
         response = await _post(ac, endpoint, _body(state, {}))
 

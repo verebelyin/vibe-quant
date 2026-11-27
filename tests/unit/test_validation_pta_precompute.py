@@ -32,24 +32,33 @@ needs_catalog = pytest.mark.skipif(
 PMAX_DSL: dict[str, Any] = {
     "name": "val_pta_pre_pmax",
     "timeframe": "15m",
-    "indicators": {"pm": {"type": "PMAX", "period": 10, "ma_period": 10, "multiplier": 3.0,
-                          "kind": "ema"}},
-    "entry_conditions": {"long": ["pm.mavg crosses_above pm"],
-                         "short": ["pm.mavg crosses_below pm"]},
+    "indicators": {
+        "pm": {"type": "PMAX", "period": 10, "ma_period": 10, "multiplier": 3.0, "kind": "ema"}
+    },
+    "entry_conditions": {
+        "long": ["pm.mavg crosses_above pm"],
+        "short": ["pm.mavg crosses_below pm"],
+    },
     "stop_loss": {"type": "fixed_pct", "percent": 50.0},
     "take_profit": {"type": "fixed_pct", "percent": 100.0},
     "position_mode": "reverse",
 }
 
 
-def _validate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, precompute: bool) -> tuple[Any, list[dict[str, object]]]:
+def _validate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, precompute: bool
+) -> tuple[Any, list[dict[str, object]]]:
     monkeypatch.setenv("VIBE_QUANT_PTA_PRECOMPUTE", "1" if precompute else "0")
     db = tmp_path / f"state-{precompute}.db"
     state = StateManager(db)
     run_id = state.create_backtest_run(
         strategy_id=state.create_strategy(name="val_pta_pre_pmax", dsl_config=PMAX_DSL),
-        run_mode="validation", symbols=["BTCUSDT"], timeframe="15m",
-        start_date="2026-01-01", end_date="2026-01-15", parameters={},
+        run_mode="validation",
+        symbols=["BTCUSDT"],
+        timeframe="15m",
+        start_date="2026-01-01",
+        end_date="2026-01-15",
+        parameters={},
     )
     state.close()
     runner = ValidationRunner(

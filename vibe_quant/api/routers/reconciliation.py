@@ -105,18 +105,14 @@ async def reconcile_paper_session(
 
     validation_run = state.get_backtest_run(validation_run_id)
     if validation_run is None or validation_run.get("run_mode") != "validation":
-        raise HTTPException(
-            status_code=404, detail=f"Validation run {validation_run_id} not found"
-        )
+        raise HTTPException(status_code=404, detail=f"Validation run {validation_run_id} not found")
 
     trader_id = str(params.get("trader_id") or default_paper_trader_id(paper_session_id))
     logs_path = Path(str(params.get("logs_path") or DEFAULT_PAPER_LOGS_PATH))
     try:
         paper_trades = await asyncio.to_thread(load_trades, trader_id, logs_path)
     except (FileNotFoundError, OSError) as exc:
-        raise HTTPException(
-            status_code=404, detail=f"Paper event log not found: {exc}"
-        ) from exc
+        raise HTTPException(status_code=404, detail=f"Paper event log not found: {exc}") from exc
     validation_trades = load_validation_trades(state, validation_run_id)
 
     report = reconcile(

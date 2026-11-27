@@ -238,9 +238,7 @@ def _fake_fill_ticks(
     )
 
 
-def _raw_db(
-    tmp: Path, dsl_dict: dict[str, Any], params: dict[str, Any], balance: float
-) -> Path:
+def _raw_db(tmp: Path, dsl_dict: dict[str, Any], params: dict[str, Any], balance: float) -> Path:
     """Minimal raw schema the WFA/CV ``_resolve`` reads."""
     db = tmp / "raw.db"
     conn = sqlite3.connect(str(db))
@@ -315,8 +313,7 @@ def test_tier_venue_money_values(cell: Cell, harness: Harness) -> None:
     assert venue["oms_type"] == "NETTING"
     assert venue["fill_model"]["fill_model_path"] == FILL_MODEL[cell.tier]
     assert (
-        venue["fee_model"]["fee_model_path"]
-        == "nautilus_trader.backtest.models:MakerTakerFeeModel"
+        venue["fee_model"]["fee_model_path"] == "nautilus_trader.backtest.models:MakerTakerFeeModel"
     )
     assert venue["latency_model"] is None
     assert venue["starting_balances"] == ["1000 USDT"]

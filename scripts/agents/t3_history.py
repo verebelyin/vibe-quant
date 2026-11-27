@@ -273,8 +273,11 @@ def families_of(command: str | None, output: str | None) -> list[str]:
     if hook:
         return [hook]  # a guard refusal is the whole story
     found: list[str] = []
-    for pattern, name in ((PYTEST_RE, "pytest:failed"), (MUTANTS_RE, "mutate:survived"),
-                          (TYPE_RE, "mypy:error")):
+    for pattern, name in (
+        (PYTEST_RE, "pytest:failed"),
+        (MUTANTS_RE, "mutate:survived"),
+        (TYPE_RE, "mypy:error"),
+    ):
         if pattern.search(output) and name not in found:
             found.append(name)
     if "Traceback (most recent call last)" in output:
@@ -386,15 +389,28 @@ def extract(since: str, until: str | None, out: Path, source: Path = T3_DB) -> d
         scratch.executescript(SCRATCH_SCHEMA)
         scratch.executemany(
             "insert into threads values (?,?,?,?,?,?,?)",
-            [(str(r[0]), str(r[1]), str(r[2]), str(r[3]), _model_of(r[6]), str(r[4]), str(r[5]))
-             for r in parents],
+            [
+                (str(r[0]), str(r[1]), str(r[2]), str(r[3]), _model_of(r[6]), str(r[4]), str(r[5]))
+                for r in parents
+            ],
         )
         scratch.executemany(
             "insert into children values (?,?,?,?,?,?,?,?,?,?)",
-            [(str(r[0]), str(r[1]), None if r[2] is None else str(r[2]), str(r[3]), _model_of(r[7]),
-              str(r[4]), None if r[5] is None else str(r[5]), None if r[6] is None else str(r[6]),
-              json.dumps(_json(r[7]).get("usage")), str(_json(r[7]).get("title") or ""))
-             for r in children],
+            [
+                (
+                    str(r[0]),
+                    str(r[1]),
+                    None if r[2] is None else str(r[2]),
+                    str(r[3]),
+                    _model_of(r[7]),
+                    str(r[4]),
+                    None if r[5] is None else str(r[5]),
+                    None if r[6] is None else str(r[6]),
+                    json.dumps(_json(r[7]).get("usage")),
+                    str(_json(r[7]).get("title") or ""),
+                )
+                for r in children
+            ],
         )
         commands: list[tuple[object, ...]] = []
         messages: list[tuple[object, ...]] = []
@@ -406,12 +422,30 @@ def extract(since: str, until: str | None, out: Path, source: Path = T3_DB) -> d
                 output = payload.get("output")
                 text = str(command) if command is not None else None
                 kept = None if output is None or status in NO_ERROR else str(output)
-                commands.append((item_id, thread_id, status, ordinal, updated, first_token(text),
-                                 text, kept, exit_code(kept)))
+                commands.append(
+                    (
+                        item_id,
+                        thread_id,
+                        status,
+                        ordinal,
+                        updated,
+                        first_token(text),
+                        text,
+                        kept,
+                        exit_code(kept),
+                    )
+                )
             else:
-                messages.append((item_id, thread_id, ordinal, updated,
-                                 str(payload.get("createdBy") or "") or None,
-                                 str(payload.get("text") or "")))
+                messages.append(
+                    (
+                        item_id,
+                        thread_id,
+                        ordinal,
+                        updated,
+                        str(payload.get("createdBy") or "") or None,
+                        str(payload.get("text") or ""),
+                    )
+                )
         scratch.executemany("insert into commands values (?,?,?,?,?,?,?,?,?)", commands)
         scratch.executemany("insert into messages values (?,?,?,?,?,?)", messages)
         scratch.execute(
@@ -421,38 +455,64 @@ def extract(since: str, until: str | None, out: Path, source: Path = T3_DB) -> d
         scratch.commit()
     finally:
         scratch.close()
-    return {"threads": len(parents), "children": len(children),
-            "commands": len(commands), "messages": len(messages)}
+    return {
+        "threads": len(parents),
+        "children": len(children),
+        "commands": len(commands),
+        "messages": len(messages),
+    }
 
 
 def load(db: Path) -> History:
     con = _connect_ro(db)
     try:
         meta = con.execute("select since, until from meta").fetchone()
-        threads = [(str(r[0]), None if r[1] is None else str(r[1]))
-                   for r in con.execute("select thread_id, model from threads")]
+        threads = [
+            (str(r[0]), None if r[1] is None else str(r[1]))
+            for r in con.execute("select thread_id, model from threads")
+        ]
         children = [
-            Child(str(r[0]), None if r[1] is None else str(r[1]),
-                  None if r[2] is None else str(r[2]), _json(r[3]))
-            for r in con.execute("select child_thread_id, provider, model, usage_json from children")
+            Child(
+                str(r[0]),
+                None if r[1] is None else str(r[1]),
+                None if r[2] is None else str(r[2]),
+                _json(r[3]),
+            )
+            for r in con.execute(
+                "select child_thread_id, provider, model, usage_json from children"
+            )
         ]
         commands = [
-            Command(str(r[0]), str(r[1]), str(r[2]),
-                    None if r[3] is None else str(r[3]), None if r[4] is None else str(r[4]),
-                    None if r[5] is None else str(r[5]), None if r[6] is None else int(r[6]))
+            Command(
+                str(r[0]),
+                str(r[1]),
+                str(r[2]),
+                None if r[3] is None else str(r[3]),
+                None if r[4] is None else str(r[4]),
+                None if r[5] is None else str(r[5]),
+                None if r[6] is None else int(r[6]),
+            )
             for r in con.execute(
                 "select item_id, thread_id, status, first_token, command, output, exit_code "
-                "from commands order by thread_id, ordinal")
+                "from commands order by thread_id, ordinal"
+            )
         ]
         messages = [
             Message(str(r[0]), str(r[1]), None if r[2] is None else str(r[2]), str(r[3]))
             for r in con.execute(
-                "select item_id, thread_id, created_by, text from messages order by thread_id, ordinal")
+                "select item_id, thread_id, created_by, text from messages order by thread_id, ordinal"
+            )
         ]
     finally:
         con.close()
-    return History(since=str(meta[0]), until=None if meta[1] is None else str(meta[1]),
-                   threads=threads, children=children, commands=commands, messages=messages)
+    return History(
+        since=str(meta[0]),
+        until=None if meta[1] is None else str(meta[1]),
+        threads=threads,
+        children=children,
+        commands=commands,
+        messages=messages,
+    )
 
 
 def families(history: History) -> list[Family]:
@@ -555,11 +615,19 @@ def render(report: Report) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     sub = ap.add_subparsers(dest="command", required=True)
     ext = sub.add_parser("extract", help="copy a window of T3 history into a scratch DB")
-    ext.add_argument("--since", required=True, help="ISO timestamp, inclusive (offset honoured; bare = UTC)")
-    ext.add_argument("--until", default=None, help="ISO timestamp, exclusive (default: now; offset honoured; bare = UTC)")
+    ext.add_argument(
+        "--since", required=True, help="ISO timestamp, inclusive (offset honoured; bare = UTC)"
+    )
+    ext.add_argument(
+        "--until",
+        default=None,
+        help="ISO timestamp, exclusive (default: now; offset honoured; bare = UTC)",
+    )
     ext.add_argument("--out", type=Path, required=True, help="scratch sqlite path (overwritten)")
     ext.add_argument("--db", type=Path, default=T3_DB, help="source statev2.sqlite (read-only)")
     sig = sub.add_parser("signatures", help="error families, corrections and runs by model")

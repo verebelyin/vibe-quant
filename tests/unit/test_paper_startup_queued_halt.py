@@ -201,8 +201,6 @@ async def test_queued_api_halt_halts_before_run(
     }
 
 
-
-
 async def test_non_leading_halt_waits_for_control_tick(
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
@@ -291,8 +289,6 @@ async def test_leading_halt_drained_rest_kept(
         await node._shutdown()
 
 
-
-
 async def test_two_leading_halts_apply_in_order(
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
@@ -363,8 +359,6 @@ async def test_queued_halt_over_restored_halt_alerts_once(
         h.engine.dispose()
 
 
-
-
 async def test_drain_failure_keeps_rows_for_control_loop(
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
@@ -390,9 +384,7 @@ async def test_drain_failure_keeps_rows_for_control_loop(
         assert node._guard is not None
         assert node._guard.guard_state == GuardState.PAUSED, "entries blocked, not trading"
 
-        errors = [
-            r for r in caplog.records if "start-up command drain failed" in r.getMessage()
-        ]
+        errors = [r for r in caplog.records if "start-up command drain failed" in r.getMessage()]
         assert [r.getMessage() for r in errors] == [
             "start-up command drain failed (OperationalError)"
         ]
@@ -408,8 +400,6 @@ async def test_drain_failure_keeps_rows_for_control_loop(
     finally:
         _remove_handlers()
         await node._shutdown()
-
-
 
 
 async def test_queued_kill_survives_two_failed_restarts(
@@ -434,9 +424,7 @@ async def test_queued_kill_survives_two_failed_restarts(
         _remove_handlers()
 
     assert node1.status.halt_reason == HaltReason.KILL_SWITCH
-    halt_writes = [
-        c for c in trace1.calls if c[0] == "write" and c[2].get("action") == "halt"
-    ]
+    halt_writes = [c for c in trace1.calls if c[0] == "write" and c[2].get("action") == "halt"]
     assert halt_writes == [_halt_record(HaltReason.KILL_SWITCH, "kill switch: test")]
     halt_alerts = [c for c in trace1.calls if c[0] == "alert" and "HALT (" in c[2]]
     assert halt_alerts == [_halt_alert(HaltReason.KILL_SWITCH, "kill switch: test")]
@@ -460,8 +448,6 @@ async def test_queued_kill_survives_two_failed_restarts(
         checkpoint = _latest_checkpoint(seeded["db"])
         assert checkpoint is not None
         assert checkpoint.node_status["halt_reason"] == "kill_switch"
-
-
 
 
 def test_claim_startup_halts_is_per_trader(tmp_path: Path) -> None:
@@ -505,8 +491,6 @@ def test_claim_startup_halts_skips_until_first_resume(
         queue.close()
 
 
-
-
 async def test_startup_halt_overtakes_close_all_blocks_entries(
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
@@ -518,9 +502,7 @@ async def test_startup_halt_overtakes_close_all_blocks_entries(
     and its ``_wait_flat`` is the controlled future."""
     h = _startup_harness(monkeypatch)
     node, _trace = _engine_node(monkeypatch, seeded, h)
-    ids = _enqueue(
-        seeded["db"], ("close_all", {"wait_secs": 10}), ("kill", None)
-    )
+    ids = _enqueue(seeded["db"], ("close_all", {"wait_secs": 10}), ("kill", None))
     close_id, kill_id = ids
     gate: asyncio.Future[list[str]] = asyncio.get_running_loop().create_future()
     entered = asyncio.Event()

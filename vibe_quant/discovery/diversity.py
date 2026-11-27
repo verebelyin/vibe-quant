@@ -80,7 +80,9 @@ def population_entropy(population: list[StrategyChromosome]) -> float:
     dir_counter: Counter[str] = Counter()
 
     for chrom in population:
-        dir_val = chrom.direction.value if hasattr(chrom.direction, "value") else str(chrom.direction)
+        dir_val = (
+            chrom.direction.value if hasattr(chrom.direction, "value") else str(chrom.direction)
+        )
         dir_counter[dir_val] += 1
         # Short-side genes count too (inydc T2, R19); they are empty for a
         # non-BOTH chromosome, so a single-direction population is unchanged.
@@ -88,7 +90,9 @@ def population_entropy(population: list[StrategyChromosome]) -> float:
             chrom.entry_genes + chrom.exit_genes + chrom.short_entry_genes + chrom.short_exit_genes
         ):
             ind_counter[gene.indicator_type] += 1
-            cond_val = gene.condition.value if hasattr(gene.condition, "value") else str(gene.condition)
+            cond_val = (
+                gene.condition.value if hasattr(gene.condition, "value") else str(gene.condition)
+            )
             cond_counter[cond_val] += 1
 
     from vibe_quant.discovery.operators import (  # noqa: I001
@@ -97,6 +101,7 @@ def population_entropy(population: list[StrategyChromosome]) -> float:
         _ensure_pool,
         _INDICATOR_NAMES,
     )
+
     _ensure_pool()
 
     n_indicators = max(len(_INDICATOR_NAMES), 1)
@@ -159,8 +164,7 @@ def inject_random_immigrants(
     """
     if fitness_scores is not None and len(fitness_scores) != len(population):
         msg = (
-            f"fitness_scores ({len(fitness_scores)}) not parallel to "
-            f"population ({len(population)})"
+            f"fitness_scores ({len(fitness_scores)}) not parallel to population ({len(population)})"
         )
         raise ValueError(msg)
 

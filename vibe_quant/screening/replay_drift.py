@@ -129,9 +129,7 @@ def _run_symbol_count(state: StateManager, run_id: int) -> int:
     return len(syms) if isinstance(syms, list) else 2
 
 
-def _load_screening_metrics(
-    state: StateManager, run_id: int
-) -> tuple[float | None, int | None]:
+def _load_screening_metrics(state: StateManager, run_id: int) -> tuple[float | None, int | None]:
     """Return (screening_sharpe, screening_trades) for the best sweep row."""
     sweeps = state.get_sweep_results(run_id)
     if not sweeps:
@@ -182,9 +180,7 @@ def _build_drift_payload(
     }
 
 
-def _store_drift_payload(
-    state: StateManager, run_id: int, payload: dict[str, object]
-) -> None:
+def _store_drift_payload(state: StateManager, run_id: int, payload: dict[str, object]) -> None:
     """Persist drift payload in backtest_results.notes if present, else in parameters."""
     state.merge_replay_drift_payload(run_id, payload)
 
@@ -206,9 +202,7 @@ def check_replay_drift(state: StateManager, run_id: int) -> dict[str, object] | 
 
         disc_run_id_raw = source.get("discovery_run_id")
         idx_raw = source.get("strategy_index")
-        if not isinstance(disc_run_id_raw, (int, float)) or not isinstance(
-            idx_raw, (int, float)
-        ):
+        if not isinstance(disc_run_id_raw, (int, float)) or not isinstance(idx_raw, (int, float)):
             return None
         discovery_run_id = int(disc_run_id_raw)
         strategy_index = int(idx_raw)
@@ -217,14 +211,18 @@ def check_replay_drift(state: StateManager, run_id: int) -> dict[str, object] | 
         if disc_metrics is None:
             logger.warning(
                 "replay_drift: discovery run=%d idx=%d metrics unavailable",
-                discovery_run_id, strategy_index,
+                discovery_run_id,
+                strategy_index,
             )
             return None
         discovery_sharpe, discovery_trades, drift_note = disc_metrics
         screening_sharpe, screening_trades = _load_screening_metrics(state, run_id)
 
         payload = _build_drift_payload(
-            discovery_sharpe, discovery_trades, screening_sharpe, screening_trades,
+            discovery_sharpe,
+            discovery_trades,
+            screening_sharpe,
+            screening_trades,
             worst_reference=drift_note is not None,
         )
         if drift_note:
@@ -233,12 +231,16 @@ def check_replay_drift(state: StateManager, run_id: int) -> dict[str, object] | 
         if payload["flagged"]:
             logger.warning(
                 "replay_drift: run=%d FLAGGED (trade_ratio=%s sharpe_ratio=%s)",
-                run_id, payload["trade_ratio"], payload["sharpe_ratio"],
+                run_id,
+                payload["trade_ratio"],
+                payload["sharpe_ratio"],
             )
         else:
             logger.info(
                 "replay_drift: run=%d clean (trade_ratio=%s sharpe_ratio=%s)",
-                run_id, payload["trade_ratio"], payload["sharpe_ratio"],
+                run_id,
+                payload["trade_ratio"],
+                payload["sharpe_ratio"],
             )
         return payload
     except Exception:

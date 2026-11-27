@@ -190,7 +190,9 @@ def test_cross_window_metadata_persisted_to_notes(tmp_path: Path, monkeypatch) -
     notes = json.loads(result["notes"])
     assert notes["direction"] == "short"
     assert notes["cross_window_months"] == [1]
-    assert notes["cross_window_min_sharpe"] == 0.6647277741291018  # typed 0.8 (365-day) = stored 252-day
+    assert (
+        notes["cross_window_min_sharpe"] == 0.6647277741291018
+    )  # typed 0.8 (365-day) = stored 252-day
 
 
 def test_no_viable_strategies_completes_cleanly(tmp_path: Path, monkeypatch) -> None:
@@ -304,22 +306,35 @@ def test_walk_forward_efficiency_persisted_to_column(tmp_path: Path, monkeypatch
     chrom = StrategyChromosome(
         entry_genes=[StrategyGene("RSI", {"period": 14.0}, ConditionType.LT, 30.0)],
         exit_genes=[StrategyGene("RSI", {"period": 14.0}, ConditionType.GT, 70.0)],
-        stop_loss_pct=2.0, take_profit_pct=4.0, direction=Direction.SHORT,
+        stop_loss_pct=2.0,
+        take_profit_pct=4.0,
+        direction=Direction.SHORT,
     )
     fit = FitnessResult(
-        sharpe_ratio=1.5, max_drawdown=0.05, profit_factor=1.8,
-        total_trades=100, total_return=0.10,
-        complexity_penalty=0.0, overtrade_penalty=0.0, sl_tp_penalty=0.0,
-        raw_score=1.0, adjusted_score=1.0,
-        passed_filters=True, filter_results={},
+        sharpe_ratio=1.5,
+        max_drawdown=0.05,
+        profit_factor=1.8,
+        total_trades=100,
+        total_return=0.10,
+        complexity_penalty=0.0,
+        overtrade_penalty=0.0,
+        sl_tp_penalty=0.0,
+        raw_score=1.0,
+        adjusted_score=1.0,
+        passed_filters=True,
+        filter_results={},
     )
-    holdout = HoldoutResult(sharpe_ratio=0.8, max_drawdown=0.03, profit_factor=1.2,
-                            total_trades=30, total_return=0.02)
+    holdout = HoldoutResult(
+        sharpe_ratio=0.8, max_drawdown=0.03, profit_factor=1.2, total_trades=30, total_return=0.02
+    )
 
     def fake_run(self) -> DiscoveryResult:
         return DiscoveryResult(
-            generations=[], top_strategies=[(chrom, fit)],
-            total_candidates_evaluated=10, converged=True, convergence_generation=1,
+            generations=[],
+            top_strategies=[(chrom, fit)],
+            total_candidates_evaluated=10,
+            converged=True,
+            convergence_generation=1,
             holdout_results=[holdout],
             train_dates=("2025-01-01", "2025-01-25"),
             holdout_dates=("2025-01-25", "2025-02-01"),
@@ -328,12 +343,29 @@ def test_walk_forward_efficiency_persisted_to_column(tmp_path: Path, monkeypatch
     monkeypatch.setattr(DiscoveryPipeline, "run", fake_run)
 
     argv = [
-        "--run-id", str(run_id),
-        "--population-size", "6", "--max-generations", "2", "--elite-count", "1",
-        "--symbols", "BTCUSDT", "--timeframe", "1h",
-        "--start-date", "2025-01-01", "--end-date", "2025-02-01",
-        "--eval-windows", "1",
-        "--db", str(db_path), "--mock", "--max-workers", "-1",
+        "--run-id",
+        str(run_id),
+        "--population-size",
+        "6",
+        "--max-generations",
+        "2",
+        "--elite-count",
+        "1",
+        "--symbols",
+        "BTCUSDT",
+        "--timeframe",
+        "1h",
+        "--start-date",
+        "2025-01-01",
+        "--end-date",
+        "2025-02-01",
+        "--eval-windows",
+        "1",
+        "--db",
+        str(db_path),
+        "--mock",
+        "--max-workers",
+        "-1",
     ]
 
     outcome = drive_run_discovery(db_path, run_id, argv, discovery_run.MockBacktests())
@@ -353,15 +385,30 @@ def test_walk_forward_efficiency_formula() -> None:
 
     # 0.05%/day in both periods: 270d IS (13.5%) vs 90d OOS (4.5%)
     assert walk_forward_efficiency(
-        oos_return=0.045, oos_days=90, is_return=0.135, is_days=270,
+        oos_return=0.045,
+        oos_days=90,
+        is_return=0.135,
+        is_days=270,
     ) == pytest.approx(1.0, abs=1e-12)
     # Losing in-sample, winning out-of-sample is NOT "max efficiency"
-    assert walk_forward_efficiency(
-        oos_return=0.05, oos_days=90, is_return=-0.10, is_days=270,
-    ) is None
-    assert walk_forward_efficiency(
-        oos_return=0.05, oos_days=None, is_return=0.10, is_days=270,
-    ) is None
+    assert (
+        walk_forward_efficiency(
+            oos_return=0.05,
+            oos_days=90,
+            is_return=-0.10,
+            is_days=270,
+        )
+        is None
+    )
+    assert (
+        walk_forward_efficiency(
+            oos_return=0.05,
+            oos_days=None,
+            is_return=0.10,
+            is_days=270,
+        )
+        is None
+    )
 
 
 def test_walk_forward_efficiency_none_when_no_wfa(tmp_path: Path, monkeypatch) -> None:
@@ -372,12 +419,30 @@ def test_walk_forward_efficiency_none_when_no_wfa(tmp_path: Path, monkeypatch) -
     monkeypatch.setattr(
         "sys.argv",
         [
-            "prog", "--run-id", str(run_id),
-            "--population-size", "6", "--max-generations", "2",
-            "--mutation-rate", "0.1", "--elite-count", "1",
-            "--symbols", "BTCUSDT", "--timeframe", "1h",
-            "--start-date", "2025-01-01", "--end-date", "2025-02-01",
-            "--db", str(db_path), "--mock", "--max-workers", "-1",
+            "prog",
+            "--run-id",
+            str(run_id),
+            "--population-size",
+            "6",
+            "--max-generations",
+            "2",
+            "--mutation-rate",
+            "0.1",
+            "--elite-count",
+            "1",
+            "--symbols",
+            "BTCUSDT",
+            "--timeframe",
+            "1h",
+            "--start-date",
+            "2025-01-01",
+            "--end-date",
+            "2025-02-01",
+            "--db",
+            str(db_path),
+            "--mock",
+            "--max-workers",
+            "-1",
         ],
     )
     assert main() == 0
@@ -425,7 +490,9 @@ def test_multi_seed_preserves_validation_metadata_per_strategy(tmp_path: Path, m
             "--no-dsr",
             "--db",
             str(db_path),
-            "--mock", "--max-workers", "-1",
+            "--mock",
+            "--max-workers",
+            "-1",
         ],
     )
 
@@ -520,10 +587,17 @@ def _notes_for_seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tag: str, s
     db_path = tmp_path / f"state_{tag}.db"
     run_id = _create_discovery_run(db_path)
     monkeypatch.setattr(
-        "sys.argv", _seed_argv(
-            db_path, run_id, "--seed", str(seed), "--max-workers", "-1",
-            "--no-dsr", "--no-bootstrap-ci",
-        )  # fmt: skip
+        "sys.argv",
+        _seed_argv(
+            db_path,
+            run_id,
+            "--seed",
+            str(seed),
+            "--max-workers",
+            "-1",
+            "--no-dsr",
+            "--no-bootstrap-ci",
+        ),  # fmt: skip
     )
     assert main() == 0
     return json.dumps(_strip_timing(_run_notes(db_path, run_id)), sort_keys=True)
@@ -590,9 +664,7 @@ def test_multi_seed_seed_autodrawn_and_recorded(
     assert _run_notes(db_path, run_id)["seed"] == 1234
 
 
-def test_multi_seed_explicit_seed_recorded(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_multi_seed_explicit_seed_recorded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import random
 
     db_path = tmp_path / "state.db"
@@ -657,13 +729,25 @@ def test_plan_windows_boundaries(
     """The spec's plan is the literal split the run (and the API precheck) uses."""
     args = build_parser().parse_args(
         [
-            "--run-id", "0", "--start-date", start, "--end-date", end,
-            "--train-test-split", str(split), "--eval-windows", str(n_eval),
+            "--run-id",
+            "0",
+            "--start-date",
+            start,
+            "--end-date",
+            end,
+            "--train-test-split",
+            str(split),
+            "--eval-windows",
+            str(n_eval),
         ]
     )
     plan = DiscoveryRunSpec.from_args(args).plan()
     assert (
-        plan.train_start, plan.train_end, plan.holdout_start, plan.holdout_end, plan.eval_windows
+        plan.train_start,
+        plan.train_end,
+        plan.holdout_start,
+        plan.holdout_end,
+        plan.eval_windows,
     ) == expected
 
 
@@ -676,10 +760,28 @@ def test_bad_window_config_fails_run_fast(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
         "sys.argv",
         [
-            "prog", "--run-id", str(run_id), "--population-size", "6",
-            "--max-generations", "2", "--elite-count", "1", "--timeframe", "1h",
-            "--start-date", "2025-01-01", "--end-date", "2025-04-01",
-            "--cross-window-months", "6", "--mock", "--max-workers", "-1", "--db", str(db_path),
+            "prog",
+            "--run-id",
+            str(run_id),
+            "--population-size",
+            "6",
+            "--max-generations",
+            "2",
+            "--elite-count",
+            "1",
+            "--timeframe",
+            "1h",
+            "--start-date",
+            "2025-01-01",
+            "--end-date",
+            "2025-04-01",
+            "--cross-window-months",
+            "6",
+            "--mock",
+            "--max-workers",
+            "-1",
+            "--db",
+            str(db_path),
         ],
     )
     t0 = time.perf_counter()
@@ -783,7 +885,9 @@ def test_seed_from_run_chromosome_reaches_pipeline(
 
     run_id = _create_discovery_run(db_path)
 
-    monkeypatch.setenv("VIBE_QUANT_LOG_DIR", str(tmp_path / "logs"))  # keep progress files out of the repo
+    monkeypatch.setenv(
+        "VIBE_QUANT_LOG_DIR", str(tmp_path / "logs")
+    )  # keep progress files out of the repo
 
     loaded: list[Any] = []
     real_loader = discovery_run.load_seed_chromosomes
@@ -832,7 +936,9 @@ def test_seed_from_run_without_champions_fails_run(
     seed_run_id = _create_seed_run(db_path)  # no result row -> no champions
     run_id = _create_discovery_run(db_path)
 
-    monkeypatch.setenv("VIBE_QUANT_LOG_DIR", str(tmp_path / "logs"))  # keep progress files out of the repo
+    monkeypatch.setenv(
+        "VIBE_QUANT_LOG_DIR", str(tmp_path / "logs")
+    )  # keep progress files out of the repo
 
     def _no_pipeline(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("no pipeline may be built for an unhonorable warm-start")
@@ -976,8 +1082,24 @@ def test_port_run_completes_and_records_the_port(tmp_path: Path, as_file: bool) 
     assert port_note["path"] == str(folder / "port.yaml")
     assert port_note["sha256"] == hashlib.sha256((folder / "port.yaml").read_bytes()).hexdigest()
     assert port_note["params"] == [
-        {"name": "fast", "kind": "int", "low": 5, "high": 20, "step": 1, "choices": [], "default": 10},
-        {"name": "slow", "kind": "int", "low": 30, "high": 60, "step": 5, "choices": [], "default": 40},
+        {
+            "name": "fast",
+            "kind": "int",
+            "low": 5,
+            "high": 20,
+            "step": 1,
+            "choices": [],
+            "default": 10,
+        },
+        {
+            "name": "slow",
+            "kind": "int",
+            "low": 30,
+            "high": 60,
+            "step": 5,
+            "choices": [],
+            "default": 40,
+        },
     ]
     champion = notes["top_strategies"][0]
     assert champion["chromosome"]["kind"] == "param"
@@ -1040,7 +1162,14 @@ def test_port_error_exits_2_with_the_message_and_writes_nothing(
         (["--exit-genes", "extended"], "--exit-genes extended"),
         (["--num-seeds", "2"], "--num-seeds > 1"),
         (
-            ["--bankroll-modes", "off", "--bankroll-leverages", "5", "--bankroll-max-margin-pcts", "50"],
+            [
+                "--bankroll-modes",
+                "off",
+                "--bankroll-leverages",
+                "5",
+                "--bankroll-max-margin-pcts",
+                "50",
+            ],
             "the --bankroll-* grid",
         ),
     ],
@@ -1172,14 +1301,22 @@ def test_warm_start_from_a_port_run_seeds_generation_zero(tmp_path: Path) -> Non
     db_path = tmp_path / "state.db"
     folder = _write_port(tmp_path)
     first = _new_run(db_path)
-    assert drive_run_discovery(db_path, first, _port_argv(first, db_path, folder), _PortBacktests()).exit_code == 0
+    assert (
+        drive_run_discovery(
+            db_path, first, _port_argv(first, db_path, folder), _PortBacktests()
+        ).exit_code
+        == 0
+    )
     champion = _result_notes(db_path, first)["top_strategies"][0]["chromosome"]["values"]
 
     second = _new_run(db_path)
     seen: list[dict[str, object]] = []
     outcome = drive_run_discovery(
-        db_path, second,
-        _port_argv(second, db_path, folder, "--seed-from-run", str(first), "--population-size", "3"),
+        db_path,
+        second,
+        _port_argv(
+            second, db_path, folder, "--seed-from-run", str(first), "--population-size", "3"
+        ),
         _PortBacktests(seen),
     )
     assert outcome.exit_code == 0, outcome.message
@@ -1195,35 +1332,58 @@ def test_warm_start_refusals_exit_2_with_the_message(tmp_path: Path) -> None:
     folder = _write_port(tmp_path)
     legacy = _finished_run_notes(
         db_path,
-        {"top_strategies": [{"chromosome": chromosome_to_serializable(_random_chromosome(Direction.LONG))}]},
+        {
+            "top_strategies": [
+                {"chromosome": chromosome_to_serializable(_random_chromosome(Direction.LONG))}
+            ]
+        },
     )
     first = _new_run(db_path)
-    assert drive_run_discovery(db_path, first, _port_argv(first, db_path, folder), _PortBacktests()).exit_code == 0
+    assert (
+        drive_run_discovery(
+            db_path, first, _port_argv(first, db_path, folder), _PortBacktests()
+        ).exit_code
+        == 0
+    )
 
     # a legacy seed run into a port run
     run_id = _new_run(db_path)
     outcome = drive_run_discovery(
-        db_path, run_id, _port_argv(run_id, db_path, folder, "--seed-from-run", str(legacy)), _PortBacktests()
+        db_path,
+        run_id,
+        _port_argv(run_id, db_path, folder, "--seed-from-run", str(legacy)),
+        _PortBacktests(),
     )
     assert outcome.exit_code == 2
-    assert "seed run holds legacy chromosomes; a run of port 'dual_ema' needs param genomes" in outcome.message
+    assert (
+        "seed run holds legacy chromosomes; a run of port 'dual_ema' needs param genomes"
+        in outcome.message
+    )
     state = StateManager(db_path)
     row = state.get_backtest_run(run_id)
     state.close()
     assert row is not None and row["status"] == "failed"
 
     # another port revision (same name, edited file) and another port name
-    edited = _write_port(tmp_path, {**_port_doc(), "constraints": ["fast <= slow"]}, folder="edited")
+    edited = _write_port(
+        tmp_path, {**_port_doc(), "constraints": ["fast <= slow"]}, folder="edited"
+    )
     run_id = _new_run(db_path)
     outcome = drive_run_discovery(
-        db_path, run_id, _port_argv(run_id, db_path, edited, "--seed-from-run", str(first)), _PortBacktests()
+        db_path,
+        run_id,
+        _port_argv(run_id, db_path, edited, "--seed-from-run", str(first)),
+        _PortBacktests(),
     )
     assert outcome.exit_code == 2
     assert "produced by a different revision of port 'dual_ema'" in outcome.message
     renamed = _write_port(tmp_path, _port_doc("other_port"), folder="renamed")
     run_id = _new_run(db_path)
     outcome = drive_run_discovery(
-        db_path, run_id, _port_argv(run_id, db_path, renamed, "--seed-from-run", str(first)), _PortBacktests()
+        db_path,
+        run_id,
+        _port_argv(run_id, db_path, renamed, "--seed-from-run", str(first)),
+        _PortBacktests(),
     )
     assert outcome.exit_code == 2
     assert "belongs to port 'dual_ema', not 'other_port'" in outcome.message

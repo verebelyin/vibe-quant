@@ -39,7 +39,7 @@ def _write_source_file(name: str, body: str) -> Path:
 def test_load_then_list(tmp_path: Path) -> None:
     p = _write_source_file(
         "_test_dummy_source",
-        '''
+        """
         from vibe_quant.research.sources import register_source
 
         @register_source("dummy")
@@ -47,7 +47,7 @@ def test_load_then_list(tmp_path: Path) -> None:
             name = "dummy"
             def fetch(self, since, limit):
                 yield from ()
-        ''',
+        """,
     )
     # Files with leading underscore are skipped — verify that path
     load_builtin_sources(force=True)
@@ -58,7 +58,7 @@ def test_load_then_list(tmp_path: Path) -> None:
 def test_drop_source_in_dir_is_discovered(tmp_path: Path) -> None:
     p = _write_source_file(
         "fake_test_source_for_unit",
-        '''
+        """
         from vibe_quant.research.sources import register_source
 
         @register_source("fake_unit")
@@ -66,7 +66,7 @@ def test_drop_source_in_dir_is_discovered(tmp_path: Path) -> None:
             name = "fake_unit"
             def fetch(self, since, limit):
                 yield from ()
-        ''',
+        """,
     )
     try:
         load_builtin_sources(force=True)
@@ -75,6 +75,7 @@ def test_drop_source_in_dir_is_discovered(tmp_path: Path) -> None:
         p.unlink()
         # remove from sys.modules so subsequent loads don't re-register
         import sys
+
         sys.modules.pop("vibe_quant.research.sources.fake_test_source_for_unit", None)
 
 
@@ -82,13 +83,16 @@ def test_duplicate_register_raises_value_error() -> None:
     @register_source("dupname")
     class A:
         name = "dupname"
+
         def fetch(self, since, limit):  # noqa: ARG002
             yield from ()
 
     with pytest.raises(ValueError, match="dupname"):
+
         @register_source("dupname")
         class B:
             name = "dupname"
+
             def fetch(self, since, limit):  # noqa: ARG002
                 yield from ()
 
@@ -107,13 +111,13 @@ def test_class_missing_fetch_raises_type_error_at_registration() -> None:
 def test_broken_source_file_does_not_break_others() -> None:
     broken = _write_source_file(
         "broken_source_for_unit",
-        '''
+        """
         raise ImportError("intentionally broken for unit test")
-        ''',
+        """,
     )
     good = _write_source_file(
         "good_source_for_unit",
-        '''
+        """
         from vibe_quant.research.sources import register_source
 
         @register_source("good_unit")
@@ -121,7 +125,7 @@ def test_broken_source_file_does_not_break_others() -> None:
             name = "good_unit"
             def fetch(self, since, limit):
                 yield from ()
-        ''',
+        """,
     )
     try:
         load_builtin_sources(force=True)
@@ -132,6 +136,7 @@ def test_broken_source_file_does_not_break_others() -> None:
         broken.unlink()
         good.unlink()
         import sys
+
         sys.modules.pop("vibe_quant.research.sources.broken_source_for_unit", None)
         sys.modules.pop("vibe_quant.research.sources.good_source_for_unit", None)
 
@@ -140,6 +145,7 @@ def test_load_is_idempotent_when_not_forced() -> None:
     @register_source("idem")
     class Idem:
         name = "idem"
+
         def fetch(self, since, limit):  # noqa: ARG002
             yield from ()
 

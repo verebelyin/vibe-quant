@@ -240,7 +240,9 @@ class TestShippedSnapshot:
             table = _TABLES[symbol]
             assert table.brackets[0].max_leverage == 75
             assert table.maintenance_margin(19999.99) == pytest.approx(199.9999, abs=1e-9)
-            assert table.maintenance_margin(20000) == pytest.approx(200.0, abs=1e-9)  # 20000*0.015-100
+            assert table.maintenance_margin(20000) == pytest.approx(
+                200.0, abs=1e-9
+            )  # 20000*0.015-100
             second = table.bracket_for(20000)
             assert (second.mmr, second.cum) == (0.015, 100.0)
 
@@ -514,7 +516,7 @@ class TestExactZeroLiquidationPrice:
     def test_short_lp_exactly_zero_is_insolvent(self):
         """Cross short q=1, EP=100, wallet 0, TMM1 0, UPNL1 -100.
 
-          numerator = 0 - 0 + (-100) + 0 + 100 = 0; LP = 0/(0.01 + 1) = 0.0.
+        numerator = 0 - 0 + (-100) + 0 + 100 = 0; LP = 0/(0.01 + 1) = 0.0.
         """
         with pytest.raises(InsolventPosition):
             cross_liq_price(-1, 1.0, 100.0, 0.0, 0.0, -100.0, self._ZERO)
@@ -522,7 +524,7 @@ class TestExactZeroLiquidationPrice:
     def test_long_lp_exactly_zero_never_liquidates(self):
         """Isolated long q=1, EP=100, margin 100.
 
-          numerator = 100 - 0 + 0 + 0 - 100 = 0; LP = 0/(0.01 - 1) = -0.0 -> "never".
+        numerator = 100 - 0 + 0 + 0 - 100 = 0; LP = 0/(0.01 - 1) = -0.0 -> "never".
         """
         assert isolated_liq_price(1, 1.0, 100.0, 100.0, self._ZERO) == 0.0
 

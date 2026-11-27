@@ -44,9 +44,7 @@ _VALID_DSL: dict[str, Any] = {"indicators": {"ema": {"type": "EMA", "period": 20
 
 
 @pytest.fixture()
-async def client(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> AsyncIterator[tuple[Any, ...]]:
+async def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[tuple[Any, ...]]:
     """A temp-DB app whose job manager's ``start_job`` is a counting fake."""
     app = create_app()
     state = StateManager(db_path=tmp_path / "test.db")
@@ -94,7 +92,9 @@ def _run_count(state: StateManager) -> int:
 
 
 @pytest.mark.parametrize("endpoint", ["screening", "validation"])
-async def test_unused_indicator_param_is_422_before_any_run(client: tuple[Any, ...], endpoint: str) -> None:
+async def test_unused_indicator_param_is_422_before_any_run(
+    client: tuple[Any, ...], endpoint: str
+) -> None:
     """P1/P2: an unused indicator param 422s with the save guard's text, no row, no job."""
     ac, state, start_job = client
     before = _run_count(state)

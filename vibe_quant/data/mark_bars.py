@@ -416,9 +416,7 @@ def _load_generation(
         if meta.get("layout") != _CACHE_LAYOUT or meta["signature"] != _signature_json(signature):
             return None
         length = int(meta["length"])
-        arrays = {
-            name: np.load(gen_dir / f"{name}.npy", mmap_mode="r") for name in _CACHE_ARRAYS
-        }
+        arrays = {name: np.load(gen_dir / f"{name}.npy", mmap_mode="r") for name in _CACHE_ARRAYS}
     except (OSError, ValueError, KeyError, TypeError) as e:
         if gen_dir.exists():
             logger.warning("Mark series cache read failed at %s (%s)", gen_dir, e)

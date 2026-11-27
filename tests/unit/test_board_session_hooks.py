@@ -71,10 +71,14 @@ def _run(cmd: str, tmp_path: Path, project: Path, **env: str) -> subprocess.Comp
         **env,
     }
     (tmp_path / "jobs").mkdir(exist_ok=True)
-    return subprocess.run(["bash", "-c", cmd], env=full, capture_output=True, text=True, timeout=120, check=False)
+    return subprocess.run(
+        ["bash", "-c", cmd], env=full, capture_output=True, text=True, timeout=120, check=False
+    )
 
 
-@pytest.mark.slow(reason="a cold `vb serve` start inside the hook + bus.py brief with git/bd context: ~2.5 s alone")
+@pytest.mark.slow(
+    reason="a cold `vb serve` start inside the hook + bus.py brief with git/bd context: ~2.5 s alone"
+)
 def test_session_start_on_a_cold_board_starts_it_then_prints_the_brief(tmp_path: Path) -> None:
     port = free_port()
     data = tmp_path / "data"
@@ -88,7 +92,13 @@ def test_session_start_on_a_cold_board_starts_it_then_prints_the_brief(tmp_path:
             BOARD_URL=env["BOARD_URL"], XDG_CONFIG_HOME=env["XDG_CONFIG_HOME"],
         )  # fmt: skip
     finally:
-        subprocess.run([*ctl.split(), "down", "--dir", str(data)], env=env, capture_output=True, timeout=60, check=False)
+        subprocess.run(
+            [*ctl.split(), "down", "--dir", str(data)],
+            env=env,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
     assert done.returncode == 0 and UNAVAILABLE not in done.stdout, done.stdout + done.stderr
     assert done.stdout.startswith("SWARM BOARD — shared memory") and "vb read kb/" in done.stdout
 
@@ -97,7 +107,9 @@ def test_session_start_prints_one_line_when_board_up_fails(tmp_path: Path) -> No
     """board-up.sh fails (port held by another program, no Node, ...) and nothing answers."""
     project = _project(tmp_path, "echo 'boardctl up: port 4100 is in use' >&2; exit 1")
     _active_job(tmp_path)
-    done = _run(_one("SessionStart", "board brief"), tmp_path, project, BOARD_URL=UNROUTABLE_BOARD_URL)
+    done = _run(
+        _one("SessionStart", "board brief"), tmp_path, project, BOARD_URL=UNROUTABLE_BOARD_URL
+    )
     assert (done.returncode, done.stdout, done.stderr) == (0, UNAVAILABLE + "\n", "")
 
 
@@ -105,19 +117,31 @@ def test_session_start_without_an_active_job_prints_one_pointer_line(tmp_path: P
     """12 board posts, most 30-41 days old, opened every session (retro 2026-11-27): outside a
     job the brief is one line; the board is still started for whoever needs it."""
     project = _project(tmp_path, f"touch {tmp_path}/board-up-ran")
-    done = _run(_one("SessionStart", "board brief"), tmp_path, project, BOARD_URL=UNROUTABLE_BOARD_URL)
+    done = _run(
+        _one("SessionStart", "board brief"), tmp_path, project, BOARD_URL=UNROUTABLE_BOARD_URL
+    )
     assert done.returncode == 0 and done.stderr == ""
-    assert done.stdout.startswith("SWARM BOARD: no job ledger touched in 48 h") and len(done.stdout.splitlines()) == 1
+    assert (
+        done.stdout.startswith("SWARM BOARD: no job ledger touched in 48 h")
+        and len(done.stdout.splitlines()) == 1
+    )
     assert (tmp_path / "board-up-ran").exists()
 
 
 def test_prompt_hook_prints_one_line_when_the_board_is_unreadable(tmp_path: Path) -> None:
     project = _project(tmp_path, "exit 1")
-    done = _run(_one("UserPromptSubmit", "pending --global"), tmp_path, project, BOARD_URL=UNROUTABLE_BOARD_URL)
+    done = _run(
+        _one("UserPromptSubmit", "pending --global"),
+        tmp_path,
+        project,
+        BOARD_URL=UNROUTABLE_BOARD_URL,
+    )
     assert (done.returncode, done.stdout, done.stderr) == (0, UNAVAILABLE + "\n", "")
 
 
-def test_prompt_hook_is_silent_with_no_ask_and_names_a_pending_one(board_server: BoardServer, tmp_path: Path) -> None:
+def test_prompt_hook_is_silent_with_no_ask_and_names_a_pending_one(
+    board_server: BoardServer, tmp_path: Path
+) -> None:
     project = _project(tmp_path, "exit 1")
     env = {
         "BOARD_URL": board_server.env["BOARD_URL"], "XDG_CONFIG_HOME": board_server.env["XDG_CONFIG_HOME"],
@@ -125,7 +149,12 @@ def test_prompt_hook_is_silent_with_no_ask_and_names_a_pending_one(board_server:
     }  # fmt: skip
     hook = _one("UserPromptSubmit", "pending --global")
     assert _run(hook, tmp_path, project, **env).stdout == ""
-    ask = _run(f"python3 {AGENTS / 'bus.py'} --as cc-x-1 post --to chief --kind question --body 'A or B'", tmp_path, project, **env)
+    ask = _run(
+        f"python3 {AGENTS / 'bus.py'} --as cc-x-1 post --to chief --kind question --body 'A or B'",
+        tmp_path,
+        project,
+        **env,
+    )
     assert ask.returncode == 0, ask.stderr
     done = _run(hook, tmp_path, project, **env)
     assert done.returncode == 0 and done.stderr == ""
@@ -140,4 +169,6 @@ def test_both_board_hooks_bound_each_board_request() -> None:
 
 
 def test_prompt_hook_names_the_chief_reply_command() -> None:
-    assert "UNANSWERED WORKER ASK (answer: bus.py --as chief reply --ref <id>): " in _one("UserPromptSubmit", "pending --global")
+    assert "UNANSWERED WORKER ASK (answer: bus.py --as chief reply --ref <id>): " in _one(
+        "UserPromptSubmit", "pending --global"
+    )

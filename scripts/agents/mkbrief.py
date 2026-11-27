@@ -205,7 +205,9 @@ _SPEC_KEEP = frozenset(
 )
 _BROAD_UNIT_GLOB = "tests/unit/**/*.py"
 _UNIT_TOP_GLOB = "tests/unit/*.py"
-_UNIT_HINT = f"glob {_BROAD_UNIT_GLOB} does not match top-level tests/unit files; add {_UNIT_TOP_GLOB}"
+_UNIT_HINT = (
+    f"glob {_BROAD_UNIT_GLOB} does not match top-level tests/unit files; add {_UNIT_TOP_GLOB}"
+)
 
 _PRIOR_CAP = 6000
 _HANDOFF_HEADING = re.compile(r"^##\s+handoff\s*$", re.IGNORECASE)
@@ -250,7 +252,9 @@ def parse_id(client_id: str) -> tuple[str, int]:
 
 
 def _checker_label(client_id: str) -> str:
-    return next((label for prefix, label in _CHECKER_TASK.items() if client_id.startswith(prefix)), "")
+    return next(
+        (label for prefix, label in _CHECKER_TASK.items() if client_id.startswith(prefix)), ""
+    )
 
 
 def thread_task(client_id: str) -> str:
@@ -282,9 +286,7 @@ def strip_leading_comment(text: str) -> str:
     return _BLANK_LINES_RE.sub("", text[match.end() :])
 
 
-def conditional_lines(
-    text: str, enabled: dict[str, bool]
-) -> tuple[str, list[str]]:
+def conditional_lines(text: str, enabled: dict[str, bool]) -> tuple[str, list[str]]:
     """Keep or drop lines ending in ``<!-- if TAG -->``; return (text, unknown tags).
 
     A kept line loses the tag. An unknown tag is returned rather than guessed at,
@@ -485,7 +487,9 @@ def prior_findings(paths: list[str]) -> tuple[str, list[str]]:
         text = "\n".join(entry[0] for entry in kept)
         cut = sum(1 for entry in dropped if entry[2])
         if cut:
-            sources = sorted({e[1] for e in dropped if e[2]}, key=[str(Path(raw)) for raw in paths].index)
+            sources = sorted(
+                {e[1] for e in dropped if e[2]}, key=[str(Path(raw)) for raw in paths].index
+            )
             text += f"\n(+{cut} findings cut: read {', '.join(sources)})"
         if len(text) <= _PRIOR_CAP or not any(entry[2] for entry in kept):
             return text, []
@@ -690,7 +694,18 @@ _FACT_CONTEXT_SKIP_RE = re.compile(
 )
 _FACT_ASSIGN_RE = re.compile(r"^[A-Z][A-Z0-9_]*=(.+)$")
 _FACT_LINE_SUFFIX_RE = re.compile(r":\d+(?:-\d+)?$")
-_FACT_PATH_SUFFIXES = (".py", ".md", ".ts", ".tsx", ".json", ".jsonl", ".sh", ".toml", ".yaml", ".yml")
+_FACT_PATH_SUFFIXES = (
+    ".py",
+    ".md",
+    ".ts",
+    ".tsx",
+    ".json",
+    ".jsonl",
+    ".sh",
+    ".toml",
+    ".yaml",
+    ".yml",
+)
 _FACT_PATH_FORBIDDEN = frozenset("*?[<{ \t")
 _NAME_SPAN_RE = re.compile(r"[A-Za-z_]\w*(?:\.\w+)*(?:\(\))?")
 _NAME_FILE_RE = re.compile(r"\.(?:py|md|ts|tsx|json|jsonl|sh|toml|ya?ml)$")
@@ -1024,7 +1039,14 @@ _CONTRACT_ROW_RE = re.compile(r"^\|[ \t]*(R\d+[a-z]?)[ \t]*\|")
 def task_section(lines: list[str], task: str) -> list[str] | None:
     """The design lines from ``task``'s header (``### Tn ...`` or ``**Tn ...``) up to the next
     heading or task header outside a fence, trailing blanks dropped; None when not found."""
-    start = next((i for i, line in enumerate(lines) if (m := _TASK_HEADER_RE.match(line)) and m.group(1) == task), None)
+    start = next(
+        (
+            i
+            for i, line in enumerate(lines)
+            if (m := _TASK_HEADER_RE.match(line)) and m.group(1) == task
+        ),
+        None,
+    )
     if start is None:
         return None
     end, in_fence = len(lines), False
@@ -1077,7 +1099,10 @@ def design_block(path: Path, tasks: Iterable[str]) -> tuple[str, list[str]]:
             if m := _CONTRACT_LINE_RE.match(line):
                 found, missing = named_rows(m.group(1), rows)
                 wanted |= found
-                problems += [f"--design {path}: task {task} names {r}, not in the contract table" for r in missing]
+                problems += [
+                    f"--design {path}: task {task} names {r}, not in the contract table"
+                    for r in missing
+                ]
     if problems:
         return "", problems
     parts = [f"DESIGN (verbatim from {path} — wins over any paraphrase above)", *sections]
@@ -1086,7 +1111,9 @@ def design_block(path: Path, tasks: Iterable[str]) -> tuple[str, list[str]]:
         top = first
         while top > 0 and lines[top - 1].startswith("|"):
             top -= 1
-        table = lines[top:first] + [lines[i] for r, i in sorted(rows.items(), key=lambda kv: kv[1]) if r in wanted]
+        table = lines[top:first] + [
+            lines[i] for r, i in sorted(rows.items(), key=lambda kv: kv[1]) if r in wanted
+        ]
         parts.append("\n".join(table))
     return "\n\n".join(parts), []
 
@@ -1102,7 +1129,11 @@ def word_budgets() -> dict[str, int]:
     except (OSError, SyntaxError):
         return {}
     for node in tree.body:
-        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "BUDGETS":
+        if (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "BUDGETS"
+        ):
             return dict(ast.literal_eval(node.value)) if node.value is not None else {}
     return {}
 
@@ -1195,9 +1226,7 @@ def _gate_module() -> Any:
     name = "_mkbrief_swarm_check"
     if name in sys.modules:
         return sys.modules[name]
-    spec = importlib.util.spec_from_file_location(
-        name, Path(__file__).with_name("swarm_check.py")
-    )
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name("swarm_check.py"))
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module  # its @dataclass decorators resolve via sys.modules
@@ -1252,7 +1281,7 @@ def stacked_candidates(worktree: Path) -> list[str]:
         merges = merges or len(parents.split()) > 1
         for entry in decoration.split(", "):
             if entry.startswith("HEAD -> "):
-                own = entry[len("HEAD -> "):]
+                own = entry[len("HEAD -> ") :]
                 entry = own
             if entry and entry != "HEAD":
                 tips[entry] = sha
@@ -1316,7 +1345,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--design", default="", metavar="FILE",
         help="architect design: append each --task section and its named contract rows verbatim",
     )  # fmt: skip
-    parser.add_argument("--task", action="append", default=[], metavar="Tn", help="design task id (repeatable)")
+    parser.add_argument(
+        "--task", action="append", default=[], metavar="Tn", help="design task id (repeatable)"
+    )
     parser.add_argument("--force", action="store_true", help="overwrite an existing brief")
     parser.add_argument(
         "--route",
@@ -1329,7 +1360,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 
 def _sibling(name: str) -> Any:
-    spec = importlib.util.spec_from_file_location(f"mkbrief_{name}", Path(__file__).with_name(f"{name}.py"))
+    spec = importlib.util.spec_from_file_location(
+        f"mkbrief_{name}", Path(__file__).with_name(f"{name}.py")
+    )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -1337,7 +1370,9 @@ def _sibling(name: str) -> Any:
     return module
 
 
-_PROFILE_RE = re.compile(r"[a-z][a-z0-9-]{0,31}")  # the board's profile rule: a worker posts as its id
+_PROFILE_RE = re.compile(
+    r"[a-z][a-z0-9-]{0,31}"
+)  # the board's profile rule: a worker posts as its id
 _BOARD_UP = "scripts/agents/board-up.sh"
 
 
@@ -1369,12 +1404,16 @@ def open_thread(
 
     Peers are resolved before anything is posted, so a typo writes nothing."""
     channel = f"{store.ns()}job/{store.job_slug(job.name)}"
-    keyed = store.ns() + job.name  # a board key is global per principal: tests' namespaces must not share one
+    keyed = (
+        store.ns() + job.name
+    )  # a board key is global per principal: tests' namespaces must not share one
     roots = [m for m in store.read_channel(channel) if not m.get("re") and not m.get("deleted")]
     found: list[str] = []
     problems: list[str] = []
     for peer in peers:
-        hit = next((m for m in roots if _labels(m).get("agent") == peer), None) or _task_root(roots, thread_task(peer))
+        hit = next((m for m in roots if _labels(m).get("agent") == peer), None) or _task_root(
+            roots, thread_task(peer)
+        )
         if hit is None:
             problems.append(f"peer {peer} has no thread in {channel} (render its brief first)")
         else:
@@ -1387,11 +1426,19 @@ def open_thread(
     if root is None:
         labels = {"task": task, "agent": args.id}
         labels.update({k: v for k, v in (("bead", args.bead), ("role", args.route)) if v})
-        root = store.post_raw(channel, f"{task}: {title}", labels=labels, profile="chief", key=f"thread:{keyed}:{task}")
+        root = store.post_raw(
+            channel,
+            f"{task}: {title}",
+            labels=labels,
+            profile="chief",
+            key=f"thread:{keyed}:{task}",
+        )
     root_id = str(root["id"])
     if _labels(root).get("agent") != args.id:  # a later round (or the first --force after a crash)
         round_no = parse_id(args.id)[1]
-        text = f"[round {round_no}] {args.id}" + (f": {goal}" if goal else "")  # no GOAL: the id alone
+        text = f"[round {round_no}] {args.id}" + (
+            f": {goal}" if goal else ""
+        )  # no GOAL: the id alone
         store.post_raw(None, text, profile="chief", re=root_id,
                        key=f"round:{keyed}:{args.id}")  # fmt: skip
         store.set_labels(root_id, {"agent": args.id})
@@ -1402,7 +1449,9 @@ def open_thread(
     return BoardThread(root_id, actor, ", ".join(found) or "none", task_root), []
 
 
-def dispatch(job: Path, args: argparse.Namespace, task: str, dispatch_text: str, thread: str = "") -> int:
+def dispatch(
+    job: Path, args: argparse.Namespace, task: str, dispatch_text: str, thread: str = ""
+) -> int:
     """--route: one ready-to-send dispatch line + a "rendered" ledger row (exit 2: no route).
 
     Both runtimes record the route in ``<job>/prompts/<id>.delegate.json``: the T3 call
@@ -1470,7 +1519,10 @@ def _board_failed(exc: SystemExit) -> int:
     """Exit 1 for ANY board failure during a render (FACTS enrichment, thread opening): one
     line naming board-up.sh; the caller has written nothing yet."""
     why = " ".join(str(exc.code).split())
-    print(f"mkbrief: no board thread opened, no brief written ({why}); start the board with {_BOARD_UP}", file=sys.stderr)
+    print(
+        f"mkbrief: no board thread opened, no brief written ({why}); start the board with {_BOARD_UP}",
+        file=sys.stderr,
+    )
     return 1
 
 
@@ -1499,10 +1551,15 @@ def _render_main(argv: list[str] | None = None) -> int:
     uses_thread = "THREAD" in template_keys  # R19: no {THREAD} anywhere, no board access at all
     values["BOARD_URL"] = os.environ.get("BOARD_URL") or _sibling("boardctl").default_url()
     if uses_thread:
-        values.update(THREAD="", TASK_THREAD="", CHIEF_ACTOR="")  # filled from the board once every check passed
+        values.update(
+            THREAD="", TASK_THREAD="", CHIEF_ACTOR=""
+        )  # filled from the board once every check passed
     flag_problems = [
         f"{flag} needs a template with a {{FACTS}} placeholder ({args.template} has none): its text would be dropped"
-        for flag, given in (("--facts-from", args.facts_from), ("--no-input-table", args.no_input_table))
+        for flag, given in (
+            ("--facts-from", args.facts_from),
+            ("--no-input-table", args.no_input_table),
+        )
         if given and "FACTS" not in template_keys
     ]
     if flag_problems:
@@ -1534,10 +1591,7 @@ def _render_main(argv: list[str] | None = None) -> int:
         values["SPEC"] = maker_spec_excerpt(values["SPEC"])
     if args.facts_from:
         beads = [
-            bead.strip()
-            for item in args.facts_from
-            for bead in item.split(",")
-            if bead.strip()
+            bead.strip() for item in args.facts_from for bead in item.split(",") if bead.strip()
         ]
         bead_text, bead_problems = facts_from_beads(beads)
         if bead_problems:
@@ -1654,7 +1708,10 @@ def _render_main(argv: list[str] | None = None) -> int:
     if args.worktree and not args.base and not args.review:
         candidates = stacked_candidates(Path(args.worktree).resolve())
         if candidates:
-            print(f"stacked worktree without .vq-base: pass --base <fork point> (e.g. {candidates[0].split()[1]})", file=sys.stderr)
+            print(
+                f"stacked worktree without .vq-base: pass --base <fork point> (e.g. {candidates[0].split()[1]})",
+                file=sys.stderr,
+            )
             for candidate in candidates:
                 print(f"  git merge-base candidate: {candidate}", file=sys.stderr)
             return 2
@@ -1662,12 +1719,13 @@ def _render_main(argv: list[str] | None = None) -> int:
     branch_problems: list[str] = []
     if args.worktree and base and rendered_globs and not args.review:
         try:
-            offenders = branch_scope_offenders(
-                Path(args.worktree).resolve(), base, rendered_globs
-            )
+            offenders = branch_scope_offenders(Path(args.worktree).resolve(), base, rendered_globs)
         except (subprocess.CalledProcessError, OSError) as exc:
             stderr = getattr(exc, "stderr", "") or str(exc)
-            print(f"git diff {base}...HEAD failed in {args.worktree}: {stderr.strip()}", file=sys.stderr)
+            print(
+                f"git diff {base}...HEAD failed in {args.worktree}: {stderr.strip()}",
+                file=sys.stderr,
+            )
             return 2
         branch_problems = [
             f"changed vs base {base} but matches no --scope glob: {path}" for path in offenders
@@ -1721,7 +1779,9 @@ def _render_main(argv: list[str] | None = None) -> int:
     if out_path.exists() and not args.force:
         problems.append(f"output file already exists: {out_path} (pass --force to overwrite)")
     if uses_thread and not _PROFILE_RE.fullmatch(args.id):
-        problems.append(f"--id {args.id} is no board profile ([a-z][a-z0-9-]{{0,31}}): the worker posts as its id")
+        problems.append(
+            f"--id {args.id} is no board profile ([a-z][a-z0-9-]{{0,31}}): the worker posts as its id"
+        )
     if problems:
         for problem in problems:
             print(problem, file=sys.stderr)
@@ -1730,9 +1790,15 @@ def _render_main(argv: list[str] | None = None) -> int:
     thread = ""
     if uses_thread:
         store = _sibling("board_store")
-        peers = [p.strip() for p in values["PEERS"].split(",") if p.strip() and values["PEERS"].strip().lower() != "none"]
+        peers = [
+            p.strip()
+            for p in values["PEERS"].split(",")
+            if p.strip() and values["PEERS"].strip().lower() != "none"
+        ]
         try:
-            goal = _first_line(values["GOAL"]) if "GOAL" in template_keys else ""  # none: the id names it
+            goal = (
+                _first_line(values["GOAL"]) if "GOAL" in template_keys else ""
+            )  # none: the id names it
             opened, peer_problems = open_thread(store, job, args, goal, peers)
         except SystemExit as exc:  # board_store exits on an unreachable or refusing board
             return _board_failed(exc)
@@ -1741,13 +1807,20 @@ def _render_main(argv: list[str] | None = None) -> int:
                 print(problem, file=sys.stderr)
             return 2
         thread = opened.root
-        values.update(THREAD=opened.root, TASK_THREAD=opened.task_root, CHIEF_ACTOR=opened.actor, PEERS=opened.peers)
+        values.update(
+            THREAD=opened.root,
+            TASK_THREAD=opened.task_root,
+            CHIEF_ACTOR=opened.actor,
+            PEERS=opened.peers,
+        )
     text = render(sources[0], values).rstrip("\n")
     for source in sources[1:]:
         text += "\n\n" + render(source, values).rstrip("\n")
     budget_lines = headroom_lines(args.worktree, rendered_globs)
     if budget_lines:  # after the checks, like the board lines: information, never validated
-        heading = "WORD BUDGETS (tests/unit/test_steering_budget.py; a commit over budget is refused):"
+        heading = (
+            "WORD BUDGETS (tests/unit/test_steering_budget.py; a commit over budget is refused):"
+        )
         text += "\n\n" + "\n".join([heading, *budget_lines])
     if design_text:
         text += "\n\n" + design_text

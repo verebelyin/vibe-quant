@@ -121,9 +121,7 @@ def test_table_guard_starts_running_with_the_gate_open() -> None:
     [(GuardState.RUNNING, GuardState.RUNNING), (GuardState.PAUSED, GuardState.PAUSED)],
     ids=["running", "paused"],
 )
-def test_table_guard_halt_from_running_or_paused(
-    start: GuardState, expected: GuardState
-) -> None:
+def test_table_guard_halt_from_running_or_paused(start: GuardState, expected: GuardState) -> None:
     """G1-G2: halt applies from RUNNING/PAUSED and remembers which state to return to."""
     guard, listener = _guard_in(start)
 
@@ -198,9 +196,7 @@ def test_table_guard_halt_replaces_a_halted_reason_only_when_more_severe(
 )
 def test_table_guard_pause(start: GuardState) -> None:
     """G7: pause is a no-op unless RUNNING; its default message is pinned."""
-    guard, listener = _guard_in(
-        start, HaltReason.MANUAL if start is GuardState.HALTED else None
-    )
+    guard, listener = _guard_in(start, HaltReason.MANUAL if start is GuardState.HALTED else None)
 
     applied = guard.pause()
 
@@ -379,9 +375,7 @@ def test_table_guard_daily_rollover(reason: HaltReason, lifts: bool) -> None:
         assert guard.guard_state is GuardState.RUNNING
         assert guard.halt_reason is None
         assert guard.message == "UTC day rollover to 2026-01-05"
-        assert _changes(listener) == [
-            (GuardState.RUNNING, None, "UTC day rollover to 2026-01-05")
-        ]
+        assert _changes(listener) == [(GuardState.RUNNING, None, "UTC day rollover to 2026-01-05")]
         return
     assert guard.guard_state is GuardState.HALTED
     assert guard.halt_reason is reason
@@ -389,7 +383,9 @@ def test_table_guard_daily_rollover(reason: HaltReason, lifts: bool) -> None:
     assert _changes(listener) == []
 
 
-@pytest.mark.parametrize("reason", [HaltReason.MANUAL, HaltReason.KILL_SWITCH], ids=lambda r: r.value)
+@pytest.mark.parametrize(
+    "reason", [HaltReason.MANUAL, HaltReason.KILL_SWITCH], ids=lambda r: r.value
+)
 def test_table_guard_restored_halt_at_construction(reason: HaltReason) -> None:
     """G15: a restored halt comes up HALTED with the prefixed message."""
     restored = RestoredHalt(reason, f"{RESTORED_HALT_PREFIX}halt via API", _ISO)
@@ -603,8 +599,12 @@ class _NodeResumeRow(NamedTuple):
 _NODE_RESUME_ROWS: list[_NodeResumeRow] = [
     # engaged wins over BOTH earlier returns that exist here: "already running"
     # (guard order) and "trading node not running" (pre-guard order).
-    _NodeResumeRow("engaged-before-already-running", NodeState.RUNNING, False, _ENGAGED_TEXT, engaged=True),
-    _NodeResumeRow("engaged-before-not-running", NodeState.INITIALIZING, False, _ENGAGED_TEXT, engaged=True),
+    _NodeResumeRow(
+        "engaged-before-already-running", NodeState.RUNNING, False, _ENGAGED_TEXT, engaged=True
+    ),
+    _NodeResumeRow(
+        "engaged-before-not-running", NodeState.INITIALIZING, False, _ENGAGED_TEXT, engaged=True
+    ),
     _NodeResumeRow("initializing", NodeState.INITIALIZING, False, _NOT_RUNNING),
     _NodeResumeRow("running", NodeState.RUNNING, True, _ALREADY_RUNNING),
     _NodeResumeRow("paused", NodeState.PAUSED, True, _RESUMED_FROM_PAUSE),
@@ -625,8 +625,12 @@ _NODE_RESUME_ROWS: list[_NodeResumeRow] = [
     _NodeResumeRow(
         "halted-manual", NodeState.HALTED, True, _RESUMED_FROM_HALT, reason=HaltReason.MANUAL
     ),
-    _NodeResumeRow("halted-error", NodeState.HALTED, True, _RESUMED_FROM_HALT, reason=HaltReason.ERROR),
-    _NodeResumeRow("halted-signal", NodeState.HALTED, True, _RESUMED_FROM_HALT, reason=HaltReason.SIGNAL),
+    _NodeResumeRow(
+        "halted-error", NodeState.HALTED, True, _RESUMED_FROM_HALT, reason=HaltReason.ERROR
+    ),
+    _NodeResumeRow(
+        "halted-signal", NodeState.HALTED, True, _RESUMED_FROM_HALT, reason=HaltReason.SIGNAL
+    ),
     _NodeResumeRow(
         "halted-kill-switch-from-paused",
         NodeState.HALTED,

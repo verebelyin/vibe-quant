@@ -120,7 +120,9 @@ def test_unverified_leverage_refused(where: str) -> None:
 
 def test_unverified_leverage_precedes_equity_checks() -> None:
     """An unknown leverage refuses BEFORE the equity checks, even with no equity."""
-    decision = _check([_item("500", None, "ETHUSDT-PERP.BINANCE")], [], _item("100", "10"), equity=None)
+    decision = _check(
+        [_item("500", None, "ETHUSDT-PERP.BINANCE")], [], _item("100", "10"), equity=None
+    )
     assert decision.allowed is False
     assert decision.reason == "leverage unverified for ETHUSDT-PERP.BINANCE"
 
@@ -208,9 +210,11 @@ def test_unique_pending_union() -> None:
     open_orders = [pending_cancel, only_open, reduce_only, excluded]
     inflight_orders = [pending_cancel, pending_update]
 
-    assert unique_pending_entries(
-        open_orders, inflight_orders, exclude_client_order_id="X1"
-    ) == [pending_cancel, only_open, pending_update]
+    assert unique_pending_entries(open_orders, inflight_orders, exclude_client_order_id="X1") == [
+        pending_cancel,
+        only_open,
+        pending_update,
+    ]
 
 
 def test_unique_pending_empty() -> None:

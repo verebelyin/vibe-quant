@@ -56,7 +56,9 @@ def _segments(command: str) -> list[str]:
         elif c == "<" and text.startswith("<<", i):
             m = _HEREDOC.match(text, i)
             if m:
-                pending.append((m.group(1) == "-", next(g for g in m.groups()[1:] if g is not None)))
+                pending.append(
+                    (m.group(1) == "-", next(g for g in m.groups()[1:] if g is not None))
+                )
                 cur.append(" ")
                 i = m.end() - 1
             else:

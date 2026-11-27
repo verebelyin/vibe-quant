@@ -228,8 +228,14 @@ def test_short_side_changes_dsl_body_key() -> None:
     dsl_a = chromosome_to_dsl(same_long_a)
     dsl_b = chromosome_to_dsl(same_long_b)
     # The long side is untouched by the different short side...
-    assert dsl_a["entry_conditions"]["long"] == dsl_b["entry_conditions"]["long"] == ["rsi_entry_0 < 30"]
-    assert dsl_a["exit_conditions"]["long"] == dsl_b["exit_conditions"]["long"] == ["rsi_exit_0 > 70"]
+    assert (
+        dsl_a["entry_conditions"]["long"]
+        == dsl_b["entry_conditions"]["long"]
+        == ["rsi_entry_0 < 30"]
+    )
+    assert (
+        dsl_a["exit_conditions"]["long"] == dsl_b["exit_conditions"]["long"] == ["rsi_exit_0 > 70"]
+    )
     # ...and the literal short conditions differ.
     assert dsl_a["entry_conditions"]["short"] == ["rsi_short_entry_0 > 70"]
     assert dsl_b["entry_conditions"]["short"] == ["rsi_short_entry_0 > 80"]

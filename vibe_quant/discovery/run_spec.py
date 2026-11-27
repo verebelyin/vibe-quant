@@ -808,8 +808,12 @@ class DiscoveryRunSpec:
         # launch keeps its argv byte-identical to today (bead vibe-quant-2gyk1.2, S27).
         sizing_params = body.sizing_settings().to_params()
         for dest in (
-            "max_position_pct", "risk_per_trade", "max_margin_pct",
-            "sizing_mode", "sizing_atr_period", "sizing_atr_multiplier",
+            "max_position_pct",
+            "risk_per_trade",
+            "max_margin_pct",
+            "sizing_mode",
+            "sizing_atr_period",
+            "sizing_atr_multiplier",
         ):
             if dest in sizing_params:
                 _give(dest, sizing_params[dest])
@@ -906,8 +910,7 @@ class DiscoveryRunSpec:
                     float(item) for item in _csv_items(cast("str", self.bankroll_leverages))
                 ],
                 "max_margin_pcts": [
-                    float(item)
-                    for item in _csv_items(cast("str", self.bankroll_max_margin_pcts))
+                    float(item) for item in _csv_items(cast("str", self.bankroll_max_margin_pcts))
                 ],
             }
         return params
@@ -1263,7 +1266,9 @@ def symbol_agg_launch_problems(
     if evaluator != "nt":
         problems.append("symbol_agg=pooled needs --evaluator nt")
     if mock:
-        problems.append("symbol_agg=pooled cannot run with --mock (the mock has no per-coin accounts)")
+        problems.append(
+            "symbol_agg=pooled cannot run with --mock (the mock has no per-coin accounts)"
+        )
     return problems
 
 
@@ -1405,7 +1410,11 @@ def check_launch_port(parser: argparse.ArgumentParser, args: argparse.Namespace)
             "the --bankroll-* grid",
             any(
                 flag is not None
-                for flag in (args.bankroll_modes, args.bankroll_leverages, args.bankroll_max_margin_pcts)
+                for flag in (
+                    args.bankroll_modes,
+                    args.bankroll_leverages,
+                    args.bankroll_max_margin_pcts,
+                )
             ),
         ),
     )
@@ -1437,7 +1446,9 @@ def check_port_timeframes_fixed(port: Port) -> None:
     fields: list[object] = [tree.get("timeframe"), tree.get("additional_timeframes")]
     indicators = tree.get("indicators")
     if isinstance(indicators, Mapping):
-        fields.extend(spec.get("timeframe") for spec in indicators.values() if isinstance(spec, Mapping))
+        fields.extend(
+            spec.get("timeframe") for spec in indicators.values() if isinstance(spec, Mapping)
+        )
     if any(_has_placeholder(value) for value in fields):
         raise PortError("port parameters may not change timeframes")
 

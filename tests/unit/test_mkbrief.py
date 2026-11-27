@@ -188,7 +188,9 @@ def test_review_mode_pins_merge_base_after_parent_moves(
     assert f"BASE_SHA: {fork}" in text
     assert f"HEAD_SHA: {head}" in text
     assert f"RANGE: {fork}..{head}" in text
-    assert f"REVIEW_PACK: python3 scripts/agents/review_pack.py {repo} --range {fork}..{head}" in text
+    assert (
+        f"REVIEW_PACK: python3 scripts/agents/review_pack.py {repo} --range {fork}..{head}" in text
+    )
     assert parent_tip not in text
 
 
@@ -220,7 +222,9 @@ def _commit(repo: Path, fname: str) -> str:
     return _git(repo, "rev-parse", "HEAD")
 
 
-def test_stacked_worktree_without_base_fails(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_stacked_worktree_without_base_fails(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     repo = _repo(tmp_path)
     _git(repo, "checkout", "-qb", "swarm/a")
     a_tip = _commit(repo, "a1.py")
@@ -287,11 +291,17 @@ def board(board_server: BoardServer, monkeypatch: pytest.MonkeyPatch) -> BoardSe
 
 
 def _board_render(
-    tmp_path: Path, request_id: str, goal: str = "ship the board", extra: list[str] | None = None,
+    tmp_path: Path,
+    request_id: str,
+    goal: str = "ship the board",
+    extra: list[str] | None = None,
     template: str = _GOAL_TEMPLATE,
 ) -> int:
-    argv = _argv(_job(tmp_path) if not (tmp_path / "job").exists() else tmp_path / "job",
-                 _template(tmp_path, template), request_id=request_id)
+    argv = _argv(
+        _job(tmp_path) if not (tmp_path / "job").exists() else tmp_path / "job",
+        _template(tmp_path, template),
+        request_id=request_id,
+    )
     argv += ["--set", f"GOAL={goal}", "--append", str(_BOARD_PROTO), *(extra or [])]
     rc: int = mkbrief.main(argv)
     return rc
@@ -320,16 +330,29 @@ def _ask_and_wait(commands: list[str]) -> tuple[str, str, str]:
 
 
 def _sh(shell: str, script: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([shell, "-c", script], env=env, capture_output=True, text=True, timeout=120, check=False)
+    return subprocess.run(
+        [shell, "-c", script], env=env, capture_output=True, text=True, timeout=120, check=False
+    )
 
 
 def _seed_kb(board: BoardServer) -> None:
     """`vb read kb/ ...` needs a kb channel: the real board has one from the import."""
-    out = board.vb("post", "kb/gotchas", "RULE: seed", "--label", "state=live", "--idempotency-key", "seed-kb", profile="chief")
+    out = board.vb(
+        "post",
+        "kb/gotchas",
+        "RULE: seed",
+        "--label",
+        "state=live",
+        "--idempotency-key",
+        "seed-kb",
+        profile="chief",
+    )
     assert out.returncode == 0, out.stderr
 
 
-@pytest.mark.slow(reason="every block command as a real vb process (~0.2 s each) in a real bash/zsh")
+@pytest.mark.slow(
+    reason="every block command as a real vb process (~0.2 s each) in a real bash/zsh"
+)
 @pytest.mark.parametrize("shell", ["/bin/bash", "/bin/zsh"])
 def test_every_board_block_command_runs_unchanged(
     tmp_path: Path, board: BoardServer, shell: str
@@ -341,7 +364,11 @@ def test_every_board_block_command_runs_unchanged(
     whole, ask, wait = _ask_and_wait(commands)
     assert len(commands) == 6, commands
     lines = [export, *(f'{c} >/dev/null; echo "rc=$?"' for c in commands if c != whole)]
-    lines += [ask, "BOARD_PROFILE=chief vb reply \"$q\" 'take a' >/dev/null", f'{wait}; echo "rc=$?"']
+    lines += [
+        ask,
+        "BOARD_PROFILE=chief vb reply \"$q\" 'take a' >/dev/null",
+        f'{wait}; echo "rc=$?"',
+    ]
 
     out = _sh(shell, "\n".join(lines), board.env)
 
@@ -364,7 +391,9 @@ def test_prior_from_pastes_findings_written_outside_open(tmp_path: Path) -> None
     assert "fixture change is not selected." in text
 
 
-def test_a_reviewer_posts_findings_in_the_reviewed_task_thread(tmp_path: Path, board: BoardServer) -> None:
+def test_a_reviewer_posts_findings_in_the_reviewed_task_thread(
+    tmp_path: Path, board: BoardServer
+) -> None:
     """The user follows a task in its own thread: a reviewer's [finding] replies go there."""
     assert _board_render(tmp_path, "cc-dash-1") == 0
     maker_thread = re.search(r"Your thread is (\d+)", _brief(tmp_path, "cc-dash-1"))
@@ -388,7 +417,9 @@ def test_verifier_gate_has_no_bus_and_generated_client_needs_no_input_table(tmp_
     assert "--bus" not in verifier and "--full" in verifier
     generated = "frontend/src/api/generated/models/validationResult.ts"
     router = "vibe_quant/dsl/validator.py"
-    assert mkbrief._input_table_scope_paths(["frontend/src/api/generated/**", router], [generated]) == [router]
+    assert mkbrief._input_table_scope_paths(
+        ["frontend/src/api/generated/**", router], [generated]
+    ) == [router]
 
 
 # --- --design --task: the architect's task section and contract rows, verbatim ------------------
@@ -423,7 +454,12 @@ def test_design_task_appends_its_section_and_named_rows_verbatim(tmp_path: Path)
     design = tmp_path / "design.md"
     design.write_text(_DESIGN)
     job = _job(tmp_path)
-    argv = _argv(job, _template(tmp_path), worktree=_repo(tmp_path), extra=["--design", str(design), "--task", "T2"])
+    argv = _argv(
+        job,
+        _template(tmp_path),
+        worktree=_repo(tmp_path),
+        extra=["--design", str(design), "--task", "T2"],
+    )
     assert mkbrief.main(argv) == 0
     text = (job / "prompts" / "cc-rd-demo-1.md").read_text()
     assert text.endswith(
@@ -450,7 +486,12 @@ def test_design_task_refuses_a_missing_header_or_row(
     design = tmp_path / "design.md"
     design.write_text(_DESIGN.replace("R2–R3, R4 (TS)", contract))
     job = _job(tmp_path)
-    argv = _argv(job, _template(tmp_path), worktree=_repo(tmp_path), extra=["--design", str(design), "--task", task])
+    argv = _argv(
+        job,
+        _template(tmp_path),
+        worktree=_repo(tmp_path),
+        extra=["--design", str(design), "--task", task],
+    )
     assert mkbrief.main(argv) == 2
     assert needle in capsys.readouterr().err
     assert not (job / "prompts" / "cc-rd-demo-1.md").exists()
@@ -465,7 +506,10 @@ def test_a_budgeted_scope_file_gets_its_word_headroom(tmp_path: Path) -> None:
     (repo / "docs" / "claude").mkdir(parents=True)
     (repo / "docs" / "claude" / "engine-modes.md").write_text("one two\nthree\n")
     job = _job(tmp_path)
-    assert mkbrief.main(_argv(job, _template(tmp_path), scope="a.py,docs/claude/*.md", worktree=repo)) == 0
+    assert (
+        mkbrief.main(_argv(job, _template(tmp_path), scope="a.py,docs/claude/*.md", worktree=repo))
+        == 0
+    )
     budget = BUDGETS["docs/claude/engine-modes.md"]
     text = (job / "prompts" / "cc-rd-demo-1.md").read_text()
     assert f"- docs/claude/engine-modes.md: 3/{budget} words (headroom {budget - 3})\n" in text

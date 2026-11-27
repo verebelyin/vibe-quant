@@ -219,9 +219,7 @@ async def test_discovery_fill_tick_gap_is_422_without_a_run_row(
         f"last tick 1791417719999000000 < end-tf {_FILL_HINT}"
     )
     # The window is the request's span and the timeframe is the 1d tick set.
-    assert resolved == [
-        ([symbol], "1d", "2024-01-01", "2025-01-01", _tmp_catalog)
-    ]
+    assert resolved == [([symbol], "1d", "2024-01-01", "2025-01-01", _tmp_catalog)]
     assert popen.call_count == 0
     assert job_mgr.list_active_jobs() == []
     assert _run_count(state) == 0
@@ -279,7 +277,9 @@ async def test_discovery_with_covered_data_launches_201(
         r = await ac.post("/api/discovery/launch", json=_DISCOVERY)
 
     assert r.status_code == 201, r.text
-    assert resolved == [(["BTCUSDT"], "4h", "2024-01-01", "2025-01-01", data_precheck.DEFAULT_CATALOG_PATH)]
+    assert resolved == [
+        (["BTCUSDT"], "4h", "2024-01-01", "2025-01-01", data_precheck.DEFAULT_CATALOG_PATH)
+    ]
     assert popen.call_count == 1
     assert _run_count(state) == 1
 
@@ -437,7 +437,9 @@ async def test_existing_422s_win_over_the_data_precheck(
 
     monkeypatch.setattr(fill_ticks_mod, "resolve_fill_ticks", _raise)
     with _PopenPatch(job_mgr):
-        r_data = await ac.post("/api/backtest/screening", json=_screen_body(state, _DSL_4H, name="order_ok"))
+        r_data = await ac.post(
+            "/api/backtest/screening", json=_screen_body(state, _DSL_4H, name="order_ok")
+        )
     assert r_data.status_code == 422, r_data.text
     assert "fill ticks for BTCUSDT 4h" in r_data.json()["detail"]
     assert _run_count(state) == 0

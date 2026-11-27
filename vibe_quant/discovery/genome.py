@@ -63,7 +63,9 @@ def genome_direction(genome: Genome) -> Literal["long", "short", "both"]:
     """The side(s) a genome trades: a legacy chromosome's gene, a param genome's rendered DSL."""
     if isinstance(genome, ParamGenome):
         entry = genome.to_dsl().get("entry_conditions")
-        sides = {side for side, rules in entry.items() if rules} if isinstance(entry, dict) else set()
+        sides = (
+            {side for side, rules in entry.items() if rules} if isinstance(entry, dict) else set()
+        )
         if sides == {"long"}:
             return "long"
         if sides == {"short"}:
@@ -82,7 +84,9 @@ def genome_direction(genome: Genome) -> Literal["long", "short", "both"]:
 def genome_summary(genome: Genome) -> str:
     """One-line description for logs."""
     if isinstance(genome, ParamGenome):
-        values = " ".join(f"{param.name}={genome.values[param.name]}" for param in genome.port.params)
+        values = " ".join(
+            f"{param.name}={genome.values[param.name]}" for param in genome.port.params
+        )
         return f"port={genome.port.name} {values}"
     direction = genome.direction.value if hasattr(genome.direction, "value") else genome.direction
     exits = (
@@ -725,27 +729,21 @@ def chromosome_to_dsl(chrom: Genome) -> dict[str, object]:
     if direction != Direction.BOTH and has_short_genes:
         msg = f"short-side genes are only valid for direction=both (got {direction.value})"
         raise ValueError(msg)
-    if direction == Direction.BOTH and (
-        not chrom.short_entry_genes or not chrom.short_exit_genes
-    ):
+    if direction == Direction.BOTH and (not chrom.short_entry_genes or not chrom.short_exit_genes):
         msg = (
             "direction=both needs short_entry_genes and short_exit_genes "
             f"(got {len(chrom.short_entry_genes)} entry, {len(chrom.short_exit_genes)} exit)"
         )
         raise ValueError(msg)
 
-    def _emit_scalar_genes(
-        genes: list[StrategyGene], slot: str, target: list[str]
-    ) -> None:
+    def _emit_scalar_genes(genes: list[StrategyGene], slot: str, target: list[str]) -> None:
         """Register each scalar gene's indicator and append its DSL condition."""
         for i, gene in enumerate(genes):
             ind_name = _gene_indicator_name(gene, i, slot)
             indicators[ind_name] = _gene_to_indicator_config(gene)
             target.append(_gene_to_condition_str(gene, ind_name))
 
-    def _emit_ma_gene(
-        ma_gene: PriceVsMAConditionGene, slot: str, idx: int
-    ) -> str:
+    def _emit_ma_gene(ma_gene: PriceVsMAConditionGene, slot: str, idx: int) -> str:
         """Register indicator(s) for an MA gene and return its DSL condition."""
         base = f"{ma_gene.indicator_type.lower()}_ma_{slot}_{idx}"
         if ma_gene.parameters_slow is None:
@@ -763,9 +761,7 @@ def chromosome_to_dsl(chrom: Genome) -> dict[str, object]:
         )
         return _ma_cross_gene_to_condition_str(ma_gene, fast_name, slow_name)
 
-    def _emit_ma_genes(
-        genes: list[PriceVsMAConditionGene], slot: str, target: list[str]
-    ) -> None:
+    def _emit_ma_genes(genes: list[PriceVsMAConditionGene], slot: str, target: list[str]) -> None:
         for i, ma_gene in enumerate(genes):
             target.append(_emit_ma_gene(ma_gene, slot, i))
 
@@ -823,13 +819,25 @@ def chromosome_to_dsl(chrom: Genome) -> dict[str, object]:
     # Per-direction SL/TP overrides (only for BOTH direction)
     elif direction == Direction.BOTH:
         if chrom.stop_loss_long_pct is not None:
-            dsl["stop_loss_long"] = {"type": "fixed_pct", "percent": round(chrom.stop_loss_long_pct, 2)}
+            dsl["stop_loss_long"] = {
+                "type": "fixed_pct",
+                "percent": round(chrom.stop_loss_long_pct, 2),
+            }
         if chrom.stop_loss_short_pct is not None:
-            dsl["stop_loss_short"] = {"type": "fixed_pct", "percent": round(chrom.stop_loss_short_pct, 2)}
+            dsl["stop_loss_short"] = {
+                "type": "fixed_pct",
+                "percent": round(chrom.stop_loss_short_pct, 2),
+            }
         if chrom.take_profit_long_pct is not None:
-            dsl["take_profit_long"] = {"type": "fixed_pct", "percent": round(chrom.take_profit_long_pct, 2)}
+            dsl["take_profit_long"] = {
+                "type": "fixed_pct",
+                "percent": round(chrom.take_profit_long_pct, 2),
+            }
         if chrom.take_profit_short_pct is not None:
-            dsl["take_profit_short"] = {"type": "fixed_pct", "percent": round(chrom.take_profit_short_pct, 2)}
+            dsl["take_profit_short"] = {
+                "type": "fixed_pct",
+                "percent": round(chrom.take_profit_short_pct, 2),
+            }
 
     # Time filters (optional)
     if chrom.time_filters:
@@ -872,7 +880,9 @@ def chromosome_to_serializable(chrom: Genome) -> dict[str, object]:
         "exit_genes": [_gene_dict(g) for g in chrom.exit_genes],
         "stop_loss_pct": chrom.stop_loss_pct,
         "take_profit_pct": chrom.take_profit_pct,
-        "direction": chrom.direction.value if hasattr(chrom.direction, "value") else str(chrom.direction),
+        "direction": chrom.direction.value
+        if hasattr(chrom.direction, "value")
+        else str(chrom.direction),
     }
     if chrom.ma_entry_genes:
         d["ma_entry_genes"] = [_ma_gene_dict(g) for g in chrom.ma_entry_genes]
@@ -917,11 +927,7 @@ def serializable_to_chromosome(d: dict[str, object]) -> StrategyChromosome:
     def _params_map(raw: object) -> dict[str, float]:
         if not isinstance(raw, dict):
             return {}
-        return {
-            str(k): float(v)
-            for k, v in raw.items()
-            if isinstance(v, (int, float, str))
-        }
+        return {str(k): float(v) for k, v in raw.items() if isinstance(v, (int, float, str))}
 
     def _gene_dicts(raw: object) -> list[dict[str, object]]:
         if not isinstance(raw, list):
@@ -987,9 +993,7 @@ def serializable_to_chromosome(d: dict[str, object]) -> StrategyChromosome:
     short_ma_entry_genes = [
         _parse_ma_gene(g) for g in _gene_dicts(d.get("short_ma_entry_genes", []))
     ]
-    short_ma_exit_genes = [
-        _parse_ma_gene(g) for g in _gene_dicts(d.get("short_ma_exit_genes", []))
-    ]
+    short_ma_exit_genes = [_parse_ma_gene(g) for g in _gene_dicts(d.get("short_ma_exit_genes", []))]
 
     tf_raw = d.get("time_filters")
     time_filters: dict[str, object] = dict(tf_raw) if tf_raw and isinstance(tf_raw, dict) else {}
@@ -1008,10 +1012,18 @@ def serializable_to_chromosome(d: dict[str, object]) -> StrategyChromosome:
         stop_loss_pct=float(d.get("stop_loss_pct", 2.0)),  # type: ignore[arg-type]
         take_profit_pct=float(d.get("take_profit_pct", 3.0)),  # type: ignore[arg-type]
         direction=direction,
-        stop_loss_long_pct=float(d["stop_loss_long_pct"]) if d.get("stop_loss_long_pct") is not None else None,  # type: ignore[arg-type]
-        stop_loss_short_pct=float(d["stop_loss_short_pct"]) if d.get("stop_loss_short_pct") is not None else None,  # type: ignore[arg-type]
-        take_profit_long_pct=float(d["take_profit_long_pct"]) if d.get("take_profit_long_pct") is not None else None,  # type: ignore[arg-type]
-        take_profit_short_pct=float(d["take_profit_short_pct"]) if d.get("take_profit_short_pct") is not None else None,  # type: ignore[arg-type]
+        stop_loss_long_pct=float(d["stop_loss_long_pct"])  # type: ignore[arg-type]
+        if d.get("stop_loss_long_pct") is not None
+        else None,
+        stop_loss_short_pct=float(d["stop_loss_short_pct"])  # type: ignore[arg-type]
+        if d.get("stop_loss_short_pct") is not None
+        else None,
+        take_profit_long_pct=float(d["take_profit_long_pct"])  # type: ignore[arg-type]
+        if d.get("take_profit_long_pct") is not None
+        else None,
+        take_profit_short_pct=float(d["take_profit_short_pct"])  # type: ignore[arg-type]
+        if d.get("take_profit_short_pct") is not None
+        else None,
         time_filters=time_filters,
         ma_entry_genes=ma_entry_genes,
         ma_exit_genes=ma_exit_genes,

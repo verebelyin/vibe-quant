@@ -174,16 +174,29 @@ def _seed_pipeline_run(
     sm = StateManager(db)
     sid = sm.create_strategy("s", {"timeframe": "4h", "indicators": {}})
     rid = sm.create_backtest_run(
-        sid, "screening", ["BTCUSDT"], "4h", "2022-01-01", "2024-12-31",
+        sid,
+        "screening",
+        ["BTCUSDT"],
+        "4h",
+        "2022-01-01",
+        "2024-12-31",
         parameters or {"liquidation_mode": "isolated", "leverage": 20},
     )
     sm.save_sweep_results_batch(
         rid,
         [
-            {"parameters": {"rsi_period": 14}, "sharpe_ratio": 2.0, "total_return": 0.3,
-             "total_trades": 100},
-            {"parameters": {"rsi_period": 2}, "sharpe_ratio": 1.9, "total_return": 0.3,
-             "total_trades": 100},
+            {
+                "parameters": {"rsi_period": 14},
+                "sharpe_ratio": 2.0,
+                "total_return": 0.3,
+                "total_trades": 100,
+            },
+            {
+                "parameters": {"rsi_period": 2},
+                "sharpe_ratio": 1.9,
+                "total_return": 0.3,
+                "total_trades": 100,
+            },
         ],
     )
     sm.close()
@@ -195,9 +208,7 @@ def _wfa_only_config() -> FilterConfig:
         enable_dsr=False,
         enable_wfa=True,
         enable_purged_kfold=False,
-        wfa_config=WFAConfig(
-            in_sample_days=30, out_of_sample_days=10, step_days=5, min_windows=1
-        ),
+        wfa_config=WFAConfig(in_sample_days=30, out_of_sample_days=10, step_days=5, min_windows=1),
     )
 
 
@@ -218,9 +229,7 @@ def test_wfa_integrity_error_propagates(tmp_path: Path) -> None:
     """I11: mode on -> the WFA filter re-raises; the CLI then exits non-zero."""
     from vibe_quant.overfitting.pipeline import OverfittingPipeline
 
-    exc = LiquidationIntegrityError(
-        "liquidation_mode='isolated': MarkDataMissing: BTCUSDT"
-    )
+    exc = LiquidationIntegrityError("liquidation_mode='isolated': MarkDataMissing: BTCUSDT")
     db, rid = _seed_pipeline_run(tmp_path)
     pipeline = OverfittingPipeline(db, wfa_runner=_RaisingRunner(exc))
     try:
@@ -343,9 +352,7 @@ def test_cli_run_real_wfa_reports_integrity_error_as_an_operator_error(
     import vibe_quant.overfitting.__main__ as cli
     import vibe_quant.overfitting.nt_runner as ntr
 
-    exc = LiquidationIntegrityError(
-        "liquidation_mode='isolated': MarkDataMissing: BTCUSDT"
-    )
+    exc = LiquidationIntegrityError("liquidation_mode='isolated': MarkDataMissing: BTCUSDT")
     db, rid = _seed_pipeline_run(tmp_path)
     state = StateManager(db)
     status_before = state.get_backtest_run_status(rid)
@@ -355,14 +362,21 @@ def test_cli_run_real_wfa_reports_integrity_error_as_an_operator_error(
     code = cli.main(
         [
             "run",
-            "--run-id", str(rid),
-            "--db", str(db),
-            "--filters", "wfa",
+            "--run-id",
+            str(rid),
+            "--db",
+            str(db),
+            "--filters",
+            "wfa",
             "--real-wfa",
-            "--wfa-is-days", "30",
-            "--wfa-oos-days", "10",
-            "--wfa-step-days", "5",
-            "--wfa-min-windows", "1",
+            "--wfa-is-days",
+            "30",
+            "--wfa-oos-days",
+            "10",
+            "--wfa-step-days",
+            "5",
+            "--wfa-min-windows",
+            "1",
         ]
     )
     captured = capsys.readouterr()
@@ -430,7 +444,5 @@ def test_auto_screen_imports_no_liquidation_package() -> None:
         "if m == 'vibe_quant.liquidation' or m.startswith('vibe_quant.liquidation.')); "
         "print(bad); sys.exit(1 if bad else 0)"
     )
-    out = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True, check=False
-    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
     assert out.returncode == 0, out.stdout + out.stderr

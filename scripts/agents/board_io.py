@@ -69,8 +69,21 @@ PERSISTENT = "persistent"  # Row.source of a persistent-board row; job rows carr
 _MSG_KEYS = frozenset(("id", "from", "to", "kind", "body"))  # what bus.py's readers deliver
 #: The old message fields verify compares, each one read back through board_store.read.
 FIELDS = (
-    "id", "ts", "from", "to", "kind", "body", "topic", "ref", "job", "importance",
-    "retires", "reason", "supersedes", "user_answer", "by",
+    "id",
+    "ts",
+    "from",
+    "to",
+    "kind",
+    "body",
+    "topic",
+    "ref",
+    "job",
+    "importance",
+    "retires",
+    "reason",
+    "supersedes",
+    "user_answer",
+    "by",
 )
 _HASHED = frozenset(("body", "reason"))  # shown as length + hash in a mismatch, never as text
 
@@ -100,10 +113,26 @@ SEARCH_TOP_LEVEL = bs.TOP_TOPICS
 #: verify's default search words: the 20 file basenames most often named in persistent-board
 #: posts (counted 2026-11-20 over to=board bodies).
 DEFAULT_QUERIES = (
-    "node.py", "reviewer.md", "nt_runner.py", "mutate.py", "swarm_check.py", "pipeline.py",
-    "__main__.py", "architect.md", "exactness_239.py", "templates.py", "guard.py", "CLAUDE.md",
-    "discovery.py", "schema.py", "SPEC.md", "reviewer-lite.md", "conftest.py", "extraction.py",
-    "risk-officer.md", "bus.py",
+    "node.py",
+    "reviewer.md",
+    "nt_runner.py",
+    "mutate.py",
+    "swarm_check.py",
+    "pipeline.py",
+    "__main__.py",
+    "architect.md",
+    "exactness_239.py",
+    "templates.py",
+    "guard.py",
+    "CLAUDE.md",
+    "discovery.py",
+    "schema.py",
+    "SPEC.md",
+    "reviewer-lite.md",
+    "conftest.py",
+    "extraction.py",
+    "risk-officer.md",
+    "bus.py",
 )
 
 
@@ -151,7 +180,8 @@ def load_rows(persistent: Path, jobs_root: Path, limit_jobs: int | None = None) 
     """Persistent rows, then each job bus (sorted by job name; `_*` dirs skipped), file order."""
     rows = [Row(r, PERSISTENT) for r in _read_jsonl(persistent)]
     jobs = sorted(
-        d for d in jobs_root.iterdir()
+        d
+        for d in jobs_root.iterdir()
         if d.is_dir() and not d.name.startswith("_") and (d / "bus" / "messages.jsonl").is_file()
     )
     for job in jobs if limit_jobs is None else jobs[:limit_jobs]:
@@ -268,7 +298,9 @@ def _derived_states(rows: list[dict[str, object]]) -> dict[str, tuple[str, str |
     return out
 
 
-def export_rows(raw: list[Raw], targets: Mapping[str, Raw], prefix: str = "") -> list[dict[str, object]]:
+def export_rows(
+    raw: list[Raw], targets: Mapping[str, Raw], prefix: str = ""
+) -> list[dict[str, object]]:
     """Global-view board messages (deleted skipped) -> export rows, by ``ts``, ties in the
     board's own read order (``createdAt``, as board_store.read orders; chief ruling: board ids
     are opaque, never compared). Board B imported from the file reads back in file order.
@@ -280,7 +312,9 @@ def export_rows(raw: list[Raw], targets: Mapping[str, Raw], prefix: str = "") ->
         hit = by_id.get(board_id)
         return export_id(hit) if hit is not None else board_id  # an orphan label keeps its text
 
-    live = sorted((m for m in raw if not m.get("deleted")), key=lambda m: str(m.get("createdAt") or ""))
+    live = sorted(
+        (m for m in raw if not m.get("deleted")), key=lambda m: str(m.get("createdAt") or "")
+    )
     rows: list[dict[str, object]] = []
     for m, msg in zip(live, bs.map_messages(live, {**targets, **by_id}, prefix), strict=True):
         lab = _labels(m)
@@ -316,8 +350,13 @@ def render(rows: list[dict[str, object]]) -> str:
 def secret_ids(rows: list[dict[str, object]]) -> list[str]:
     """Ids of rows whose body or reason the write path's secret scan would refuse."""
     return [
-        str(r["id"]) for r in rows
-        if any(boardctl.looks_like_secret(str(r[k])) for k in ("body", "reason", "state_reason") if r.get(k))
+        str(r["id"])
+        for r in rows
+        if any(
+            boardctl.looks_like_secret(str(r[k]))
+            for k in ("body", "reason", "state_reason")
+            if r.get(k)
+        )
     ]
 
 
@@ -384,7 +423,9 @@ class _Run:
     def post(self, row: Row) -> None:
         p = plan(row, self.lookup(row))
         try:
-            msg = bs.post_raw(p.channel, p.text, labels=p.labels, profile=p.profile, re=p.re, key=p.key)
+            msg = bs.post_raw(
+                p.channel, p.text, labels=p.labels, profile=p.profile, re=p.re, key=p.key
+            )
         except SystemExit as exc:  # post_raw's refusals: 2 = secret scan, else the board's reason
             if exc.code == 2:
                 self.secret.append(row.id)
@@ -393,8 +434,16 @@ class _Run:
             return  # a refused key is reported, never re-posted under another key
         new = str(msg["id"])
         where = msg.get("replyTo") or msg.get("re") if p.re else msg.get("channel")
-        if msg.get("text") != p.text or _labels(msg).get("legacy-id") != row.id or where != (p.re or p.channel):
-            self.reject(row, "key-reused", f"key {p.key} answers board message {new} with another text, legacy-id or place")
+        if (
+            msg.get("text") != p.text
+            or _labels(msg).get("legacy-id") != row.id
+            or where != (p.re or p.channel)
+        ):
+            self.reject(
+                row,
+                "key-reused",
+                f"key {p.key} answers board message {new} with another text, legacy-id or place",
+            )
         if new in self.raw:
             self.remapped += 1  # the key answered a message already on the board (resume)
         else:
@@ -413,16 +462,25 @@ class _Run:
         new = self.idmap[row.id]
         lookup = self.lookup(row)
         old = lookup.get(str(row.get("supersedes")))
-        if old is not None and _labels(old).get("state") in ("retired", "superseded") and _labels(old).get("superseded-by") != new:
+        if (
+            old is not None
+            and _labels(old).get("state") in ("retired", "superseded")
+            and _labels(old).get("superseded-by") != new
+        ):
             self.first_wins += 1  # already retired or superseded by another: the earlier one stays
         for board_id, labels, when in bs.side_effects(as_msg(row), new, lookup):
             try:
                 ok = bs.set_labels(board_id, labels, when=when)
             except SystemExit as exc:
-                self.reject(row, "state-label", "secret scan refused a label" if exc.code == 2 else exc.code)
+                self.reject(
+                    row, "state-label", "secret scan refused a label" if exc.code == 2 else exc.code
+                )
                 continue
             if ok:
-                self.raw[board_id] = {**self.raw[board_id], "labels": {**_labels(self.raw[board_id]), **labels}}
+                self.raw[board_id] = {
+                    **self.raw[board_id],
+                    "labels": {**_labels(self.raw[board_id]), **labels},
+                }
             else:
                 self.first_wins += 1
 
@@ -441,17 +499,28 @@ def import_legacy(rows: list[Row], map_file: Path) -> dict[str, object]:
             run.post(row)
         run.apply_state(row)
         if n % 500 == 0:
-            print(f"board_io: {n}/{len(order)} rows, {round(time.monotonic() - t0, 1)} s, "
-                  f"{len(run.rejects)} rejects", file=sys.stderr, flush=True)
+            print(
+                f"board_io: {n}/{len(order)} rows, {round(time.monotonic() - t0, 1)} s, "
+                f"{len(run.rejects)} rejects",
+                file=sys.stderr,
+                flush=True,
+            )
     for row in order:  # an export's state override (EXPORT_KEYS), after every side effect
-        override = {k: v for k, v in (("state", row.get("state")), ("reason", row.get("state_reason"))) if v}
+        override = {
+            k: v for k, v in (("state", row.get("state")), ("reason", row.get("state_reason"))) if v
+        }
         if override and row.id in run.idmap:
             try:
                 bs.set_labels(run.idmap[row.id], override)
             except SystemExit as exc:
-                run.reject(row, "state-override", "secret scan refused a label" if exc.code == 2 else exc.code)
+                run.reject(
+                    row,
+                    "state-override",
+                    "secret scan refused a label" if exc.code == 2 else exc.code,
+                )
     orphans = [
-        {"id": r.id, "ref": str(r.get("ref"))} for r in order
+        {"id": r.id, "ref": str(r.get("ref"))}
+        for r in order
         if r.id in run.idmap and r.get("ref") is not None and r.get("ref") not in run.idmap
     ]
     after = len(board_raw())
@@ -506,7 +575,9 @@ def _show(name: str, value: object) -> object:
     return {"len": len(text), "sha1": hashlib.sha1(text.encode()).hexdigest()[:12]}
 
 
-def readback(view: str, rows: Iterable[Row], got: Mapping[str, Mapping[str, object]]) -> list[dict[str, object]]:
+def readback(
+    view: str, rows: Iterable[Row], got: Mapping[str, Mapping[str, object]]
+) -> list[dict[str, object]]:
     """Every field of every row that ``got`` (old id -> read-back message) holds differently."""
     out: list[dict[str, object]] = []
     for row in rows:
@@ -517,8 +588,16 @@ def readback(view: str, rows: Iterable[Row], got: Mapping[str, Mapping[str, obje
         for name in FIELDS:
             want, now = expected_value(row, name), have.get(name)
             if want != (None if now is None or now == "" or now is False else now):
-                out.append({"check": "readback", "view": view, "id": row.id, "field": name,
-                            "old": _show(name, want), "new": _show(name, now)})
+                out.append(
+                    {
+                        "check": "readback",
+                        "view": view,
+                        "id": row.id,
+                        "field": name,
+                        "old": _show(name, want),
+                        "new": _show(name, now),
+                    }
+                )
     return out
 
 
@@ -549,12 +628,24 @@ def search_threads(word: str) -> list[str]:
     before: str | None = None
     seen: set[str] = set()
     while True:
-        argv = ["read", f"{bs.ns()}kb/", "--label", "state=live", "--text", word, "--limit", "500", "--json"]
+        argv = [
+            "read",
+            f"{bs.ns()}kb/",
+            "--label",
+            "state=live",
+            "--text",
+            word,
+            "--limit",
+            "500",
+            "--json",
+        ]
         proc = boardctl.run_vb([*argv, *(["--before", before] if before else [])], env=env)
         if proc.returncode != 0 and '"channel_not_found"' in proc.stderr + proc.stdout and not out:
             return []  # no kb channel at all (a board without kb posts)
         if proc.returncode != 0:
-            raise SystemExit(f"board_io verify: vb read --text {word!r} failed ({proc.returncode}): {proc.stderr.strip()[:300]}")
+            raise SystemExit(
+                f"board_io verify: vb read --text {word!r} failed ({proc.returncode}): {proc.stderr.strip()[:300]}"
+            )
         page = json.loads(proc.stdout)
         out += [str(t["message"]["id"]) for t in page["threads"]]
         before = page.get("older")
@@ -589,7 +680,12 @@ def verify(rows: list[Row], map_file: Path, queries: list[str]) -> dict[str, obj
     miss("board-missing", sorted(i for i in expected if i not in by_legacy))
     miss("board-duplicate", sorted(i for i, news in by_legacy.items() if len(news) > 1))
     miss("board-unexpected", sorted(set(by_legacy) - expected))
-    miss("map-wrong", sorted(i for i in expected & idmap.keys() if i in by_legacy and idmap[i] not in by_legacy[i]))
+    miss(
+        "map-wrong",
+        sorted(
+            i for i in expected & idmap.keys() if i in by_legacy and idmap[i] not in by_legacy[i]
+        ),
+    )
 
     # read-back parity: every source row in the view bus.py will read it from (a mirror in both)
     global_view = {str(m["id"]): m for m in bs.read(None)}
@@ -607,11 +703,25 @@ def verify(rows: list[Row], map_file: Path, queries: list[str]) -> dict[str, obj
         m, row = msgs[by_legacy[old][0]], index[old]
         parent_new = str(m.get("replyTo") or m.get("re") or "") or None
         if parent_new is None and m["channel"] != prefix + root_channel(row):
-            mismatches.append({"check": "channel", "id": old, "old": root_channel(row), "new": str(m["channel"])[len(prefix):]})
+            mismatches.append(
+                {
+                    "check": "channel",
+                    "id": old,
+                    "old": root_channel(row),
+                    "new": str(m["channel"])[len(prefix) :],
+                }
+            )
         want = row.get("ref") if row.get("ref") in expected else None
         have = legacy_of.get(parent_new, f"board:{parent_new}") if parent_new is not None else None
         if have != want or (want is None and _labels(m).get("ref") != row.get("ref")):
-            mismatches.append({"check": "parent", "id": old, "old": row.get("ref"), "new": have or _labels(m).get("ref")})
+            mismatches.append(
+                {
+                    "check": "parent",
+                    "id": old,
+                    "old": row.get("ref"),
+                    "new": have or _labels(m).get("ref"),
+                }
+            )
 
     # hidden parity over every source: bus.hidden_posts on the old rows vs labels + parents
     memo: dict[str, bool] = {}
@@ -622,7 +732,8 @@ def verify(rows: list[Row], map_file: Path, queries: list[str]) -> dict[str, obj
             labels = _labels(msgs[new])
             parent = msgs[new].get("replyTo") or msgs[new].get("re")
             memo[new] = (
-                labels.get("state") in ("retired", "superseded") or "retires" in labels
+                labels.get("state") in ("retired", "superseded")
+                or "retires" in labels
                 or (parent is not None and str(parent) in msgs and hidden(str(parent)))
             )
         return memo[new]
@@ -632,7 +743,11 @@ def verify(rows: list[Row], map_file: Path, queries: list[str]) -> dict[str, obj
     persistent_ids = {r.id for r in sources.get(PERSISTENT, [])}
     mirror_hidden: list[str] = []
     for source, srows in sources.items():
-        reasons: dict[str, str] = old_reasons if source == PERSISTENT else bus.hidden_posts([r.rec for r in rows if r.source == source])
+        reasons: dict[str, str] = (
+            old_reasons
+            if source == PERSISTENT
+            else bus.hidden_posts([r.rec for r in rows if r.source == source])
+        )
         ids = {r.id for r in srows} & by_legacy.keys()
         old_hidden = set(reasons) & ids
         if source != PERSISTENT:  # MIRROR_HIDDEN
@@ -642,15 +757,21 @@ def verify(rows: list[Row], map_file: Path, queries: list[str]) -> dict[str, obj
         new_hidden = {i for i in ids if hidden(by_legacy[i][0])}
         hidden_report[source] = {"old": sorted(old_hidden), "new": sorted(new_hidden)}
         if old_hidden != new_hidden:
-            mismatches.append({
-                "check": "hidden-parity", "source": source,
-                "only_old": sorted(old_hidden - new_hidden), "only_new": sorted(new_hidden - old_hidden),
-            })
+            mismatches.append(
+                {
+                    "check": "hidden-parity",
+                    "source": source,
+                    "only_old": sorted(old_hidden - new_hidden),
+                    "only_new": sorted(new_hidden - old_hidden),
+                }
+            )
 
     # search parity: old `board search --global --grep W` (bus.board_search's filter over the
     # persistent rows: to=board, not hidden, W in the body) vs the board's kb search
     search: dict[str, object] = {}
-    board_rows = [r for r in sources.get(PERSISTENT, []) if r.get("to") == "board" and r.id not in old_reasons]
+    board_rows = [
+        r for r in sources.get(PERSISTENT, []) if r.get("to") == "board" and r.id not in old_reasons
+    ]
     for word in queries:
         old_roots: set[str] = set()
         outside: set[str] = set()
@@ -660,22 +781,45 @@ def verify(rows: list[Row], map_file: Path, queries: list[str]) -> dict[str, obj
             if not news or word.lower() not in str(row.rec.get("body") or "").lower():
                 continue  # a missing one is reported under board-missing
             root = str(msgs[news[0]].get("re") or news[0])
-            channel = str(msgs[root]["channel"])[len(prefix):]
-            bucket = old_roots if channel.startswith("kb/") else top_level if channel in SEARCH_TOP_LEVEL else outside
+            channel = str(msgs[root]["channel"])[len(prefix) :]
+            bucket = (
+                old_roots
+                if channel.startswith("kb/")
+                else top_level
+                if channel in SEARCH_TOP_LEVEL
+                else outside
+            )
             bucket.add(root)
         new_roots = set(search_threads(word))
-        miss("search-missing", sorted(legacy_of.get(r, r) for r in old_roots - new_roots), word=word)
+        miss(
+            "search-missing", sorted(legacy_of.get(r, r) for r in old_roots - new_roots), word=word
+        )
         miss("search-outside-kb", sorted(legacy_of.get(r, r) for r in outside), word=word)
         extras: list[dict[str, object]] = []
         for root in sorted(new_roots - old_roots, key=lambda r: legacy_of.get(r, r)):
             matched = [
-                {"id": legacy_of.get(i, i), "why": _why(old_reasons.get(legacy_of.get(i, "")), index.get(legacy_of.get(i, "")))}
+                {
+                    "id": legacy_of.get(i, i),
+                    "why": _why(
+                        old_reasons.get(legacy_of.get(i, "")), index.get(legacy_of.get(i, ""))
+                    ),
+                }
                 for i, m in msgs.items()
-                if (i == root or m.get("re") == root) and word.lower() in str(m.get("text", "")).lower()
+                if (i == root or m.get("re") == root)
+                and word.lower() in str(m.get("text", "")).lower()
             ]
-            extras.append({"root": legacy_of.get(root, root), "matched": sorted(matched, key=lambda x: x["id"])})
-        search[word] = {"old": len(old_roots), "new": len(new_roots), "extras": extras,
-                        "top_level": sorted(legacy_of.get(r, r) for r in top_level)}  # SEARCH_TOP_LEVEL
+            extras.append(
+                {
+                    "root": legacy_of.get(root, root),
+                    "matched": sorted(matched, key=lambda x: x["id"]),
+                }
+            )
+        search[word] = {
+            "old": len(old_roots),
+            "new": len(new_roots),
+            "extras": extras,
+            "top_level": sorted(legacy_of.get(r, r) for r in top_level),
+        }  # SEARCH_TOP_LEVEL
 
     return {
         "ok": not mismatches,
@@ -714,7 +858,7 @@ def export(out: Path) -> tuple[dict[str, object] | None, list[str]]:
     if refused:
         return None, refused
     write_atomic(out, render(rows))
-    channel = {export_id(m): str(m["channel"])[len(prefix):] for m in raw}
+    channel = {export_id(m): str(m["channel"])[len(prefix) :] for m in raw}
     counts: dict[str, int] = {}
     for row in rows:
         counts[channel[str(row["id"])]] = counts.get(channel[str(row["id"])], 0) + 1
@@ -733,44 +877,98 @@ def export(out: Path) -> tuple[dict[str, object] | None, list[str]]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="board_io.py", description=__doc__.split("\n\n")[0] if __doc__ else None)
+    ap = argparse.ArgumentParser(
+        prog="board_io.py", description=__doc__.split("\n\n")[0] if __doc__ else None
+    )
     sub = ap.add_subparsers(dest="cmd", required=True)
     ex = sub.add_parser("export")
-    ex.add_argument("--url", default=None, help="the board; default $BOARD_URL (one of them is required)")
-    ex.add_argument("--out", type=Path, default=None, help="default: <main>/docs/orchestration/board/export.jsonl")
-    ex.add_argument("--report", type=Path, default=None, help="also write the JSON report here (temp file + rename)")
+    ex.add_argument(
+        "--url", default=None, help="the board; default $BOARD_URL (one of them is required)"
+    )
+    ex.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="default: <main>/docs/orchestration/board/export.jsonl",
+    )
+    ex.add_argument(
+        "--report",
+        type=Path,
+        default=None,
+        help="also write the JSON report here (temp file + rename)",
+    )
     for name in ("import-legacy", "verify"):
         p = sub.add_parser(name)
-        p.add_argument("--persistent", type=Path, default=None, help="default: <main>/docs/orchestration/board/messages.jsonl")
+        p.add_argument(
+            "--persistent",
+            type=Path,
+            default=None,
+            help="default: <main>/docs/orchestration/board/messages.jsonl",
+        )
         p.add_argument("--jobs-root", type=Path, default=None, help="default: <main>/data/swarm")
-        p.add_argument("--url", default=None, help="the board; default $BOARD_URL (one of them is required)")
-        p.add_argument("--map", type=Path, required=True, help="old id -> new id JSON, written by import-legacy")
-        p.add_argument("--report", type=Path, default=None, help="also write the JSON report here (temp file + rename)")
+        p.add_argument(
+            "--url", default=None, help="the board; default $BOARD_URL (one of them is required)"
+        )
+        p.add_argument(
+            "--map",
+            type=Path,
+            required=True,
+            help="old id -> new id JSON, written by import-legacy",
+        )
+        p.add_argument(
+            "--report",
+            type=Path,
+            default=None,
+            help="also write the JSON report here (temp file + rename)",
+        )
         if name == "import-legacy":
-            p.add_argument("--limit-jobs", type=int, default=None, help=(
-                "TEST ONLY: import the first N job buses. A later full run leaves a row whose "
-                "parent sits in a later job as an orphan root (ref label), and reports it nowhere"))
+            p.add_argument(
+                "--limit-jobs",
+                type=int,
+                default=None,
+                help=(
+                    "TEST ONLY: import the first N job buses. A later full run leaves a row whose "
+                    "parent sits in a later job as an orphan root (ref label), and reports it nowhere"
+                ),
+            )
         else:
-            p.add_argument("--query", nargs="*", default=list(DEFAULT_QUERIES), help="search words (none: skip search)")
+            p.add_argument(
+                "--query",
+                nargs="*",
+                default=list(DEFAULT_QUERIES),
+                help="search words (none: skip search)",
+            )
     args = ap.parse_args(argv)
     url = args.url or os.environ.get("BOARD_URL")
     if not url:
-        print("board_io: no board: pass --url or set BOARD_URL (there is no default board)", file=sys.stderr)
+        print(
+            "board_io: no board: pass --url or set BOARD_URL (there is no default board)",
+            file=sys.stderr,
+        )
         return 2
     os.environ["BOARD_URL"] = url  # board_store and `vb` read it from the environment
     if args.cmd == "export":
-        out = args.out or boardctl.main_checkout() / "docs" / "orchestration" / "board" / "export.jsonl"
+        out = (
+            args.out
+            or boardctl.main_checkout() / "docs" / "orchestration" / "board" / "export.jsonl"
+        )
         got, refused = export(out)
         if got is None:
-            print(f"board_io export: {len(refused)} row(s) look like a secret (KEY=value credential or env "
-                  f"dump): {' '.join(refused)}; nothing written", file=sys.stderr)
+            print(
+                f"board_io export: {len(refused)} row(s) look like a secret (KEY=value credential or env "
+                f"dump): {' '.join(refused)}; nothing written",
+                file=sys.stderr,
+            )
             return 1
         text = json.dumps(got, indent=1)
         if args.report is not None:
             write_atomic(args.report, text + "\n")
         print(text)
         return 0
-    persistent = args.persistent or boardctl.main_checkout() / "docs" / "orchestration" / "board" / "messages.jsonl"
+    persistent = (
+        args.persistent
+        or boardctl.main_checkout() / "docs" / "orchestration" / "board" / "messages.jsonl"
+    )
     jobs_root = args.jobs_root or boardctl.main_checkout() / "data" / "swarm"
     if args.cmd == "import-legacy":
         report = import_legacy(load_rows(persistent, jobs_root, args.limit_jobs), args.map)

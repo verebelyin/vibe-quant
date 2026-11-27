@@ -1,4 +1,5 @@
 """Tests for per-direction SL/TP in DSL schema."""
+
 from __future__ import annotations
 
 import pytest
@@ -31,40 +32,58 @@ class TestPerDirectionSLTP:
         assert strategy.take_profit_short is None
 
     def test_per_direction_stop_loss(self) -> None:
-        strategy = StrategyDSL(**_base_dsl(
-            stop_loss_long={"type": "fixed_pct", "percent": 1.09},
-            stop_loss_short={"type": "fixed_pct", "percent": 8.29},
-        ))
+        strategy = StrategyDSL(
+            **_base_dsl(
+                stop_loss_long={"type": "fixed_pct", "percent": 1.09},
+                stop_loss_short={"type": "fixed_pct", "percent": 8.29},
+            )
+        )
         assert strategy.stop_loss_long.percent == 1.09
         assert strategy.stop_loss_short.percent == 8.29
         assert strategy.stop_loss.percent == 2.0  # base still there
 
     def test_per_direction_take_profit(self) -> None:
-        strategy = StrategyDSL(**_base_dsl(
-            take_profit_long={"type": "fixed_pct", "percent": 17.13},
-            take_profit_short={"type": "fixed_pct", "percent": 13.06},
-        ))
+        strategy = StrategyDSL(
+            **_base_dsl(
+                take_profit_long={"type": "fixed_pct", "percent": 17.13},
+                take_profit_short={"type": "fixed_pct", "percent": 13.06},
+            )
+        )
         assert strategy.take_profit_long.percent == 17.13
         assert strategy.take_profit_short.percent == 13.06
 
     def test_per_direction_atr_validates_indicator(self) -> None:
         """Per-direction ATR SL must reference existing indicator."""
         with pytest.raises(ValueError, match="nonexistent"):
-            StrategyDSL(**_base_dsl(
-                stop_loss_long={"type": "atr_fixed", "atr_multiplier": 1.5, "indicator": "nonexistent"},
-            ))
+            StrategyDSL(
+                **_base_dsl(
+                    stop_loss_long={
+                        "type": "atr_fixed",
+                        "atr_multiplier": 1.5,
+                        "indicator": "nonexistent",
+                    },
+                )
+            )
 
     def test_per_direction_atr_valid_indicator(self) -> None:
-        strategy = StrategyDSL(**_base_dsl(
-            indicators={"rsi": {"type": "RSI"}, "atr_main": {"type": "ATR"}},
-            stop_loss_long={"type": "atr_fixed", "atr_multiplier": 1.5, "indicator": "atr_main"},
-        ))
+        strategy = StrategyDSL(
+            **_base_dsl(
+                indicators={"rsi": {"type": "RSI"}, "atr_main": {"type": "ATR"}},
+                stop_loss_long={
+                    "type": "atr_fixed",
+                    "atr_multiplier": 1.5,
+                    "indicator": "atr_main",
+                },
+            )
+        )
         assert strategy.stop_loss_long.atr_multiplier == 1.5
 
     def test_only_long_override(self) -> None:
         """Can override just one direction."""
-        strategy = StrategyDSL(**_base_dsl(
-            stop_loss_long={"type": "fixed_pct", "percent": 1.0},
-        ))
+        strategy = StrategyDSL(
+            **_base_dsl(
+                stop_loss_long={"type": "fixed_pct", "percent": 1.0},
+            )
+        )
         assert strategy.stop_loss_long.percent == 1.0
         assert strategy.stop_loss_short is None

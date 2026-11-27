@@ -193,9 +193,7 @@ def _reject_constant(token: str) -> float:
 
 
 def _patch_inputs(monkeypatch: pytest.MonkeyPatch, inputs: CarryInputs) -> None:
-    monkeypatch.setattr(
-        carry_cli, "load_carry_inputs", lambda spec, catalog, archive: inputs
-    )
+    monkeypatch.setattr(carry_cli, "load_carry_inputs", lambda spec, catalog, archive: inputs)
 
 
 def _raise(error: BaseException) -> Callable[..., CarryInputs]:
@@ -301,9 +299,7 @@ def test_run_writes_outputs(
     assert len(decisions) == summary["counts"]["n_decisions"] == 4
     assert len(fills) == summary["counts"]["n_fills"]
     assert math.fsum(fills["fee"]) == summary["decomposition"]["totals"]["fees_total"]
-    assert (
-        math.fsum(funding["amount"]) == summary["decomposition"]["totals"]["funding_paid_total"]
-    )
+    assert math.fsum(funding["amount"]) == summary["decomposition"]["totals"]["funding_paid_total"]
     assert (
         int(funding["fallback"].sum())
         == summary["decomposition"]["funding"]["funding_fallback_settlements"]
@@ -372,9 +368,7 @@ def test_known_error_exit_2(
     assert not trials.exists()
 
 
-def test_unexpected_error_is_not_caught(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_unexpected_error_is_not_caught(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """§1.4: there is no ``except Exception`` -- an unexpected error propagates."""
     monkeypatch.setattr(carry_cli, "load_carry_inputs", _raise(ZeroDivisionError("boom")))
 
@@ -442,7 +436,8 @@ def test_out_dir_appearing_during_the_run_is_refused(
     monkeypatch.setattr(carry_cli, "load_carry_inputs", loader)
 
     assert (
-        carry_cli.main(_run_args(tmp_path, "--engine", "reference", out=out_dir, trials=trials)) == 2
+        carry_cli.main(_run_args(tmp_path, "--engine", "reference", out=out_dir, trials=trials))
+        == 2
     )
 
     captured = capsys.readouterr()
@@ -595,7 +590,13 @@ def test_trials_ledger_appends_across_runs(
     assert (
         carry_cli.main(
             _run_args(
-                tmp_path, "--engine", "reference", "--band", "0.10", out=tmp_path / "a", trials=trials
+                tmp_path,
+                "--engine",
+                "reference",
+                "--band",
+                "0.10",
+                out=tmp_path / "a",
+                trials=trials,
             )
         )
         == 0
@@ -605,7 +606,13 @@ def test_trials_ledger_appends_across_runs(
     assert (
         carry_cli.main(
             _run_args(
-                tmp_path, "--engine", "reference", "--band", "0.05", out=tmp_path / "b", trials=trials
+                tmp_path,
+                "--engine",
+                "reference",
+                "--band",
+                "0.05",
+                out=tmp_path / "b",
+                trials=trials,
             )
         )
         == 0
@@ -651,7 +658,8 @@ def test_non_finite_numbers_are_written_as_null(
     trials = tmp_path / "trials.jsonl"
 
     assert (
-        carry_cli.main(_run_args(tmp_path, "--engine", "reference", out=out_dir, trials=trials)) == 0
+        carry_cli.main(_run_args(tmp_path, "--engine", "reference", out=out_dir, trials=trials))
+        == 0
     )
 
     capsys.readouterr()
@@ -710,28 +718,34 @@ def test_default_paths_resolve_from_repo_root(
     monkeypatch.setattr(carry_cli, "load_carry_inputs", loader)
     monkeypatch.chdir(tmp_path)  # cwd must not change where the defaults point
 
-    assert carry_cli.main(
-        _run_args(
-            tmp_path,
-            "--engine",
-            "reference",
-            out=tmp_path / "out",
-            trials=tmp_path / "trials.jsonl",
+    assert (
+        carry_cli.main(
+            _run_args(
+                tmp_path,
+                "--engine",
+                "reference",
+                out=tmp_path / "out",
+                trials=tmp_path / "trials.jsonl",
+            )
         )
-    ) == 0
-    assert carry_cli.main(
-        _run_args(
-            tmp_path,
-            "--engine",
-            "reference",
-            "--catalog",
-            "rel/catalog",
-            "--archive",
-            "rel/archive.db",
-            out=tmp_path / "out2",
-            trials=tmp_path / "trials2.jsonl",
+        == 0
+    )
+    assert (
+        carry_cli.main(
+            _run_args(
+                tmp_path,
+                "--engine",
+                "reference",
+                "--catalog",
+                "rel/catalog",
+                "--archive",
+                "rel/archive.db",
+                out=tmp_path / "out2",
+                trials=tmp_path / "trials2.jsonl",
+            )
         )
-    ) == 0
+        == 0
+    )
 
     capsys.readouterr()
     assert seen == [
@@ -753,7 +767,11 @@ def test_default_out_dir_and_ledger_derive_from_the_out_root(
     assert carry_cli.main(args) == 0
 
     capsys.readouterr()
-    expected = tmp_path / "data/portfolio" / f"reference-{_START_DATE}-{_END_DATE}-{inputs.spec.spec_hash()[:8]}"
+    expected = (
+        tmp_path
+        / "data/portfolio"
+        / f"reference-{_START_DATE}-{_END_DATE}-{inputs.spec.spec_hash()[:8]}"
+    )
     assert {path.name for path in expected.iterdir()} == _SIX_FILES
     ledger = tmp_path / "data/portfolio/trials.jsonl"
     assert len(ledger.read_text().splitlines()) == 1
@@ -808,7 +826,10 @@ def test_trial_line_outcome(
         real_write(out, *args)  # type: ignore[arg-type]
 
     monkeypatch.setattr(carry_cli, "_write_outputs", write)
-    assert carry_cli.main(_run_args(tmp_path, "--engine", "reference", out=out_dir, trials=trials)) == 0
+    assert (
+        carry_cli.main(_run_args(tmp_path, "--engine", "reference", out=out_dir, trials=trials))
+        == 0
+    )
     capsys.readouterr()
 
     assert seen == [1]
@@ -969,9 +990,17 @@ def test_ledger_output_collision(
     extra = ("--force",) if force else ()
 
     for argv, ledger, target in (
-        (_evaluate_argv(*extra, out=out, trials=base / "research.json"), "research.json", research_file),
+        (
+            _evaluate_argv(*extra, out=out, trials=base / "research.json"),
+            "research.json",
+            research_file,
+        ),
         (_run_args(tmp_path, *extra, out=out, trials=base / "x.jsonl"), "x.jsonl", out),
-        (_run_args(tmp_path, *extra, out=out, trials=base / "sub" / "deep.jsonl"), "sub/deep.jsonl", out),
+        (
+            _run_args(tmp_path, *extra, out=out, trials=base / "sub" / "deep.jsonl"),
+            "sub/deep.jsonl",
+            out,
+        ),
         (_run_args(tmp_path, *extra, out=out, trials=base), "", out),
     ):
         assert carry_cli.main(argv) == 2
@@ -1020,7 +1049,12 @@ def test_ledger_alias_in_output_dir(
     # control: an alias chain that never enters out is a normal ledger
     _patch_inputs(monkeypatch, _inputs(tmp_path))
     argv = _run_args(
-        tmp_path, "--force", "--engine", "reference", out=out, trials=tmp_path / "direct" / "x.jsonl"
+        tmp_path,
+        "--force",
+        "--engine",
+        "reference",
+        out=out,
+        trials=tmp_path / "direct" / "x.jsonl",
     )
     assert carry_cli.main(argv) == 0
     capsys.readouterr()
@@ -1083,7 +1117,12 @@ def test_ledger_failure_publishes_nothing(
         raise OSError(28, "No space left on device")
 
     monkeypatch.setattr(trials_module, "_append_bytes", fail)
-    assert carry_cli.main(_run_args(tmp_path, "--engine", "reference", out=tmp_path / "out", trials=trials)) == 2
+    assert (
+        carry_cli.main(
+            _run_args(tmp_path, "--engine", "reference", out=tmp_path / "out", trials=trials)
+        )
+        == 2
+    )
     assert carry_cli.main(_evaluate_argv(out=tmp_path / "res", trials=trials)) == 2
     err = capsys.readouterr().err.splitlines()
     assert len(err) == 2
@@ -1100,7 +1139,12 @@ def test_ledger_failure_publishes_nothing(
         raise ValueError("publication failed")
 
     monkeypatch.setattr(carry_cli, "_write_outputs", no_publish)
-    assert carry_cli.main(_run_args(tmp_path, "--engine", "reference", out=tmp_path / "out", trials=trials)) == 2
+    assert (
+        carry_cli.main(
+            _run_args(tmp_path, "--engine", "reference", out=tmp_path / "out", trials=trials)
+        )
+        == 2
+    )
     capsys.readouterr()
     assert trials.read_bytes().startswith(before)
     assert [(r["spec_hash"], r.get("outcome")) for r in _records(trials)] == [
@@ -1158,7 +1202,10 @@ def test_decisions_vols_column(
     assert {abs(w) for row in weights for w in row.values()} == {0.5}
     assert all(v > 0.0 for row in vols for v in row.values())
     summary = json.loads((out_dir / "summary.json").read_text())
-    assert (summary["spec"]["weighting"], summary["spec"]["vol_lookback_days"]) == ("inverse_vol", 3)
+    assert (summary["spec"]["weighting"], summary["spec"]["vol_lookback_days"]) == (
+        "inverse_vol",
+        3,
+    )
 
 
 # --- The cross liquidation overlay (x0axf.14 T6) -------------------------------------------
@@ -1192,7 +1239,9 @@ def test_liquidated_run_recorded(
     _patch_inputs(monkeypatch, inputs)
     out_dir = tmp_path / "out"
     trials = tmp_path / "trials.jsonl"
-    argv = _run_args(tmp_path, "--engine", engine, "--liquidation-mode", "cross", out=out_dir, trials=trials)
+    argv = _run_args(
+        tmp_path, "--engine", engine, "--liquidation-mode", "cross", out=out_dir, trials=trials
+    )
 
     assert carry_cli.main(argv) == 2
 
@@ -1205,7 +1254,11 @@ def test_liquidated_run_recorded(
     assert len(captured.err.splitlines()) == 1
     assert not out_dir.exists()
     (record,) = _records(trials)
-    assert (record["outcome"], record["failed_at"], record["engine"]) == ("liquidated", _SPIKE, engine)
+    assert (record["outcome"], record["failed_at"], record["engine"]) == (
+        "liquidated",
+        _SPIKE,
+        engine,
+    )
     assert record["spec"]["liquidation_mode"] == "cross"
     assert record["weekly_sharpe"] is None
     # the same spike with the overlay off completes (the overlay is the only difference)
@@ -1224,7 +1277,9 @@ def test_cross_run_without_bust_writes_notes(
     _patch_inputs(monkeypatch, inputs)
     out_dir = tmp_path / "out"
     trials = tmp_path / "trials.jsonl"
-    argv = _run_args(tmp_path, "--engine", "reference", "--liquidation-mode", "cross", out=out_dir, trials=trials)
+    argv = _run_args(
+        tmp_path, "--engine", "reference", "--liquidation-mode", "cross", out=out_dir, trials=trials
+    )
 
     assert carry_cli.main(argv) == 0
     capsys.readouterr()
@@ -1258,7 +1313,10 @@ def test_abort_before_completion_not_reclassified(
 
 @pytest.mark.parametrize("command", ["run", "evaluate"])
 def test_liquidation_tier_preflight(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], command: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
 ) -> None:
     """R46: under cross a symbol without a tier table exits 2 before any load, no trial
     line; with the overlay off the same symbols reach the loader."""
@@ -1290,7 +1348,15 @@ def test_liquidation_data_error_not_a_trial(
     bars = {_SPIKE: {"high": 51010.0 * 3.1}, _SPIKE + _HOUR: {"high": 1e12}}
     _patch_inputs(monkeypatch, _spiked(tmp_path, bars))
     trials = tmp_path / "trials.jsonl"
-    argv = _run_args(tmp_path, "--engine", "reference", "--liquidation-mode", "cross", out=tmp_path / "out", trials=trials)
+    argv = _run_args(
+        tmp_path,
+        "--engine",
+        "reference",
+        "--liquidation-mode",
+        "cross",
+        out=tmp_path / "out",
+        trials=trials,
+    )
 
     assert carry_cli.main(argv) == 2
 
@@ -1375,7 +1441,9 @@ def test_gross_above_one_needs_the_flag_and_warns(
     )
     trials = tmp_path / "t.jsonl"
 
-    refused = carry_cli.main(_run_args(tmp_path, "--gross", "1.5", out=tmp_path / "a", trials=trials))
+    refused = carry_cli.main(
+        _run_args(tmp_path, "--gross", "1.5", out=tmp_path / "a", trials=trials)
+    )
     assert refused == 2
     assert capsys.readouterr().err == (
         "carry[nt]: ValueError: gross > 1.0 needs allow_gross_above_one "
@@ -1781,6 +1849,7 @@ def test_trend_evaluate_refuses_before_any_load(
 ) -> None:
     """R55/R62: a missing or foreign family, a bad criteria file or a negative lag is one
     stderr line and exit 2 before any data load, and the ledger is never touched."""
+
     def loader(*args: object) -> object:
         raise AssertionError("loaded")
 
@@ -1815,6 +1884,7 @@ def test_funding_evaluate_refuses_trend_only_flags(
 ) -> None:
     """R-c9t5-1 Q6: funding keeps its ledger N, so --family (and --criteria, the lag)
     on a funding evaluate is refused before any load."""
+
     def loader(*args: object) -> object:
         raise AssertionError("loaded")
 

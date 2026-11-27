@@ -193,10 +193,7 @@ def scaffold_plugin(
 ) -> list[Path]:
     """Render plugin + test stub from templates. Returns paths written."""
     if category not in VALID_CATEGORIES:
-        msg = (
-            f"Invalid category {category!r}. Choose from: "
-            f"{', '.join(VALID_CATEGORIES)}"
-        )
+        msg = f"Invalid category {category!r}. Choose from: {', '.join(VALID_CATEGORIES)}"
         raise ValueError(msg)
 
     name_upper, name_lower = _normalize_name(name)
@@ -226,9 +223,7 @@ def scaffold_plugin(
 
 def _run_pytest(test_path: Path) -> int:
     """Run pytest on the generated test stub and return the exit code."""
-    return subprocess.call(
-        [sys.executable, "-m", "pytest", str(test_path), "-q"]
-    )
+    return subprocess.call([sys.executable, "-m", "pytest", str(test_path), "-q"])
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -320,10 +315,7 @@ def main(argv: list[str] | None = None) -> int:
         return _run_pytest(test_path)
 
     print()
-    print(
-        "Next: edit the plugin's compute_fn and description, then "
-        "`pytest` the test stub."
-    )
+    print("Next: edit the plugin's compute_fn and description, then `pytest` the test stub.")
     return 0
 
 

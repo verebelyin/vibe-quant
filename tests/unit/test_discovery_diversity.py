@@ -1,6 +1,5 @@
 """Tests for population diversity metrics and interventions."""
 
-
 import pytest
 
 from vibe_quant.discovery.diversity import (
@@ -22,8 +21,10 @@ def _gene(ind: str = "RSI") -> StrategyGene:
     elif ind == "STOCH":
         params = {"k_period": 14.0, "d_period": 3.0}
     return StrategyGene(
-        indicator_type=ind, parameters=params,
-        condition=ConditionType.GT, threshold=50.0,
+        indicator_type=ind,
+        parameters=params,
+        condition=ConditionType.GT,
+        threshold=50.0,
     )
 
 
@@ -31,7 +32,9 @@ def _chrom(indicator: str = "RSI", direction: Direction = Direction.LONG) -> Str
     return StrategyChromosome(
         entry_genes=[_gene(indicator)],
         exit_genes=[_gene(indicator)],
-        stop_loss_pct=2.0, take_profit_pct=5.0, direction=direction,
+        stop_loss_pct=2.0,
+        take_profit_pct=5.0,
+        direction=direction,
     )
 
 
@@ -48,19 +51,31 @@ class TestPopulationEntropy:
         """Population with varied indicators, directions, and conditions has high entropy."""
         indicators = ["RSI", "ATR", "CCI", "MFI", "ADX", "STOCH", "WILLR", "ROC"]
         directions = [Direction.LONG, Direction.SHORT]
-        conditions = [ConditionType.GT, ConditionType.LT, ConditionType.CROSSES_ABOVE, ConditionType.CROSSES_BELOW]
+        conditions = [
+            ConditionType.GT,
+            ConditionType.LT,
+            ConditionType.CROSSES_ABOVE,
+            ConditionType.CROSSES_BELOW,
+        ]
         pop = []
         for i in range(16):
             ind = indicators[i % len(indicators)]
             d = directions[i % len(directions)]
             gene = StrategyGene(
-                indicator_type=ind, parameters={"period": 14.0},
-                condition=conditions[i % len(conditions)], threshold=50.0,
+                indicator_type=ind,
+                parameters={"period": 14.0},
+                condition=conditions[i % len(conditions)],
+                threshold=50.0,
             )
-            pop.append(StrategyChromosome(
-                entry_genes=[gene], exit_genes=[gene],
-                stop_loss_pct=2.0, take_profit_pct=5.0, direction=d,
-            ))
+            pop.append(
+                StrategyChromosome(
+                    entry_genes=[gene],
+                    exit_genes=[gene],
+                    stop_loss_pct=2.0,
+                    take_profit_pct=5.0,
+                    direction=d,
+                )
+            )
         ent = population_entropy(pop)
         assert ent > 0.3
 

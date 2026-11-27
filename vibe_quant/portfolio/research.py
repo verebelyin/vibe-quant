@@ -331,9 +331,7 @@ def _ew_returns(
     inputs: CarryInputs, weekly: Sequence[tuple[Any, ...]], period_ns: int = _WEEK_NS
 ) -> list[float | None]:
     """The equal-weight universe basket's returns (mean of the per-symbol returns)."""
-    columns = [
-        _market_returns(inputs, symbol, weekly, period_ns) for symbol in inputs.spec.symbols
-    ]
+    columns = [_market_returns(inputs, symbol, weekly, period_ns) for symbol in inputs.spec.symbols]
     basket: list[float | None] = []
     for index in range(len(weekly)):
         row: list[float] = []
@@ -361,9 +359,7 @@ def _ols(returns: Sequence[float], factor: Sequence[float]) -> tuple[float | Non
     )
     beta = sxy / sxx
     alpha = mean_return - beta * mean_factor
-    residuals = [
-        move - alpha - beta * value for value, move in zip(factor, returns, strict=True)
-    ]
+    residuals = [move - alpha - beta * value for value, move in zip(factor, returns, strict=True)]
     rss = math.fsum(residual * residual for residual in residuals)
     residual_variance = rss / (n - 2)
     if residual_variance <= 0.0:
@@ -377,9 +373,7 @@ def _ols_pairs(
 ) -> tuple[float | None, float | None]:
     """``_ols`` over the aligned pairs where the factor is present."""
     pairs = [
-        (move, value)
-        for move, value in zip(returns, factor, strict=True)
-        if value is not None
+        (move, value) for move, value in zip(returns, factor, strict=True) if value is not None
     ]
     if len(pairs) < 3:
         return None, None
@@ -821,7 +815,9 @@ def signal_table(inputs: CarryInputs, lag_days: int = 0) -> tuple[SignalTable, i
             regimes.append(eligible.regime)
             continue
         row = {
-            symbol: None if value is None else trend_signal(closes.get(symbol, {}), decision_ns - lag_ns)
+            symbol: None
+            if value is None
+            else trend_signal(closes.get(symbol, {}), decision_ns - lag_ns)
             for symbol, value in eligible.signals.items()
         }
         mismatches += any(
@@ -913,7 +909,9 @@ class TableRanker:
     """
 
     def __init__(self, table: SignalTable, gate: bool) -> None:
-        self._rows = dict(zip(table.decisions, zip(table.signals, table.regime, strict=True), strict=True))
+        self._rows = dict(
+            zip(table.decisions, zip(table.signals, table.regime, strict=True), strict=True)
+        )
         self._gate = gate
 
     def __call__(
@@ -922,20 +920,24 @@ class TableRanker:
         row, regime = self._rows[decision_ns]
         for symbol, value in row.items():
             if value is not None and signals.get(symbol) is None:
-                raise ValueError(f"signal table has {symbol} eligible at {decision_ns}; the run does not")
+                raise ValueError(
+                    f"signal table has {symbol} eligible at {decision_ns}; the run does not"
+                )
         result = {symbol: row.get(symbol) for symbol in signals}
         if self._gate and not (regime is not None and regime > 0.0):
             return {symbol: None if value is None else 0.0 for symbol, value in result.items()}
         return result
 
 
-def table_run(
-    inputs: CarryInputs, table: SignalTable, *, fee_multiplier: float = 1.0
-) -> CarryRun:
+def table_run(inputs: CarryInputs, table: SignalTable, *, fee_multiplier: float = 1.0) -> CarryRun:
     """The reference run of ``table`` on the filter-free spec, the filter applied by
     :class:`TableRanker` (null draws, placebo, a lagged own run)."""
     spec = inputs.spec
-    plain = inputs if spec.trend_filter is None else replace(inputs, spec=replace(spec, trend_filter=None))
+    plain = (
+        inputs
+        if spec.trend_filter is None
+        else replace(inputs, spec=replace(spec, trend_filter=None))
+    )
     ranker = TableRanker(table, gate=spec.trend_filter is not None)
     return simulate_reference(plain, ranker=ranker, fee_multiplier=fee_multiplier)
 
@@ -998,9 +1000,7 @@ def _mean_exposure(rows: Sequence[Mapping[str, Any]]) -> dict[str, float | None]
     """Per key, the mean over the draws that ran (None where undefined)."""
     if not rows:
         return None
-    return {
-        key: _mean([row[key] for row in rows if row[key] is not None]) for key in rows[0]
-    }
+    return {key: _mean([row[key] for row in rows if row[key] is not None]) for key in rows[0]}
 
 
 def null_percentile(own: float | None, nulls: Sequence[float]) -> float | None:
@@ -1176,12 +1176,12 @@ def evaluate_trend(
         "ledger_num_trials": ledger_num_trials,
         "signal_lag_days": signal_lag_days,
         "lag_mask_mismatches": mismatches,
-        "criteria_file": None if criteria is None else {"path": criteria.path, "sha256": criteria.sha256},
+        "criteria_file": None
+        if criteria is None
+        else {"path": criteria.path, "sha256": criteria.sha256},
         "by_year": report.by_year,
         **evidence,
     }
     values = {**result, "coins_with_data": evidence["coverage"]["coins_with_data"]}
-    result.update(
-        judge(criteria, values, spec.fill_granularity, calibration=signal_lag_days > 0)
-    )
+    result.update(judge(criteria, values, spec.fill_granularity, calibration=signal_lag_days > 0))
     return result

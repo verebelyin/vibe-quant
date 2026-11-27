@@ -191,9 +191,7 @@ class LiquidationWatcher:
         # leftover position is reported during this session.
         self._traded = frozenset(self._symbols)
         self._symbols += sorted(symbol for symbol in restored if symbol not in self._symbols)
-        self._cursors = {
-            symbol: restored.get(symbol, node_start_ms) for symbol in self._symbols
-        }
+        self._cursors = {symbol: restored.get(symbol, node_start_ms) for symbol in self._symbols}
         self._seen = {key: int(value) for key, value in (seen or {}).items()}
         self._failures: dict[str, int] = dict.fromkeys(self._symbols, 0)
         self._next_attempt_ms: dict[str, int] = dict.fromkeys(self._symbols, 0)

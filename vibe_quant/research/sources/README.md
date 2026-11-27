@@ -10,7 +10,8 @@ exposed under its registered name through `get_source(name)` /
 
 ```python
 class ResearchSource(Protocol):
-    name: ClassVar[str]                                     # registry key
+    name: ClassVar[str]  # registry key
+
     def fetch(
         self,
         since: datetime | None,

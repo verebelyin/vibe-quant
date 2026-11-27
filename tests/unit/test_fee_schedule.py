@@ -138,9 +138,7 @@ class _AlternatingMarket(Strategy):
         inst = self.cache.instrument(IID)
         side = OrderSide.SELL if self._long else OrderSide.BUY
         self.submit_order(
-            self.order_factory.market(
-                IID, side, inst.make_qty(_QTY), time_in_force=TimeInForce.IOC
-            )
+            self.order_factory.market(IID, side, inst.make_qty(_QTY), time_in_force=TimeInForce.IOC)
         )
         self._long = not self._long
 
@@ -261,8 +259,26 @@ class _OpenAtEnd(Strategy):
 
 
 _10_RT_PRICES = [
-    10000.0, 10100.0, 10200.0, 10300.0, 10400.0, 10500.0, 10600.0, 10700.0, 10800.0, 10900.0,
-    11000.0, 11100.0, 11200.0, 11300.0, 11400.0, 11500.0, 11600.0, 11700.0, 11800.0, 11900.0,
+    10000.0,
+    10100.0,
+    10200.0,
+    10300.0,
+    10400.0,
+    10500.0,
+    10600.0,
+    10700.0,
+    10800.0,
+    10900.0,
+    11000.0,
+    11100.0,
+    11200.0,
+    11300.0,
+    11400.0,
+    11500.0,
+    11600.0,
+    11700.0,
+    11800.0,
+    11900.0,
 ]
 
 
@@ -294,7 +310,9 @@ def test_ten_trade_fixture_taker_bnb() -> None:
         assert len(fills) == 20  # 10 round trips = 20 fills
         for fill in fills:
             assert fill.liquidity_side == LiquiditySide.TAKER
-            assert fill.commission == _expected(inst, fill.last_qty, fill.last_px, Decimal("0.00045"))
+            assert fill.commission == _expected(
+                inst, fill.last_qty, fill.last_px, Decimal("0.00045")
+            )
         # Concrete Decimal arithmetic: 0.05 * 10000 * 0.00045 == 0.225
         assert Money(Decimal("0.225"), USDT) in [f.commission for f in fills]
     finally:
@@ -314,7 +332,9 @@ def test_ten_trade_fixture_taker_vip0() -> None:
         fills = _fills(engine)
         assert len(fills) == 20
         for fill in fills:
-            assert fill.commission == _expected(inst, fill.last_qty, fill.last_px, Decimal("0.0005"))
+            assert fill.commission == _expected(
+                inst, fill.last_qty, fill.last_px, Decimal("0.0005")
+            )
         assert Money(Decimal("0.25"), USDT) in [f.commission for f in fills]
     finally:
         _dispose(engine)
@@ -489,15 +509,17 @@ def test_tp_limit_maker_sl_stop_taker() -> None:
 
 def test_default_schedule_keeps_maker_taker_path() -> None:
     default_venue = create_backtest_venue_config(VenueConfig())
-    assert default_venue.fee_model.fee_model_path == "nautilus_trader.backtest.models:MakerTakerFeeModel"
+    assert (
+        default_venue.fee_model.fee_model_path
+        == "nautilus_trader.backtest.models:MakerTakerFeeModel"
+    )
     assert default_venue.fee_model.config_path == "nautilus_trader.config:MakerTakerFeeModelConfig"
     assert default_venue.fee_model.config == {}
 
     bnb_venue = create_backtest_venue_config(VenueConfig(fee_schedule=BNB))
     assert bnb_venue.fee_model.fee_model_path == "vibe_quant.validation.fee_model:ScheduleFeeModel"
     assert (
-        bnb_venue.fee_model.config_path
-        == "vibe_quant.validation.fee_model:ScheduleFeeModelConfig"
+        bnb_venue.fee_model.config_path == "vibe_quant.validation.fee_model:ScheduleFeeModelConfig"
     )
     assert bnb_venue.fee_model.config == {"maker_rate": "0.00018", "taker_rate": "0.00045"}
     # The config must actually resolve and build through NT's own factory.
@@ -587,9 +609,9 @@ def test_open_mark_fee_fallback_warns(caplog: pytest.LogCaptureFixture) -> None:
     assert marks[0].exit_fee == pytest.approx(abs(float(_QTY)) * 10300.0 * 0.0005)
     assert marks[0].exit_fee == 0.2575
     messages = [record.getMessage() for record in caplog.records]
-    assert any(
-        "no taker rate for" in m and str(IID) in m and "KeyError" in m for m in messages
-    ), messages
+    assert any("no taker rate for" in m and str(IID) in m and "KeyError" in m for m in messages), (
+        messages
+    )
 
 
 # ---------------------------------------------------------------------------

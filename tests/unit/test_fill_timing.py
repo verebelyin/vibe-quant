@@ -92,9 +92,7 @@ def _build_bars(bar_type: BarType) -> list[Bar]:
 
 
 def _new_engine(symbols: tuple[str, ...] = ("BTCUSDT",)) -> BacktestEngine:
-    engine = BacktestEngine(
-        config=BacktestEngineConfig(logging=LoggingConfig(log_level="ERROR"))
-    )
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(log_level="ERROR")))
     # NT 1.223+: dispose() tears down logging but the Rust logger can only be
     # set once per process — retain the guard or the next engine hard-aborts.
     retain_log_guard(engine)
@@ -158,9 +156,7 @@ class _RawMarketOrderStrategy(Strategy):
             self.fill_ts = int(event.ts_event)  # type: ignore[attr-defined]
 
 
-def _run_raw(
-    order_side: OrderSide, latency_model: LatencyModel | None
-) -> _RawMarketOrderStrategy:
+def _run_raw(order_side: OrderSide, latency_model: LatencyModel | None) -> _RawMarketOrderStrategy:
     bar_type = get_bar_type("BTCUSDT", "1m")
     engine = _new_engine()
     if latency_model is not None:
@@ -335,9 +331,7 @@ def _minute_close(sym: str, minute: int) -> float:
     return _BASE[sym] + 100.0 * minute  # minute 5 -> tick1, minute 6 -> tick2
 
 
-def _bars_5m(
-    sym: str, *, bar1: tuple[float, float, float, float] | None = None
-) -> list[Bar]:
+def _bars_5m(sym: str, *, bar1: tuple[float, float, float, float] | None = None) -> list[Bar]:
     """5m strategy bars. Bar 0 (signal) closes at the signal close; bar 1 at NEXT_BAR_CLOSE.
 
     ts_init = close - 1ms, like the catalog (the minute-4 1m bar shares the signal's ts_init).
@@ -521,9 +515,7 @@ def test_two_symbols_each_fill_on_own_tick1(a_first: bool, long: bool, cross: bo
     """
     minutes = list(range(0, _N_BARS * 5))
     a, b = ("BTCUSDT", "ETHUSDT") if a_first else ("ETHUSDT", "BTCUSDT")
-    data = (
-        _bars_5m(a) + _bars_5m(b) + _fill_ticks(a, minutes) + _fill_ticks(b, minutes)
-    )
+    data = _bars_5m(a) + _bars_5m(b) + _fill_ticks(a, minutes) + _fill_ticks(b, minutes)
     engine = _run_release((a, b), data, long=long, cross=cross)
     try:
         assert _entries(engine, "BTCUSDT") == [pytest.approx(_TICK1_A)]
@@ -602,9 +594,7 @@ def test_validation_mode_releases_on_own_1m_bar(a_first: bool) -> None:
     """
     minutes = list(range(0, _N_BARS * 5))
     a, b = ("BTCUSDT", "ETHUSDT") if a_first else ("ETHUSDT", "BTCUSDT")
-    data = (
-        _bars_5m(a) + _bars_5m(b) + _bars_1m(a, minutes) + _bars_1m(b, minutes)
-    )
+    data = _bars_5m(a) + _bars_5m(b) + _bars_1m(a, minutes) + _bars_1m(b, minutes)
     engine = _run_release((a, b), data, mode=("bar", 0.0))
     try:
         assert _entries(engine, "BTCUSDT") == [pytest.approx(_TICK1_A)]
@@ -617,7 +607,11 @@ def test_validation_mode_releases_on_own_1m_bar(a_first: bool) -> None:
 def test_one_minute_strategy_keeps_deferral(long: bool) -> None:
     """A 1m strategy takes no outbox: screening defers one bar (delay 1.0) -> next 1m close."""
     fm = screening_fill_mode("1m", [])
-    assert (fm.command_release, fm.execution_delay_probability, fm.tick_timeframe) == ("", 1.0, None)
+    assert (fm.command_release, fm.execution_delay_probability, fm.tick_timeframe) == (
+        "",
+        1.0,
+        None,
+    )
     bt = get_bar_type("BTCUSDT", "1m")
     engine = _new_engine()
     engine.add_data(_build_bars(bt))

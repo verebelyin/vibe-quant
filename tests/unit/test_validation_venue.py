@@ -171,7 +171,9 @@ class TestFillModels:
         assert model.max_adverse_ticks == 2
         assert model.prob_slippage == 0.9
 
-    def test_volume_slippage_fill_model_best_price_book(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_volume_slippage_fill_model_best_price_book(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Best-price branch should keep the synthetic book at current best levels."""
         instrument = TestInstrumentProvider.btcusdt_binance()
         model = create_validation_fill_model(

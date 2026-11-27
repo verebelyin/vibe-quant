@@ -152,7 +152,9 @@ async def test_backtest_non_finite_is_422_named_and_never_launches(
 _DISCOVERY_NON_FINITE = [
     pytest.param({"leverage": float("nan")}, "leverage", id="nan-leverage"),
     pytest.param({"leverage": float("inf")}, "leverage", id="pos-inf-leverage"),
-    pytest.param({"liquidation_leverage": float("-inf")}, "liquidation_leverage", id="neg-inf-alias"),
+    pytest.param(
+        {"liquidation_leverage": float("-inf")}, "liquidation_leverage", id="neg-inf-alias"
+    ),
     pytest.param(
         {"cross_window_months": [1, float("nan")]},
         "cross_window_months.1",
@@ -170,9 +172,7 @@ async def test_discovery_non_finite_is_422_named_and_never_launches(
     ac, state, job_mgr = client
     before = _run_count(state)
 
-    r, popen = await _launch(
-        ac, job_mgr, "/api/discovery/launch", {**_DISCOVERY_BODY, **override}
-    )
+    r, popen = await _launch(ac, job_mgr, "/api/discovery/launch", {**_DISCOVERY_BODY, **override})
 
     assert r.status_code == 422, r.text
     assert f"{path}: {SUFFIX}" in r.text
@@ -187,7 +187,9 @@ _DISCOVERY_MIXED = [
         {"leverage": None, "mutation_rate": float("nan")}, "mutation_rate", id="null-lev-nan-rate"
     ),
     pytest.param(
-        {"liquidation_leverage": None, "leverage": float("inf")}, "leverage", id="null-alias-inf-lev"
+        {"liquidation_leverage": None, "leverage": float("inf")},
+        "leverage",
+        id="null-alias-inf-lev",
     ),
 ]
 
@@ -201,9 +203,7 @@ async def test_discovery_non_finite_not_hidden_by_null_leverage(
     ac, state, job_mgr = client
     before = _run_count(state)
 
-    r, popen = await _launch(
-        ac, job_mgr, "/api/discovery/launch", {**_DISCOVERY_BODY, **override}
-    )
+    r, popen = await _launch(ac, job_mgr, "/api/discovery/launch", {**_DISCOVERY_BODY, **override})
 
     assert r.status_code == 422, r.text
     assert f"{path}: {SUFFIX}" in r.text

@@ -18,7 +18,13 @@ D0 = kp.oa.day_of("2026-01-01")
 
 
 def _pos(day: int, side: int, px_open: float, px_close: float | None) -> dict[str, object]:
-    return {"side": side, "ts_open": (D0 + day) * DAY, "ts_close": None, "px_open": px_open, "px_close": px_close}
+    return {
+        "side": side,
+        "ts_open": (D0 + day) * DAY,
+        "ts_close": None,
+        "px_open": px_open,
+        "px_close": px_close,
+    }
 
 
 def test_window_metrics_slices_days_and_counts_trades_entered_in_window() -> None:

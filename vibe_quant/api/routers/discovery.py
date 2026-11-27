@@ -58,7 +58,6 @@ JobMgr = Annotated[BacktestJobManager, Depends(get_job_manager)]
 WsMgr = Annotated[ConnectionManager, Depends(get_ws_manager)]
 
 
-
 def _read_progress_file(run_id: int) -> dict[str, object] | None:
     """Read progress JSON written by the discovery pipeline subprocess."""
     import json
@@ -110,9 +109,7 @@ def _job_info_to_discovery_response(
                     sharpe = top.get("sharpe")
                     ret_pct = top.get("return_pct")
                     resp.best_sharpe = float(sharpe) if isinstance(sharpe, (int, float)) else None
-                    resp.best_return = (
-                        float(ret_pct) if isinstance(ret_pct, (int, float)) else None
-                    )
+                    resp.best_return = float(ret_pct) if isinstance(ret_pct, (int, float)) else None
     return resp
 
 
@@ -599,7 +596,10 @@ def _enforce_short_1m_cross_regime_gate(
         return
     payload = cast("dict[str, object]", record.payload)
     if gate_chain.passes_opposing_regime_gate(
-        payload, discovery_run, entry, regime_sign=gate_chain.window_regime_sign,
+        payload,
+        discovery_run,
+        entry,
+        regime_sign=gate_chain.window_regime_sign,
     ):
         return
 
@@ -672,7 +672,10 @@ async def export_discovered_strategy(
     """Export a discovered strategy to the strategies table."""
     entry = _get_genome_entry(DiscoveryRecord.load(state, run_id), strategy_index)
     strategy_id, name, created = _find_or_create_discovered_strategy(
-        state, run_id, strategy_index, entry,
+        state,
+        run_id,
+        strategy_index,
+        entry,
     )
     return {
         "status": "created" if created else "exists",
@@ -681,9 +684,7 @@ async def export_discovered_strategy(
     }
 
 
-def _find_strategy_by_dsl(
-    state: StateManager, dsl: dict[str, object]
-) -> tuple[int, str] | None:
+def _find_strategy_by_dsl(state: StateManager, dsl: dict[str, object]) -> tuple[int, str] | None:
     """Active strategy whose DSL equals ``dsl`` (ignoring name), else None."""
     import json
 
@@ -765,9 +766,7 @@ def _get_discovery_run_config(state: StateManager, run_id: int) -> dict[str, obj
     return run
 
 
-def _get_genome_entry(
-    record: DiscoveryRecord, strategy_index: int
-) -> dict[str, object]:
+def _get_genome_entry(record: DiscoveryRecord, strategy_index: int) -> dict[str, object]:
     """Bounds-check the record's stored strategies and return the indexed entry.
 
     An in-range entry that is not an object is unreadable: 409, never a crash.
@@ -885,9 +884,7 @@ async def promote_discovered_strategy(
     if mode not in ("screening", "validation"):
         raise HTTPException(status_code=400, detail="mode must be 'screening' or 'validation'")
     if validation_range not in ("holdout", "full"):
-        raise HTTPException(
-            status_code=400, detail="validation_range must be 'holdout' or 'full'"
-        )
+        raise HTTPException(status_code=400, detail="validation_range must be 'holdout' or 'full'")
 
     discovery_run = _get_discovery_run_config(state, run_id)
     record = DiscoveryRecord.load(state, run_id)
@@ -907,12 +904,21 @@ async def promote_discovered_strategy(
     import json
 
     strategy_id, name, _created = _find_or_create_discovered_strategy(
-        state, run_id, strategy_index, entry,
+        state,
+        run_id,
+        strategy_index,
+        entry,
     )
 
     # Create backtest run using discovery run's symbols/timeframe/dates
     symbols_raw = discovery_run.get("symbols", [])
-    symbols_list: list[str] = json.loads(symbols_raw) if isinstance(symbols_raw, str) else list(symbols_raw) if isinstance(symbols_raw, list) else []
+    symbols_list: list[str] = (
+        json.loads(symbols_raw)
+        if isinstance(symbols_raw, str)
+        else list(symbols_raw)
+        if isinstance(symbols_raw, list)
+        else []
+    )
 
     start_date = str(discovery_run.get("start_date", ""))
     end_date = str(discovery_run.get("end_date", ""))
@@ -951,7 +957,13 @@ async def promote_discovered_strategy(
     pid = _launch_backtest_job(state, jobs, backtest_run_id, mode)
     logger.info(
         "promote: strategy=%d %s run=%d range=%s %s..%s pid=%d",
-        strategy_id, mode, backtest_run_id, date_range, start_date, end_date, pid,
+        strategy_id,
+        mode,
+        backtest_run_id,
+        date_range,
+        start_date,
+        end_date,
+        pid,
     )
     await ws.broadcast("jobs", {"type": "job_started", "run_id": backtest_run_id, "job_type": mode})
 
@@ -990,7 +1002,13 @@ async def replay_discovered_strategy(
 
     # Use dsl_override so screening CLI uses DSL directly (no strategy needed)
     symbols_raw = discovery_run.get("symbols", [])
-    symbols_list: list[str] = json.loads(symbols_raw) if isinstance(symbols_raw, str) else list(symbols_raw) if isinstance(symbols_raw, list) else []
+    symbols_list: list[str] = (
+        json.loads(symbols_raw)
+        if isinstance(symbols_raw, str)
+        else list(symbols_raw)
+        if isinstance(symbols_raw, list)
+        else []
+    )
 
     from vibe_quant.dsl.translator import translate_dsl_config
 
@@ -1039,8 +1057,7 @@ async def replay_discovered_strategy(
         )
     if parts and symbol_agg != "pooled":
         metrics_note = (
-            "; ".join(parts)
-            + "; this replay is one continuous shared-account portfolio backtest "
+            "; ".join(parts) + "; this replay is one continuous shared-account portfolio backtest "
             "over the full range, so metrics differ from the stored champion "
             "fitness by design."
         )
@@ -1072,8 +1089,16 @@ async def replay_discovered_strategy(
     )
 
     pid = _launch_backtest_job(state, jobs, replay_run_id, "screening")
-    logger.info("replay: discovery=%d genome=%d screening=%d pid=%d", run_id, strategy_index, replay_run_id, pid)
-    await ws.broadcast("jobs", {"type": "job_started", "run_id": replay_run_id, "job_type": "screening"})
+    logger.info(
+        "replay: discovery=%d genome=%d screening=%d pid=%d",
+        run_id,
+        strategy_index,
+        replay_run_id,
+        pid,
+    )
+    await ws.broadcast(
+        "jobs", {"type": "job_started", "run_id": replay_run_id, "job_type": "screening"}
+    )
 
     return ReplayResponse(
         replay_run_id=replay_run_id,
@@ -1098,9 +1123,7 @@ async def get_indicator_pool() -> list[dict[str, object]]:
     return [
         {
             "name": name,
-            "params": {
-                param: {"min": lo, "max": hi} for param, (lo, hi) in ranges.items()
-            },
+            "params": {param: {"min": lo, "max": hi} for param, (lo, hi) in ranges.items()},
         }
         for name, ranges in INDICATOR_POOL.items()
     ]

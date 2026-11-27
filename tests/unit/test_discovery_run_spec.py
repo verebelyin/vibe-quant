@@ -62,9 +62,12 @@ def test_plan_derives_literal_windows() -> None:
         "--wfa-oos-step-days", "30",
     ])  # fmt: skip
     plan = spec.plan()
-    assert (
-        plan.train_start, plan.train_end, plan.holdout_start, plan.holdout_end
-    ) == ("2025-01-01", "2025-04-01", "2025-04-01", "2025-07-01")
+    assert (plan.train_start, plan.train_end, plan.holdout_start, plan.holdout_end) == (
+        "2025-01-01",
+        "2025-04-01",
+        "2025-04-01",
+        "2025-07-01",
+    )
     assert plan.eval_windows == [("2025-01-01", "2025-02-15"), ("2025-02-15", "2025-04-01")]
     assert plan.cross_windows == [
         (1, "2025-02-01", "2025-04-01"),
@@ -113,24 +116,35 @@ def test_resolved_bootstrap_min_sharpe_uses_the_timeframe_floor() -> None:
 
 def test_list_and_count_helpers() -> None:
     """Two unrelated argv rows: the parsed lists/counts main reads, literally."""
-    spec = DiscoveryRunSpec.from_argv([
-        "--symbols", " BTCUSDT , ETHUSDT ",
-        "--indicator-pool", " RSI , KAMA ",
-        "--eval-windows", "0",
-        "--max-workers", "-1",
-        "--cross-window-months=-1,3",
-    ])
+    spec = DiscoveryRunSpec.from_argv(
+        [
+            "--symbols",
+            " BTCUSDT , ETHUSDT ",
+            "--indicator-pool",
+            " RSI , KAMA ",
+            "--eval-windows",
+            "0",
+            "--max-workers",
+            "-1",
+            "--cross-window-months=-1,3",
+        ]
+    )
     assert spec.symbol_list() == ["BTCUSDT", "ETHUSDT"]
     assert spec.indicator_pool_list() == ["RSI", "KAMA"]
     assert spec.eval_window_count() == 1
     assert spec.worker_count() is None
     assert spec.cross_window_month_list() == [-1, 3]
 
-    other = DiscoveryRunSpec.from_argv([
-        "--symbols", "",
-        "--eval-windows", "3",
-        "--max-workers", "0",
-    ])
+    other = DiscoveryRunSpec.from_argv(
+        [
+            "--symbols",
+            "",
+            "--eval-windows",
+            "3",
+            "--max-workers",
+            "0",
+        ]
+    )
     assert other.symbol_list() == []
     assert other.indicator_pool_list() is None
     assert other.eval_window_count() == 3
@@ -176,11 +190,16 @@ def test_sizing_settings_helper() -> None:
     assert default.max_margin_pct is None
     assert default.to_params() == {}
 
-    other = DiscoveryRunSpec.from_argv([
-        "--max-position-pct", "2",
-        "--risk-per-trade", "0.01",
-        "--max-margin-pct", "0.3",
-    ]).sizing_settings()
+    other = DiscoveryRunSpec.from_argv(
+        [
+            "--max-position-pct",
+            "2",
+            "--risk-per-trade",
+            "0.01",
+            "--max-margin-pct",
+            "0.3",
+        ]
+    ).sizing_settings()
     assert other.to_params() == {
         "max_position_pct": 2.0,
         "risk_per_trade": 0.01,
@@ -200,21 +219,32 @@ def test_is_grid_and_bankroll_cells() -> None:
     )
 
     with pytest.raises(BankrollGridError) as exc:
-        DiscoveryRunSpec.from_argv([
-            "--bankroll-modes", "isolated",
-            "--bankroll-leverages", "5",
-            "--bankroll-max-margin-pcts", "0.5",
-            "--leverage", "5",
-        ]).is_grid()
+        DiscoveryRunSpec.from_argv(
+            [
+                "--bankroll-modes",
+                "isolated",
+                "--bankroll-leverages",
+                "5",
+                "--bankroll-max-margin-pcts",
+                "0.5",
+                "--leverage",
+                "5",
+            ]
+        ).is_grid()
     assert str(exc.value).endswith(
         "use either the bankroll grid or --liquidation-mode/--leverage/--max-margin-pct"
     )
 
-    spec = DiscoveryRunSpec.from_argv([
-        "--bankroll-modes", "isolated,cross",
-        "--bankroll-leverages", "5,10",
-        "--bankroll-max-margin-pcts", "0.5",
-    ])
+    spec = DiscoveryRunSpec.from_argv(
+        [
+            "--bankroll-modes",
+            "isolated,cross",
+            "--bankroll-leverages",
+            "5,10",
+            "--bankroll-max-margin-pcts",
+            "0.5",
+        ]
+    )
     assert spec.is_grid() is True
     cells = spec.bankroll_cells(spec.sizing_settings())
     assert [(c.mode, c.leverage, c.max_margin_pct) for c in cells] == [
@@ -355,13 +385,18 @@ def test_typed_365_limit_stores_252_meaning() -> None:
     assert "--cross-window-min-sharpe" not in argv
     cli = DiscoveryRunSpec.from_argv(argv)
     notes = cli.to_notes(
-        result, symbols=["BTCUSDT"], use_mock=True, seed=7, prior_run_ids=[], prior_legacy={},
+        result,
+        symbols=["BTCUSDT"],
+        use_mock=True,
+        seed=7,
+        prior_run_ids=[],
+        prior_legacy={},
         cells=None,
     )
     assert notes["cross_window_min_sharpe"] == 0.4985458305968263
-    assert cli.to_config(cli.plan(), symbols=["BTCUSDT"], prior_trials_fn=None).cross_window_min_sharpe == (
-        0.4985458305968263
-    )
+    assert cli.to_config(
+        cli.plan(), symbols=["BTCUSDT"], prior_trials_fn=None
+    ).cross_window_min_sharpe == (0.4985458305968263)
 
     other = _api_spec(cross_window_months=[1], cross_window_min_sharpe_365=1.2035001862952488)
     assert other.to_params()["cross_window_min_sharpe"] == 1.0
@@ -396,18 +431,28 @@ def test_typed_365_holdout_limit_stores_252_meaning() -> None:
     )  # fmt: skip
     spec = DiscoveryRunSpec.from_argv(["--holdout-min-sharpe-365", "0.6"])
 
-    assert spec.to_config(spec.plan(), symbols=["BTCUSDT"], prior_trials_fn=None).holdout_min_sharpe == (
-        0.4985458305968263
-    )
+    assert spec.to_config(
+        spec.plan(), symbols=["BTCUSDT"], prior_trials_fn=None
+    ).holdout_min_sharpe == (0.4985458305968263)
     notes = spec.to_notes(
-        result, symbols=["BTCUSDT"], use_mock=True, seed=7, prior_run_ids=[], prior_legacy={},
+        result,
+        symbols=["BTCUSDT"],
+        use_mock=True,
+        seed=7,
+        prior_run_ids=[],
+        prior_legacy={},
         cells=None,
     )
     assert notes["holdout_gate"]["min_sharpe"] == 0.4985458305968263  # type: ignore[index]
     assert spec.to_argv() == ["--holdout-min-sharpe-365", "0.6"]
 
     default = DiscoveryRunSpec.from_argv([])
-    assert default.to_config(default.plan(), symbols=["BTCUSDT"], prior_trials_fn=None).holdout_min_sharpe == 0.0
+    assert (
+        default.to_config(
+            default.plan(), symbols=["BTCUSDT"], prior_trials_fn=None
+        ).holdout_min_sharpe
+        == 0.0
+    )
 
 
 def test_eval_windows_zero_vs_explicit() -> None:
@@ -416,18 +461,14 @@ def test_eval_windows_zero_vs_explicit() -> None:
     assert "--eval-windows" not in zero.to_argv()
     assert "eval_windows" not in zero.to_params()
     assert zero.eval_window_count() == 3
-    assert (
-        zero.to_config(zero.plan(), symbols=["BTCUSDT"], prior_trials_fn=None).eval_windows == 3
-    )
+    assert zero.to_config(zero.plan(), symbols=["BTCUSDT"], prior_trials_fn=None).eval_windows == 3
 
     explicit = _api_spec(eval_windows=3)
     argv = explicit.to_argv()
     assert argv[argv.index("--eval-windows") + 1] == "3"
     assert explicit.to_params()["eval_windows"] == 3
     assert (
-        explicit.to_config(
-            explicit.plan(), symbols=["BTCUSDT"], prior_trials_fn=None
-        ).eval_windows
+        explicit.to_config(explicit.plan(), symbols=["BTCUSDT"], prior_trials_fn=None).eval_windows
         == 3
     )
 
@@ -841,7 +882,9 @@ def test_gate_pool_api_params_and_argv(body: dict[str, Any], param: str, argv: l
     assert spec.to_params()["gate_pool"] == param
     assert [a for a in spec.to_argv() if "gate-pool" in a or a in ("all", "top_k")] == argv
     again = DiscoveryRunSpec.from_argv(spec.to_argv())
-    assert again.to_config(again.plan(), symbols=["BTCUSDT"], prior_trials_fn=None).gate_pool == param
+    assert (
+        again.to_config(again.plan(), symbols=["BTCUSDT"], prior_trials_fn=None).gate_pool == param
+    )
 
 
 def test_gate_pool_api_refuses_unknown_value() -> None:
@@ -1111,7 +1154,9 @@ def test_pooled_coverage_refusal_is_todays_message(tmp_path: Path, agg: str) -> 
     [({}, None, []), ({"fitness": "v1"}, None, []), ({"fitness": "v2"}, "v2", ["--fitness", "v2"])],
     ids=["absent", "v1", "v2"],
 )  # fmt: skip
-def test_fitness_api_params_and_argv(body: dict[str, Any], param: str | None, argv: list[str]) -> None:
+def test_fitness_api_params_and_argv(
+    body: dict[str, Any], param: str | None, argv: list[str]
+) -> None:
     """``v1`` is the default: only ``v2`` is stored and forwarded, so a default launch is unchanged.
 
     The forwarded argv parses back to the flag the run reads and to the same config the API

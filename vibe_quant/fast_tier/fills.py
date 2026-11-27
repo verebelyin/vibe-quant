@@ -180,7 +180,15 @@ class Replay:
         return self._closed_balance
 
     def _fill(
-        self, t: int, *, buy: bool, qty: Any, base_raw: int, order_type: str, maker: bool, size_raw: int
+        self,
+        t: int,
+        *,
+        buy: bool,
+        qty: Any,
+        base_raw: int,
+        order_type: str,
+        maker: bool,
+        size_raw: int,
     ) -> None:
         """Apply one fill (slip draw, commission) to the open position or a new one."""
         from nautilus_trader.model.objects import Money, Price
@@ -199,8 +207,13 @@ class Replay:
         commission = Money(notional.as_decimal() * rate, self.ccy)
         ts = int(self.bars[t].ts_init) if t < self.n else self.end_ts
         fill = self._ids.fill(
-            buy=buy, order_type=order_type, qty=qty, px=px, commission=commission,
-            maker=maker, ts=ts,
+            buy=buy,
+            order_type=order_type,
+            qty=qty,
+            px=px,
+            commission=commission,
+            maker=maker,
+            ts=ts,
         )
         self._fill_no += 1
         if self.positions and self.positions[-1].is_open:
@@ -269,17 +282,33 @@ class Replay:
         for price, kind, size in self._ticks(t):
             if sl is not None and (price <= sl if is_long else price >= sl):
                 base = price if kind == "O" else sl
-                self._fill(t, buy=not is_long, qty=qty, base_raw=base, order_type="STOP_MARKET",
-                           maker=False, size_raw=size)
+                self._fill(
+                    t,
+                    buy=not is_long,
+                    qty=qty,
+                    base_raw=base,
+                    order_type="STOP_MARKET",
+                    maker=False,
+                    size_raw=size,
+                )
                 return True
             if tp is not None and (price >= tp if is_long else price <= tp):
                 if price != tp:
                     if kind == "O":
-                        raise FastTierUnsupported(f"open tick gaps through the take-profit at bar {t}")
+                        raise FastTierUnsupported(
+                            f"open tick gaps through the take-profit at bar {t}"
+                        )
                 elif not self._event(self.p_limit):
                     continue
-                self._fill(t, buy=not is_long, qty=qty, base_raw=tp, order_type="LIMIT",
-                           maker=True, size_raw=size)
+                self._fill(
+                    t,
+                    buy=not is_long,
+                    qty=qty,
+                    base_raw=tp,
+                    order_type="LIMIT",
+                    maker=True,
+                    size_raw=size,
+                )
                 return True
         return False
 
@@ -292,8 +321,8 @@ class Replay:
         lo = self.low_f[start : stop + 1]
         hi = self.high_f[start : stop + 1]
         mask = np.zeros(stop + 1 - start, dtype=bool)
-        sl_f = None if sl is None else sl / 10 ** _RAW_SCALE
-        tp_f = None if tp is None else tp / 10 ** _RAW_SCALE
+        sl_f = None if sl is None else sl / 10**_RAW_SCALE
+        tp_f = None if tp is None else tp / 10**_RAW_SCALE
         if is_long:
             if sl_f is not None:
                 mask |= lo <= sl_f * (1 + 1e-9)
@@ -331,8 +360,15 @@ class Replay:
             if qty is None:
                 i = d + 1
                 continue
-            self._fill(d, buy=is_long, qty=qty, base_raw=self.c[d], order_type="MARKET",
-                       maker=False, size_raw=self._book_size(d))
+            self._fill(
+                d,
+                buy=is_long,
+                qty=qty,
+                base_raw=self.c[d],
+                order_type="MARKET",
+                maker=False,
+                size_raw=self._book_size(d),
+            )
             sl, tp = self._protection(is_long)
             a = d + 1
             k = _next(long_exit_idx if is_long else short_exit_idx, a)
@@ -345,16 +381,30 @@ class Replay:
             x = k + 1
             if not self._protective_fill(x, is_long, sl, tp):
                 qty_open = self.positions[-1].quantity
-                self._fill(x, buy=not is_long, qty=qty_open, base_raw=self.c[x],
-                           order_type="MARKET", maker=False, size_raw=self._book_size(x))
+                self._fill(
+                    x,
+                    buy=not is_long,
+                    qty=qty_open,
+                    base_raw=self.c[x],
+                    order_type="MARKET",
+                    maker=False,
+                    size_raw=self._book_size(x),
+                )
             i = x + 1
         # NT's on_stop runs before the engine force-closes: a close at/after this instant is
         # the shutdown's, never one the sizing ledger missed (modeled_costs.reconcile).
         self.ledger.stopped(self.end_ts)
         if self.positions and self.positions[-1].is_open:
             pos = self.positions[-1]
-            self._fill(n, buy=not pos.is_long, qty=pos.quantity, base_raw=self.c[n - 1],
-                       order_type="MARKET", maker=False, size_raw=self._book_size(n - 1))
+            self._fill(
+                n,
+                buy=not pos.is_long,
+                qty=pos.quantity,
+                base_raw=self.c[n - 1],
+                order_type="MARKET",
+                maker=False,
+                size_raw=self._book_size(n - 1),
+            )
         return self.positions
 
 
@@ -393,7 +443,15 @@ class _Ids:
         self.count = 0
 
     def fill(
-        self, *, buy: bool, order_type: str, qty: Any, px: Any, commission: Any, maker: bool, ts: int
+        self,
+        *,
+        buy: bool,
+        order_type: str,
+        qty: Any,
+        px: Any,
+        commission: Any,
+        maker: bool,
+        ts: int,
     ) -> Any:
         from nautilus_trader.core.uuid import UUID4
         from nautilus_trader.model.enums import LiquiditySide, OrderSide, OrderType

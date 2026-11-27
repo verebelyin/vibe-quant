@@ -34,8 +34,13 @@ from scipy import stats
 
 from vibe_quant.validation.extraction import load_catalog_bars
 
-TFS = {"1m": ("1-MINUTE", 1), "5m": ("5-MINUTE", 5), "15m": ("15-MINUTE", 15),
-       "1h": ("1-HOUR", 60), "4h": ("4-HOUR", 240)}
+TFS = {
+    "1m": ("1-MINUTE", 1),
+    "5m": ("5-MINUTE", 5),
+    "15m": ("15-MINUTE", 15),
+    "1h": ("1-HOUR", 60),
+    "4h": ("4-HOUR", 240),
+}
 PERIODS = (2, 3, 4, 5, 7, 9, 14, 21, 28)
 THRESHOLDS = (5, 10, 15, 20, 25, 30, 35)
 FILTERS = ("none", "sma200")
@@ -96,10 +101,14 @@ def summary(gross: np.ndarray) -> dict[str, float | int | None]:
     net = gross - COST
     t, p = p_one(net)
     n = len(gross)
-    return {"n": n, "gross": float(gross.mean()) if n else None,
-            "net": float(net.mean()) if n else None,
-            "net_maker": float((gross - COST_MAKER).mean()) if n else None,
-            "t": t, "p": p}
+    return {
+        "n": n,
+        "gross": float(gross.mean()) if n else None,
+        "net": float(net.mean()) if n else None,
+        "net_maker": float((gross - COST_MAKER).mean()) if n else None,
+        "t": t,
+        "p": p,
+    }
 
 
 def run_tf(tf: str) -> list[dict[str, object]]:
@@ -124,8 +133,17 @@ def run_tf(tf: str) -> list[dict[str, object]]:
                     ent, ex = simulate(op, ts_min, tf_min, sig, cu, hold)
                     gross = op[ex] / op[ent] - 1
                     tr = ts[ent] < SPLIT_NS
-                    rows.append({"tf": tf, "rsi": n, "thr": thr, "filter": flt, "hold": hold,
-                                 "train": summary(gross[tr]), "test": summary(gross[~tr])})
+                    rows.append(
+                        {
+                            "tf": tf,
+                            "rsi": n,
+                            "thr": thr,
+                            "filter": flt,
+                            "hold": hold,
+                            "train": summary(gross[tr]),
+                            "test": summary(gross[~tr]),
+                        }
+                    )
     print(f"{tf} done {len(rows)}", file=sys.stderr, flush=True)
     return rows
 
@@ -135,16 +153,27 @@ def main(out_dir: str) -> None:
         rows = [r for part in pool.map(run_tf, list(TFS)) for r in part]
     assert len(rows) == N_CELLS
     sel_bar = 0.05 / N_CELLS
-    selected = [r for r in rows if r["train"]["n"] >= 100 and (r["train"]["net"] or 0) > 0  # type: ignore[index,operator]
-                and r["train"]["p"] < sel_bar]  # type: ignore[index,operator]
+    selected = [
+        r
+        for r in rows
+        if r["train"]["n"] >= 100
+        and (r["train"]["net"] or 0) > 0  # type: ignore[index,operator]
+        and r["train"]["p"] < sel_bar
+    ]  # type: ignore[index,operator]
     test_bar = 0.05 / max(1, len(selected))
     for r in selected:
         te = r["test"]
         r["pass"] = bool(te["n"] >= 50 and (te["net"] or 0) > 0 and te["p"] < test_bar)  # type: ignore[index,operator]
     top = sorted((r for r in rows if r["train"]["n"] >= 100), key=lambda r: -r["train"]["t"])[:15]  # type: ignore[index,operator]
-    res = {"n_cells": N_CELLS, "select_p_bar": sel_bar, "n_selected": len(selected),
-           "test_p_bar": test_bar, "n_pass": sum(bool(r.get("pass")) for r in selected),
-           "selected": selected, "top15_train": top}
+    res = {
+        "n_cells": N_CELLS,
+        "select_p_bar": sel_bar,
+        "n_selected": len(selected),
+        "test_p_bar": test_bar,
+        "n_pass": sum(bool(r.get("pass")) for r in selected),
+        "selected": selected,
+        "top15_train": top,
+    }
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     (out / "cells.json").write_text(json.dumps(rows))

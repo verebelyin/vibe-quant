@@ -227,9 +227,7 @@ class VolumeSlippageFillModel(FillModel):  # type: ignore[misc]
 
         if self._rng.random() > self._prob_best_price_fill:
             adverse_ticks = (
-                1
-                if self._max_adverse_ticks == 1
-                else self._rng.randint(1, self._max_adverse_ticks)
+                1 if self._max_adverse_ticks == 1 else self._rng.randint(1, self._max_adverse_ticks)
             )
             bid_price = self._shift_price(best_bid, instrument.price_increment, -adverse_ticks)
             ask_price = self._shift_price(best_ask, instrument.price_increment, adverse_ticks)

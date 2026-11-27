@@ -97,9 +97,7 @@ def test_stoch_matches_ta_smooth_k_one_not_the_default_slow() -> None:
 @pytest.mark.parametrize(
     ("k", "d", "n"), [(14, 3, 15), (14, 3, 16), (14, 3, 17), (5, 2, 4), (5, 2, 5), (5, 2, 6)]
 )
-def test_stoch_short_input_guard_is_exact_at_the_first_defined_row(
-    k: int, d: int, n: int
-) -> None:
+def test_stoch_short_input_guard_is_exact_at_the_first_defined_row(k: int, d: int, n: int) -> None:
     """Below ``k + d - 1`` rows every output is NaN with no pandas-ta log; at the
     boundary the last %D row is defined (first defined %D is row ``k + d - 2``)."""
     df = _ohlc(n=n)
@@ -112,9 +110,7 @@ def test_stoch_short_input_guard_is_exact_at_the_first_defined_row(
         assert got["d"].first_valid_index() == k + d - 2
         np.testing.assert_allclose(
             got["d"].iloc[[k + d - 2]].to_numpy(),
-            df.ta.stoch(
-                high=df["high"], low=df["low"], close=df["close"], k=k, d=d, smooth_k=1
-            )
+            df.ta.stoch(high=df["high"], low=df["low"], close=df["close"], k=k, d=d, smooth_k=1)
             .iloc[:, 1]
             .iloc[[k + d - 2]]
             .to_numpy(),

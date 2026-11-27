@@ -412,9 +412,7 @@ def test_worker_reextract_after_cancel_runs_again(
         assert _wait_until(lambda: _job_status(sm, first_job) == "cancelled", timeout=15.0)
 
         # Re-enqueue the same item; the fast path (no SLOWJOB marker now).
-        sm.conn.execute(
-            "UPDATE research_items SET body = 'FASTJOB' WHERE id = ?", (iid,)
-        )
+        sm.conn.execute("UPDATE research_items SET body = 'FASTJOB' WHERE id = ?", (iid,))
         sm.conn.commit()
         second_job = sm.enqueue_extraction_job(iid)
         assert _wait_until(lambda: _job_status(sm, second_job) == "done", timeout=15.0), (

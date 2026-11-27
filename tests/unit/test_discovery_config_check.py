@@ -32,20 +32,32 @@ class _Counting:
 
         r = random.Random(7)
         return {
-            "sharpe_ratio": 2.0, "max_drawdown": 0.08, "profit_factor": 2.0,
-            "total_trades": 150, "total_return": 0.5,
+            "sharpe_ratio": 2.0,
+            "max_drawdown": 0.08,
+            "profit_factor": 2.0,
+            "total_trades": 150,
+            "total_return": 0.5,
             "trade_returns": tuple(r.gauss(0.0033, 0.001) for _ in range(150)),
         }
 
 
 def _cfg(**overrides: Any) -> DiscoveryConfig:
     d: dict[str, Any] = {
-        "population_size": 4, "max_generations": 2, "elite_count": 1,
-        "tournament_size": 2, "convergence_generations": 1, "top_k": 1,
-        "min_trades": 1, "max_workers": 1, "symbols": ["BTCUSDT"], "timeframe": "1h",
-        "start_date": "2024-01-01", "end_date": "2024-02-15",
+        "population_size": 4,
+        "max_generations": 2,
+        "elite_count": 1,
+        "tournament_size": 2,
+        "convergence_generations": 1,
+        "top_k": 1,
+        "min_trades": 1,
+        "max_workers": 1,
+        "symbols": ["BTCUSDT"],
+        "timeframe": "1h",
+        "start_date": "2024-01-01",
+        "end_date": "2024-02-15",
         "train_test_split": 0.5,
-        "holdout_start_date": "2024-02-15", "holdout_end_date": "2024-04-01",
+        "holdout_start_date": "2024-02-15",
+        "holdout_end_date": "2024-04-01",
         "require_dsr": False,
     }
     d.update(overrides)
@@ -54,7 +66,9 @@ def _cfg(**overrides: Any) -> DiscoveryConfig:
 
 def _pipe(fn: _Counting, **overrides: Any) -> DiscoveryPipeline:
     return DiscoveryPipeline(
-        _cfg(**overrides), fn, holdout_backtest_fn=fn,
+        _cfg(**overrides),
+        fn,
+        holdout_backtest_fn=fn,
         backtest_fn_factory=lambda s, e: fn,
     )
 
@@ -89,7 +103,9 @@ def test_bad_cross_window_months_rejected_before_ga(months: list[int]) -> None:
 def test_no_factory_keeps_failing_closed_after_ga() -> None:
     fn = _Counting()
     pipe = DiscoveryPipeline(
-        _cfg(cross_window_months=[2]), fn, holdout_backtest_fn=fn,
+        _cfg(cross_window_months=[2]),
+        fn,
+        holdout_backtest_fn=fn,
     )
     result = pipe.run()  # must not raise
     assert fn.calls > 0
@@ -100,8 +116,12 @@ def test_no_factory_keeps_failing_closed_after_ga() -> None:
 def test_several_bad_knobs_one_error_lists_all() -> None:
     with pytest.raises(DiscoveryConfigError) as ei:
         plan_windows(
-            "2024-01-01", "2024-04-01", train_test_split=0.5, eval_windows=10,
-            cross_window_months=[0, 5, 5], wfa_oos_step_days=90,
+            "2024-01-01",
+            "2024-04-01",
+            train_test_split=0.5,
+            eval_windows=10,
+            cross_window_months=[0, 5, 5],
+            wfa_oos_step_days=90,
         )
     msg = str(ei.value)
     for needle in ("must be >= 1", "duplicates", "eval_windows", "shorter than 7d", "WFA"):
@@ -112,8 +132,12 @@ def test_several_bad_knobs_one_error_lists_all() -> None:
 def test_bad_split_collected_with_months() -> None:
     with pytest.raises(DiscoveryConfigError, match="must be >= 1.*; .*too short for split"):
         plan_windows(
-            "2024-01-01", "2024-01-02", train_test_split=0.5, eval_windows=1,
-            cross_window_months=[0], wfa_oos_step_days=0,
+            "2024-01-01",
+            "2024-01-02",
+            train_test_split=0.5,
+            eval_windows=1,
+            cross_window_months=[0],
+            wfa_oos_step_days=0,
         )
 
 
@@ -124,9 +148,13 @@ def test_not_a_data_unavailable_error() -> None:
 
 def test_pure_ranges_match_pipeline_methods_and_legacy_dates() -> None:
     cfg = _cfg(
-        start_date="2024-01-01", end_date="2024-10-19", train_test_split=0.8,
-        holdout_start_date="2024-10-19", holdout_end_date="2025-01-01",
-        cross_window_months=[1, 3], wfa_oos_step_days=30,
+        start_date="2024-01-01",
+        end_date="2024-10-19",
+        train_test_split=0.8,
+        holdout_start_date="2024-10-19",
+        holdout_end_date="2025-01-01",
+        cross_window_months=[1, 3],
+        wfa_oos_step_days=30,
     )
     pipe = DiscoveryPipeline(cfg, backtest_fn=lambda c: {})
     cross = cross_window_ranges_for([1, 3], "2024-01-01", "2024-10-19", "2024-10-19")
@@ -139,12 +167,19 @@ def test_pure_ranges_match_pipeline_methods_and_legacy_dates() -> None:
 
 def test_plan_windows_uses_the_shared_split_functions() -> None:
     plan = plan_windows(
-        "2024-01-01", "2025-01-01", train_test_split=0.8, eval_windows=3,
-        cross_window_months=[1], wfa_oos_step_days=30,
+        "2024-01-01",
+        "2025-01-01",
+        train_test_split=0.8,
+        eval_windows=3,
+        cross_window_months=[1],
+        wfa_oos_step_days=30,
     )
     ts, te, hs, he = split_date_range("2024-01-01", "2025-01-01", 0.8)
     assert (plan.train_start, plan.train_end, plan.holdout_start, plan.holdout_end) == (
-        ts, te, hs, he,
+        ts,
+        te,
+        hs,
+        he,
     )
     assert plan.eval_windows == split_into_windows(ts, te, 3)
 
@@ -152,11 +187,17 @@ def test_plan_windows_uses_the_shared_split_functions() -> None:
 def test_plan_windows_splits_via_utils_not_a_copy(monkeypatch: pytest.MonkeyPatch) -> None:
     """Dates come from the (patched) shared split function, not a local copy."""
     monkeypatch.setattr(
-        config_check, "split_date_range", lambda s, e, r: ("2024-01-01", "2024-06-01", "2024-06-01", "2025-01-01"),
+        config_check,
+        "split_date_range",
+        lambda s, e, r: ("2024-01-01", "2024-06-01", "2024-06-01", "2025-01-01"),
     )
     plan = plan_windows(
-        "2024-01-01", "2025-01-01", train_test_split=0.8, eval_windows=1,
-        cross_window_months=[], wfa_oos_step_days=0,
+        "2024-01-01",
+        "2025-01-01",
+        train_test_split=0.8,
+        eval_windows=1,
+        cross_window_months=[],
+        wfa_oos_step_days=0,
     )
     assert plan.train_end == "2024-06-01"  # 0.8 would give 2024-10-20
 

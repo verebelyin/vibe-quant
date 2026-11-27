@@ -91,13 +91,9 @@ def build_wfa_config(args: argparse.Namespace) -> WFAConfig | None:
 
     return WFAConfig(
         in_sample_days=is_days if is_days is not None else defaults.in_sample_days,
-        out_of_sample_days=(
-            oos_days if oos_days is not None else defaults.out_of_sample_days
-        ),
+        out_of_sample_days=(oos_days if oos_days is not None else defaults.out_of_sample_days),
         step_days=step_days if step_days is not None else defaults.step_days,
-        min_windows=(
-            min_windows if min_windows is not None else defaults.min_windows
-        ),
+        min_windows=(min_windows if min_windows is not None else defaults.min_windows),
         min_oos_sharpe=defaults.min_oos_sharpe,
         max_degradation=defaults.max_degradation,
         min_consistency=defaults.min_consistency,
@@ -140,9 +136,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         from vibe_quant.overfitting.nt_runner import NTWFARunner
 
         resolved_db = db_path or DEFAULT_DB_PATH
-        wfa_runner = NTWFARunner(
-            run_id=args.run_id, db_path=resolved_db, catalog_path=catalog_path
-        )
+        wfa_runner = NTWFARunner(run_id=args.run_id, db_path=resolved_db, catalog_path=catalog_path)
     if getattr(args, "real_cv", False):
         from vibe_quant.overfitting.nt_cv_runner import NTPurgedKFoldRunner
 

@@ -96,7 +96,9 @@ def run_engine(
     out = Engine()
     original = NTScreeningRunner._extract_metrics
 
-    def spy(self: NTScreeningRunner, params: Any, bt_result: Any, engine: Any, *a: Any, **k: Any) -> Any:
+    def spy(
+        self: NTScreeningRunner, params: Any, bt_result: Any, engine: Any, *a: Any, **k: Any
+    ) -> Any:
         out.positions = all_positions(engine)
         out.orders = list(engine.cache.orders())
         out.ledger = k.get("cost_ledger")
@@ -111,7 +113,11 @@ def run_engine(
             action = "entry" if i == 0 else kinds[f.order_type.name]
             out.fills.append(
                 te.Fill(
-                    int(f.ts_event), f.order_side.name, action, str(f.last_qty), str(f.last_px),
+                    int(f.ts_event),
+                    f.order_side.name,
+                    action,
+                    str(f.last_qty),
+                    str(f.last_px),
                     str(f.commission),
                 )
             )
@@ -124,7 +130,9 @@ def run_engine(
     ]
     for o in sorted(protective, key=lambda o: (int(o.ts_init), o.order_type.name != "STOP_MARKET")):
         stop = o.order_type.name == "STOP_MARKET"
-        out.levels.append((o.order_type.name, str(o.trigger_price if stop else o.price), str(o.quantity)))
+        out.levels.append(
+            (o.order_type.name, str(o.trigger_price if stop else o.price), str(o.quantity))
+        )
     return out
 
 
@@ -173,7 +181,10 @@ def money_fixtures() -> dict[str, dict[str, Any]]:
         "plain": {
             "name": "e_plain",
             "indicators": {"rsi": {"type": "RSI", "period": 14}},
-            "entry_conditions": {"long": ["rsi crosses_below 30"], "short": ["rsi crosses_above 70"]},
+            "entry_conditions": {
+                "long": ["rsi crosses_below 30"],
+                "short": ["rsi crosses_above 70"],
+            },
             "exit_conditions": {"long": ["rsi > 55"], "short": ["rsi < 45"]},
             "stop_loss": {"type": "fixed_pct", "percent": 1.0},
             "take_profit": {"type": "fixed_pct", "percent": 2.0},
@@ -181,7 +192,10 @@ def money_fixtures() -> dict[str, dict[str, Any]]:
         "reverse": {
             "name": "e_reverse",
             "position_mode": "reverse",
-            "indicators": {"fast": {"type": "EMA", "period": 9}, "slow": {"type": "EMA", "period": 21}},
+            "indicators": {
+                "fast": {"type": "EMA", "period": 9},
+                "slow": {"type": "EMA", "period": 21},
+            },
             "entry_conditions": {
                 "long": ["fast crosses_above slow"],
                 "short": ["fast crosses_below slow"],
@@ -226,7 +240,9 @@ def test_engine_mode_equals_screening_on_real_bars(
 
 @needs_catalog
 @pytest.mark.parametrize("name", ["plain", "reverse", "reverse_level_refresh"])
-def test_engine_mode_equals_screening_on_1m_defer(name: str, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_engine_mode_equals_screening_on_1m_defer(
+    name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """R60 (1m: every action deferred one bar, no outbox, protection live at once)."""
     dsl = {**money_fixtures()[name], "timeframe": "1m"}
     engine = run_engine(monkeypatch, dsl, "2026-03-02", "2026-03-04")
@@ -291,14 +307,20 @@ def hour_catalog(root: Path, hours: list[tuple[float, float, float, float, float
             )
             prev = close
     bars_1m = klines_to_bars(
-        klines, instrument.id, get_bar_type("BTCUSDT", "1m"),
-        instrument.size_precision, instrument.price_precision,
+        klines,
+        instrument.id,
+        get_bar_type("BTCUSDT", "1m"),
+        instrument.size_precision,
+        instrument.price_precision,
     )
     manager.write_bars(bars_1m)
     manager.write_bars(
         aggregate_bars(
-            bars_1m, get_bar_type("BTCUSDT", "1h"), 60,
-            instrument.size_precision, instrument.price_precision,
+            bars_1m,
+            get_bar_type("BTCUSDT", "1h"),
+            60,
+            instrument.size_precision,
+            instrument.price_precision,
         )
     )
     return root
@@ -313,21 +335,31 @@ def day_catalog(root: Path, days: int = 4, bar_minutes: tuple[int, ...] = (240, 
         {
             "open_time": _DAY0_MS + m * _MIN_MS,
             "close_time": _DAY0_MS + (m + 1) * _MIN_MS - 1,
-            "open": 100.0, "high": 100.0, "low": 100.0, "close": 100.0, "volume": 1.0,
+            "open": 100.0,
+            "high": 100.0,
+            "low": 100.0,
+            "close": 100.0,
+            "volume": 1.0,
         }
         for m in range(days * 1440)
     ]
     bars_1m = klines_to_bars(
-        klines, instrument.id, get_bar_type("BTCUSDT", "1m"),
-        instrument.size_precision, instrument.price_precision,
+        klines,
+        instrument.id,
+        get_bar_type("BTCUSDT", "1m"),
+        instrument.size_precision,
+        instrument.price_precision,
     )
     manager.write_bars(bars_1m)
     names = {240: "4h", 1440: "1d"}
     for minutes in bar_minutes:
         manager.write_bars(
             aggregate_bars(
-                bars_1m, get_bar_type("BTCUSDT", names[minutes]), minutes,
-                instrument.size_precision, instrument.price_precision,
+                bars_1m,
+                get_bar_type("BTCUSDT", names[minutes]),
+                minutes,
+                instrument.size_precision,
+                instrument.price_precision,
             )
         )
     return root
@@ -381,8 +413,12 @@ def test_both_levels_touched_in_one_bar_follow_the_engines_tick_order(
     """R61: the bar that touches stop AND target exits by the engine's tick order, in both modes."""
     catalog = hour_catalog(tmp_path / "catalog", _both_touched(high, low))
     emu = emulate(
-        _scenario_dsl(), _RUN_START, _RUN_END, mode=mode,
-        catalog_path=str(catalog), launch=_SIZING,
+        _scenario_dsl(),
+        _RUN_START,
+        _RUN_END,
+        mode=mode,
+        catalog_path=str(catalog),
+        launch=_SIZING,
     )
     assert [f.action for f in emu.fills] == ["entry", first]
     entry, exit_fill = emu.fills
@@ -396,8 +432,12 @@ def test_both_levels_touched_in_one_bar_follow_the_engines_tick_order(
     if mode == "engine":
         # the real runner takes the same leg first, at the same prices and costs
         engine = run_engine(
-            monkeypatch, _scenario_dsl(), _RUN_START, _RUN_END,
-            catalog_path=str(catalog), launch=_SIZING,
+            monkeypatch,
+            _scenario_dsl(),
+            _RUN_START,
+            _RUN_END,
+            catalog_path=str(catalog),
+            launch=_SIZING,
         )
         assert [f.action for f in engine.fills] == ["entry", first]
         assert_e_parity(engine, emu, min_trades=1)
@@ -434,7 +474,10 @@ def test_tv_mode_fills_at_the_next_bar_open_and_engine_mode_at_the_release_tick(
     # TradingView sizes on the signal bar's close (101): the same 4.950 BTC in both modes
     assert tv_entry.qty == engine_entry.qty == "4.950"
     # protection comes from the actual fill: 2 % / 3 % off 102.4 -> 100.352 -> 100.4, 105.472 -> 105.5
-    assert [(lv.kind, lv.price) for lv in tv.levels] == [("STOP_MARKET", "100.4"), ("LIMIT", "105.5")]
+    assert [(lv.kind, lv.price) for lv in tv.levels] == [
+        ("STOP_MARKET", "100.4"),
+        ("LIMIT", "105.5"),
+    ]
     # no slippage and taker commission in TV mode: 0.05 % of 4.950 x 102.4
     assert tv_entry.commission.startswith("0.25344")
 
@@ -484,20 +527,42 @@ def test_tv_gap_through_the_stop_fills_at_the_open_instant_and_owns_no_later_fun
     """A stop gapped through at hour 3's open fills at that open (price 90.0, 03:00:00), not at the
     bar close, so a settlement at 03:30 -- after the exit -- is not paid by the closed position."""
     catalog = hour_catalog(tmp_path / "catalog", _gap_stop_hours())
-    archive = _funding_archive(tmp_path / "f.db", _DAY0_NS + 3 * _HOUR_MS * 1_000_000 + 30 * _MIN_MS * 1_000_000)
+    archive = _funding_archive(
+        tmp_path / "f.db", _DAY0_NS + 3 * _HOUR_MS * 1_000_000 + 30 * _MIN_MS * 1_000_000
+    )
     emu = emulate(
-        _scenario_dsl(), _RUN_START, _RUN_END, mode="tv",
-        catalog_path=str(catalog), launch=_SIZING, funding_archive_path=str(archive),
+        _scenario_dsl(),
+        _RUN_START,
+        _RUN_END,
+        mode="tv",
+        catalog_path=str(catalog),
+        launch=_SIZING,
+        funding_archive_path=str(archive),
     )
     entry, stop = emu.fills
-    assert (entry.action, entry.price, entry.ts) == ("entry", "101.0", _DAY0_NS + 2 * _HOUR_MS * 1_000_000)
-    assert (stop.action, stop.price, stop.ts) == ("stop", "90.0", _DAY0_NS + 3 * _HOUR_MS * 1_000_000)
+    assert (entry.action, entry.price, entry.ts) == (
+        "entry",
+        "101.0",
+        _DAY0_NS + 2 * _HOUR_MS * 1_000_000,
+    )
+    assert (stop.action, stop.price, stop.ts) == (
+        "stop",
+        "90.0",
+        _DAY0_NS + 3 * _HOUR_MS * 1_000_000,
+    )
     assert sum(emu.ledger.finalized.values()) == 0.0
     # the same gap one settlement earlier (02:30, inside the position) IS paid: 0.0001 x 4.950 x 101.0
-    early = _funding_archive(tmp_path / "g.db", _DAY0_NS + 2 * _HOUR_MS * 1_000_000 + 30 * _MIN_MS * 1_000_000)
+    early = _funding_archive(
+        tmp_path / "g.db", _DAY0_NS + 2 * _HOUR_MS * 1_000_000 + 30 * _MIN_MS * 1_000_000
+    )
     emu2 = emulate(
-        _scenario_dsl(), _RUN_START, _RUN_END, mode="tv",
-        catalog_path=str(catalog), launch=_SIZING, funding_archive_path=str(early),
+        _scenario_dsl(),
+        _RUN_START,
+        _RUN_END,
+        mode="tv",
+        catalog_path=str(catalog),
+        launch=_SIZING,
+        funding_archive_path=str(early),
     )
     assert sum(emu2.ledger.finalized.values()) == pytest.approx(0.0001 * 4.950 * 101.0, rel=1e-9)
 
@@ -514,10 +579,17 @@ def _tp_gap_hours() -> list[tuple[float, float, float, float, float]]:
 
 def test_tv_fills_a_gap_through_the_take_profit_at_the_open(tmp_path: Path) -> None:
     catalog = hour_catalog(tmp_path / "catalog", _tp_gap_hours())
-    emu = emulate(_scenario_dsl(), _RUN_START, _RUN_END, mode="tv", catalog_path=str(catalog), launch=_SIZING)
+    emu = emulate(
+        _scenario_dsl(), _RUN_START, _RUN_END, mode="tv", catalog_path=str(catalog), launch=_SIZING
+    )
     entry, target, *_ = emu.fills  # the 110 close signals again afterwards
     assert (entry.action, entry.price) == ("entry", "101.0")
-    assert (target.action, target.side, target.qty, target.price) == ("target", "SELL", "4.950", "110.0")
+    assert (target.action, target.side, target.qty, target.price) == (
+        "target",
+        "SELL",
+        "4.950",
+        "110.0",
+    )
     assert target.ts == _DAY0_NS + 3 * _HOUR_MS * 1_000_000
 
 
@@ -530,7 +602,10 @@ def test_engine_mode_gap_through_the_take_profit_equals_the_screening_fill(
     kw: dict[str, Any] = {"catalog_path": str(catalog), "launch": _SIZING}
     emu = emulate(_scenario_dsl(), _RUN_START, _RUN_END, mode="engine", **kw)
     engine = run_engine(monkeypatch, _scenario_dsl(), _RUN_START, _RUN_END, **kw)
-    assert [(f.action, f.price) for f in engine.fills][:2] == [("entry", "101.0"), ("target", "103.9")]
+    assert [(f.action, f.price) for f in engine.fills][:2] == [
+        ("entry", "101.0"),
+        ("target", "103.9"),
+    ]
     assert emu.fills[:2] == engine.fills[:2]
 
 
@@ -559,7 +634,10 @@ def test_engine_mode_open_gap_through_a_resting_take_profit_fills_at_the_limit(
     engine = run_engine(monkeypatch, _scenario_dsl(), _RUN_START, _RUN_END, **kw)
     target = engine.fills[1]
     assert (target.action, target.price, target.ts, target.commission) == (
-        "target", "103.9", 1704085199999000000, "0.10286100 USDT",
+        "target",
+        "103.9",
+        1704085199999000000,
+        "0.10286100 USDT",
     )
     assert emu.fills[:3] == engine.fills[:3]
     assert_e_parity(engine, emu, min_trades=1)
@@ -570,7 +648,9 @@ def test_tv_mode_open_gap_through_a_resting_take_profit_fills_at_the_open(
     tmp_path: Path, o: float, m0: float
 ) -> None:
     catalog = hour_catalog(tmp_path / "catalog", _open_gap_hours(o, m0))
-    emu = emulate(_scenario_dsl(), _RUN_START, _RUN_END, mode="tv", catalog_path=str(catalog), launch=_SIZING)
+    emu = emulate(
+        _scenario_dsl(), _RUN_START, _RUN_END, mode="tv", catalog_path=str(catalog), launch=_SIZING
+    )
     entry, target, *_ = emu.fills
     assert (entry.action, entry.price) == ("entry", "101.0")
     assert emu.levels[1].price == "104.0"
@@ -593,16 +673,20 @@ def test_a_settlement_on_the_reversal_instant_is_paid_by_the_old_side_only(
 
     catalog = _flat_catalog(tmp_path / "catalog")
     archive = _funding_archive(tmp_path / "f.db", _REVERSAL_NS)
-    dsl = reverse_dsl("emu_funding", long=("close < 10100.5",), short=("close >= 10470", "close < 10490"))
+    dsl = reverse_dsl(
+        "emu_funding", long=("close < 10100.5",), short=("close >= 10470", "close < 10490")
+    )
     launch = LaunchSettings(sizing=SizingSettings(risk_per_trade=0.0202, max_margin_pct=None))
     kw: dict[str, Any] = {
-        "catalog_path": str(catalog), "funding_archive_path": str(archive), "launch": launch,
+        "catalog_path": str(catalog),
+        "funding_archive_path": str(archive),
+        "launch": launch,
     }
 
-    emu = te.emulate(NTScreeningRunner(dsl, ["BTCUSDT"], FLAT_START, FLAT_END, **kw), "BTCUSDT", "engine")
-    ref = run_screening(
-        catalog, dsl, risk_per_trade=0.0202, funding_archive=archive, end=FLAT_END
+    emu = te.emulate(
+        NTScreeningRunner(dsl, ["BTCUSDT"], FLAT_START, FLAT_END, **kw), "BTCUSDT", "engine"
     )
+    ref = run_screening(catalog, dsl, risk_per_trade=0.0202, funding_archive=archive, end=FLAT_END)
 
     long_entry, short_entry = [f for f in emu.fills if f.action == "entry"]
     assert (long_entry.qty, long_entry.price) == ("0.010", "10100.0")
@@ -613,7 +697,10 @@ def test_a_settlement_on_the_reversal_instant_is_paid_by_the_old_side_only(
     short_pos = emu.positions[-1]
     assert short_pos.is_open and short_pos.ts_opened == _REVERSAL_NS
     funding = emu.ledger.model.funding
-    assert accrue_position_funding(funding, short_pos, exit_ns=_REVERSAL_NS + 10 * 60 * 10**9).total == 0.0
+    assert (
+        accrue_position_funding(funding, short_pos, exit_ns=_REVERSAL_NS + 10 * 60 * 10**9).total
+        == 0.0
+    )
     assert emu.ledger.paid_through(_REVERSAL_NS, [short_pos]) == pytest.approx(0.0101, rel=1e-12)
 
 
@@ -652,7 +739,11 @@ def test_daily_bars_with_funding_refinement_refuse_loudly(tmp_path: Path, mode: 
     empty.conn.commit()
     empty.close()
     no_archive = str(tmp_path / "empty_funding.db")
-    kw: dict[str, Any] = {"catalog_path": str(catalog), "launch": _SIZING, "funding_archive_path": no_archive}
+    kw: dict[str, Any] = {
+        "catalog_path": str(catalog),
+        "launch": _SIZING,
+        "funding_archive_path": no_archive,
+    }
     with pytest.raises(te.EmulatorUnsupported, match="funding exit refinement"):
         emulate({**_scenario_dsl(), "timeframe": "1d"}, _RUN_START, "2024-01-04", mode=mode, **kw)
     emu = emulate({**_scenario_dsl(), "timeframe": "4h"}, _RUN_START, "2024-01-04", mode=mode, **kw)
@@ -662,7 +753,12 @@ def test_daily_bars_with_funding_refinement_refuse_loudly(tmp_path: Path, mode: 
 def test_unknown_mode_is_refused(tmp_path: Path) -> None:
     catalog = hour_catalog(tmp_path / "catalog", _both_touched(104.6, 97.0))
     runner = NTScreeningRunner(
-        _scenario_dsl(), ["BTCUSDT"], _RUN_START, _RUN_END, catalog_path=str(catalog), launch=_SIZING
+        _scenario_dsl(),
+        ["BTCUSDT"],
+        _RUN_START,
+        _RUN_END,
+        catalog_path=str(catalog),
+        launch=_SIZING,
     )
     with pytest.raises(ValueError, match="mode must be"):
         te.emulate(runner, "BTCUSDT", "paper")
@@ -699,7 +795,10 @@ def stub_port(monkeypatch: pytest.MonkeyPatch) -> list[str]:
             "name": "stub_port",
             "timeframe": "1h",
             "indicators": {"rsi": {"type": "RSI", "period": "{{period}}"}},
-            "entry_conditions": {"long": ["rsi crosses_below 30"], "short": ["rsi crosses_above 70"]},
+            "entry_conditions": {
+                "long": ["rsi crosses_below 30"],
+                "short": ["rsi crosses_above 70"],
+            },
             "exit_conditions": {"long": ["rsi > 55"], "short": ["rsi < 45"]},
             "stop_loss": {"type": "fixed_pct", "percent": 1.0},
             "take_profit": {"type": "fixed_pct", "percent": 2.0},
@@ -717,8 +816,17 @@ def test_cli_emulate_prints_the_engine_trade_list(
 ) -> None:
     """``emulate`` on the stub port prints one line per trade whose entry equals the engine's."""
     tv = _load("tv")
-    args = ["emulate", "--port", "ports/03_x", "--symbol", "BTCUSDT",
-            "--start", "2026-03-02", "--end", "2026-03-12"]
+    args = [
+        "emulate",
+        "--port",
+        "ports/03_x",
+        "--symbol",
+        "BTCUSDT",
+        "--start",
+        "2026-03-02",
+        "--end",
+        "2026-03-12",
+    ]
     assert tv.main(args) == 0
     out = capsys.readouterr().out
     dsl = {**money_fixtures()["plain"], "name": "stub_port", "timeframe": "1h"}
@@ -736,8 +844,13 @@ def _real_port_folder(root: Path, allowed: list[str]) -> Path:
     import yaml
 
     doc = {
-        "name": "timeframe_guard", "pine": "sample.pine", "tv": {"initial_capital": 1000},
-        "params": {}, "constraints": [], "allowed_timeframes": allowed, "dsl": _scenario_dsl(),
+        "name": "timeframe_guard",
+        "pine": "sample.pine",
+        "tv": {"initial_capital": 1000},
+        "params": {},
+        "constraints": [],
+        "allowed_timeframes": allowed,
+        "dsl": _scenario_dsl(),
     }
     folder = root / "port"
     folder.mkdir()
@@ -759,8 +872,21 @@ def test_cli_render_goes_through_the_real_ports_timeframe_gate(
     with pytest.raises(PortError, match="does not support timeframe 15m"):
         tv.main(["render", "--port", str(folder), "--timeframe", "15m"])
     with pytest.raises(PortError, match="does not support timeframe 15m"):
-        tv.main(["emulate", "--port", str(folder), "--timeframe", "15m", "--symbol", "BTCUSDT",
-                 "--start", "2024-01-01", "--end", "2024-01-02"])
+        tv.main(
+            [
+                "emulate",
+                "--port",
+                str(folder),
+                "--timeframe",
+                "15m",
+                "--symbol",
+                "BTCUSDT",
+                "--start",
+                "2024-01-01",
+                "--end",
+                "2024-01-02",
+            ]
+        )
     assert capsys.readouterr().out == ""  # nothing rendered before the refusal
     assert tv.main(["render", "--port", str(folder), "--timeframe", "4h"]) == 0
     assert yaml.safe_load(capsys.readouterr().out)["timeframe"] == "4h"

@@ -42,7 +42,9 @@ def append_row(job: Path, values: dict[str, str | None]) -> Path:
     header = f"| {' | '.join(COLUMNS)} |"
     text = path.read_text(encoding="utf-8") if path.exists() else ""
     if text.strip() and header not in text.splitlines():
-        raise SystemExit(f"{path}: header is not {header!r}; write rows only with ledger.py/mkbrief.py")
+        raise SystemExit(
+            f"{path}: header is not {header!r}; write rows only with ledger.py/mkbrief.py"
+        )
     with path.open("a", encoding="utf-8") as fh:
         if not text.strip():
             fh.write(header_text(job.name))
@@ -55,7 +57,9 @@ def now_hm() -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--job", required=True, type=Path)
     ap.add_argument("--id", required=True, dest="agent")
     ap.add_argument("--status", required=True)

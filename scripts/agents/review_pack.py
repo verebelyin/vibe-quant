@@ -163,7 +163,10 @@ def _resolve_range(args: argparse.Namespace) -> tuple[str, str, list[tuple[str, 
         typed_base, sep, typed_head = args.range_.partition("..")
         if not sep or not typed_base or not typed_head:
             raise ValueError(f"bad --range {args.range_!r}; expected BASE..HEAD")
-        ends = ((typed_base, _resolve(worktree, typed_base)), (typed_head, _resolve(worktree, typed_head)))
+        ends = (
+            (typed_base, _resolve(worktree, typed_base)),
+            (typed_head, _resolve(worktree, typed_head)),
+        )
         for typed, sha in ends:
             if sha is None:
                 raise ValueError(f"{typed!r} does not resolve to a commit in {worktree}")
@@ -214,7 +217,10 @@ def _render(args: argparse.Namespace, base: str, head: str, warns: list[tuple[st
 
     out = [f"RANGE {span}"]
     out += [f"WARN {typed} is a ref; pinned to {sha}" for typed, sha in warns]
-    for text in (_git(worktree, "log", "--oneline", span).stdout, _git(worktree, "diff", "--stat", span).stdout):
+    for text in (
+        _git(worktree, "log", "--oneline", span).stdout,
+        _git(worktree, "diff", "--stat", span).stdout,
+    ):
         if text.strip():
             out.append(text.rstrip("\n"))
     out += skipped
@@ -235,7 +241,9 @@ def main(argv: list[str] | None = None) -> int:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--range", dest="range_", metavar="BASE..HEAD", help="explicit range")
     group.add_argument("--merge-base", metavar="PARENT", help="base = git merge-base PARENT HEAD")
-    parser.add_argument("--head", metavar="REF", help="HEAD for --merge-base (default: worktree HEAD)")
+    parser.add_argument(
+        "--head", metavar="REF", help="HEAD for --merge-base (default: worktree HEAD)"
+    )
     parser.add_argument("--max-lines", type=int, default=250, help="diff line cap (default 250)")
     parser.add_argument("--full", metavar="PATH", help="write the uncapped diff here")
     args = parser.parse_args(argv)

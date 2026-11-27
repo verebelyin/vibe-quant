@@ -32,13 +32,16 @@ class _FakeJobManager:
         self._pid_seq = 10000
 
     def start_job(
-        self, run_id: int, job_type: str, command: list[str],
-        log_file: str | None = None, env: dict[str, str] | None = None,  # noqa: ARG002
+        self,
+        run_id: int,
+        job_type: str,
+        command: list[str],
+        log_file: str | None = None,
+        env: dict[str, str] | None = None,  # noqa: ARG002
     ) -> int:
         self._pid_seq += 1
         self.calls.append(
-            {"run_id": run_id, "job_type": job_type, "command": list(command),
-             "log_file": log_file}
+            {"run_id": run_id, "job_type": job_type, "command": list(command), "log_file": log_file}
         )
         return self._pid_seq
 
@@ -187,7 +190,8 @@ def test_extract_top_chromosomes_returns_top_k(state: StateManager) -> None:
         parameters={},
     )
     _seed_discovery_result(
-        state, run_id,
+        state,
+        run_id,
         [
             {"dsl": {"name": "s0"}, "score": 0.9},
             {"dsl": {"name": "s1"}, "score": 0.8},
@@ -202,16 +206,26 @@ def test_extract_top_chromosomes_returns_top_k(state: StateManager) -> None:
 
 def test_extract_top_chromosomes_missing_notes_returns_empty(state: StateManager) -> None:
     run_id = state.create_backtest_run(
-        strategy_id=None, run_mode=RUN_MODE_DISCOVERY, symbols=["BTCUSDT"],
-        timeframe="1h", start_date="x", end_date="y", parameters={},
+        strategy_id=None,
+        run_mode=RUN_MODE_DISCOVERY,
+        symbols=["BTCUSDT"],
+        timeframe="1h",
+        start_date="x",
+        end_date="y",
+        parameters={},
     )
     assert extract_top_chromosomes(run_id, state) == []
 
 
 def test_extract_top_chromosomes_malformed_notes_returns_empty(state: StateManager) -> None:
     run_id = state.create_backtest_run(
-        strategy_id=None, run_mode=RUN_MODE_DISCOVERY, symbols=["BTCUSDT"],
-        timeframe="1h", start_date="x", end_date="y", parameters={},
+        strategy_id=None,
+        run_mode=RUN_MODE_DISCOVERY,
+        symbols=["BTCUSDT"],
+        timeframe="1h",
+        start_date="x",
+        end_date="y",
+        parameters={},
     )
     state.conn.execute(
         "INSERT INTO backtest_results (run_id, notes) VALUES (?, ?)",
@@ -246,7 +260,8 @@ def test_plan_oos_validations_creates_row_per_champion_per_window(
     # Seed top-2 champions for each discovery run
     for label, run_id in plan.discovery_runs.items():
         _seed_discovery_result(
-            state, run_id,
+            state,
+            run_id,
             [
                 {"dsl": _valid_dsl(f"{label}_top0"), "score": 0.9},
                 {"dsl": _valid_dsl(f"{label}_top1"), "score": 0.8},
@@ -277,9 +292,7 @@ def test_plan_oos_validations_idempotent(
     """Re-calling plan_oos_validations must not duplicate rows."""
     plan = plan_campaign(minimal_config, state)
     for run_id in plan.discovery_runs.values():
-        _seed_discovery_result(
-            state, run_id, [{"dsl": _valid_dsl(f"s_{run_id}"), "score": 0.9}]
-        )
+        _seed_discovery_result(state, run_id, [{"dsl": _valid_dsl(f"s_{run_id}"), "score": 0.9}])
 
     plan_oos_validations(plan, state)
     first_count = len(plan.oos_runs)
@@ -304,9 +317,7 @@ def test_run_campaign_skips_completed_runs(
     # Pre-mark both discoveries completed + seed champions so OOS gets planned
     for label, run_id in plan.discovery_runs.items():
         state.update_backtest_run_status(run_id, "completed")
-        _seed_discovery_result(
-            state, run_id, [{"dsl": _valid_dsl(f"{label}_s"), "score": 0.9}]
-        )
+        _seed_discovery_result(state, run_id, [{"dsl": _valid_dsl(f"{label}_s"), "score": 0.9}])
 
     fake = _FakeJobManager()
     run_campaign(plan, state, skip_existing=True, job_manager=fake)
@@ -330,7 +341,8 @@ def test_run_campaign_runs_discoveries_when_not_completed(
             if "vibe_quant.discovery" in command:
                 state.update_backtest_run_status(run_id, "completed")
                 _seed_discovery_result(
-                    state, run_id,
+                    state,
+                    run_id,
                     [{"dsl": _valid_dsl(f"s_{run_id}"), "score": 0.9}],
                 )
             return pid
@@ -356,19 +368,17 @@ def test_run_campaign_registers_jobs_in_background_jobs_table(
     # Pre-complete discoveries so we can exercise the OOS path too
     for label, run_id in plan.discovery_runs.items():
         state.update_backtest_run_status(run_id, "completed")
-        _seed_discovery_result(
-            state, run_id, [{"dsl": _valid_dsl(f"{label}_s"), "score": 0.9}]
-        )
+        _seed_discovery_result(state, run_id, [{"dsl": _valid_dsl(f"{label}_s"), "score": 0.9}])
 
     # Real manager but stub out the actual process spawn
     manager = BacktestJobManager(db_path=tmp_path / "campaign_test.db")
-    with patch(
-        "vibe_quant.jobs.manager.subprocess.Popen"
-    ) as m_popen:
+    with patch("vibe_quant.jobs.manager.subprocess.Popen") as m_popen:
         m_popen.return_value.pid = 77777
-        with patch.object(BacktestJobManager, "is_process_alive", return_value=False), \
-             patch.object(BacktestJobManager, "sync_job_status", return_value=JobStatus.COMPLETED), \
-             patch.object(BacktestJobManager, "get_status", return_value=JobStatus.COMPLETED):
+        with (
+            patch.object(BacktestJobManager, "is_process_alive", return_value=False),
+            patch.object(BacktestJobManager, "sync_job_status", return_value=JobStatus.COMPLETED),
+            patch.object(BacktestJobManager, "get_status", return_value=JobStatus.COMPLETED),
+        ):
             run_campaign(plan, state, skip_existing=True, job_manager=manager)
 
     # All OOS run_ids should now have rows in background_jobs
@@ -392,9 +402,7 @@ def test_build_matrix_report_collects_oos_cells(
 ) -> None:
     plan = plan_campaign(minimal_config, state)
     for run_id in plan.discovery_runs.values():
-        _seed_discovery_result(
-            state, run_id, [{"dsl": _valid_dsl(f"s_{run_id}"), "score": 0.9}]
-        )
+        _seed_discovery_result(state, run_id, [{"dsl": _valid_dsl(f"s_{run_id}"), "score": 0.9}])
     plan_oos_validations(plan, state)
 
     # Seed results for each OOS row

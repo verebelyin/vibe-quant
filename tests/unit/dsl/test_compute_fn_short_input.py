@@ -207,9 +207,7 @@ def test_dema_kc_guards_do_not_change_values_at_any_length(
         if raw_dema is None:
             assert got_dema.isna().all(), f"DEMA p={period} n={n}"
         else:
-            pd.testing.assert_series_equal(
-                got_dema, raw_dema, check_names=False, check_exact=True
-            )
+            pd.testing.assert_series_equal(got_dema, raw_dema, check_names=False, check_exact=True)
 
         raw_kc = _raw_or_none(
             lambda df=df: ta.kc(df["high"], df["low"], df["close"], length=period, scalar=2.0)

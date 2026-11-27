@@ -149,9 +149,7 @@ def test_process_one_job_happy_path(sm: StateManager) -> None:
     iid = _seed_item(sm)
     job_id = sm.enqueue_extraction_job(iid)
 
-    with patch(
-        "vibe_quant.research.extractor.get_default_extractor", return_value=_ok_extractor()
-    ):
+    with patch("vibe_quant.research.extractor.get_default_extractor", return_value=_ok_extractor()):
         result = worker_mod.process_one_job(sm)
 
     assert result is not None
@@ -171,9 +169,7 @@ def test_process_one_job_persists_prompt_on_extraction_row(sm: StateManager) -> 
     iid = _seed_item(sm)
     sm.enqueue_extraction_job(iid)
 
-    with patch(
-        "vibe_quant.research.extractor.get_default_extractor", return_value=_ok_extractor()
-    ):
+    with patch("vibe_quant.research.extractor.get_default_extractor", return_value=_ok_extractor()):
         worker_mod.process_one_job(sm)
 
     rows = sm.conn.execute(
@@ -192,9 +188,7 @@ def test_process_one_job_extractor_failure_marks_job_failed(sm: StateManager) ->
         def extract_all(self, _item: Any) -> ExtractionBatch:
             raise RuntimeError("boom")
 
-    with patch(
-        "vibe_quant.research.extractor.get_default_extractor", return_value=_BoomExt()
-    ):
+    with patch("vibe_quant.research.extractor.get_default_extractor", return_value=_BoomExt()):
         result = worker_mod.process_one_job(sm)
 
     assert result is not None
@@ -231,18 +225,14 @@ def test_run_forever_finalizes_inflight_job_as_cancelled_on_stop(
             stop.wait(timeout=2.0)
             raise RuntimeError("forced bailout")
 
-    sink = worker_mod._JsonlSink(
-        worker_mod.DEFAULT_LOG_ROOT / "test-cancel.log"
-    )
+    sink = worker_mod._JsonlSink(worker_mod.DEFAULT_LOG_ROOT / "test-cancel.log")
 
     def runner() -> None:
         with patch(
             "vibe_quant.research.extractor.get_default_extractor",
             return_value=_SlowExt(),
         ):
-            worker_mod.run_forever(
-                sm, poll_interval=0.05, stop_event=stop, sink=sink
-            )
+            worker_mod.run_forever(sm, poll_interval=0.05, stop_event=stop, sink=sink)
 
     th = threading.Thread(target=runner)
     th.start()
@@ -271,9 +261,7 @@ def test_extractor_failure_under_max_attempts_requeues(sm: StateManager) -> None
         def extract_all(self, _item: Any) -> ExtractionBatch:
             raise RuntimeError("transient")
 
-    with patch(
-        "vibe_quant.research.extractor.get_default_extractor", return_value=_BoomExt()
-    ):
+    with patch("vibe_quant.research.extractor.get_default_extractor", return_value=_BoomExt()):
         worker_mod.process_one_job(sm)
 
     after = sm.get_extraction_job(job_id)

@@ -431,7 +431,9 @@ def test_neighbour_series_do_not_lower_the_effective_n(monkeypatch: pytest.Monke
     )  # the premise: the mutant (neighbours in series_pool) fails open
 
     ga = [_chrom(i) for i in range(40)]
-    quiet = [_chrom(200 + i) for i in range(145)]  # the GA's other 145 genomes: no train pass, no series
+    quiet = [
+        _chrom(200 + i) for i in range(145)
+    ]  # the GA's other 145 genomes: no train pass, no series
     nbrs = [_chrom(100 + i) for i in range(88)]
     fixed = {
         key_of(c): _fit(mtm_daily_returns=fr.mtm_daily_returns)

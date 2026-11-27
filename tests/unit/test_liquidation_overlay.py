@@ -1423,7 +1423,9 @@ def test_refined_scan_timestamp_credits_the_cross_wallet_at_r() -> None:
     assert not control.is_identity
     assert [h.ts for h in control.result.hits] == [bar(2)]  # open through the crash
     refined = cross([p], series, scan_fill_ts={key_of(p): {1: bar(1)}})
-    genuine = cross([make_pos("P-1", BTC, [entry, Fill(bar(1), SELL, 0.1, 42000.0)], closed=False)], series)
+    genuine = cross(
+        [make_pos("P-1", BTC, [entry, Fill(bar(1), SELL, 0.1, 42000.0)], closed=False)], series
+    )
     assert refined.is_identity and genuine.is_identity  # flat before the crash: no bust
     assert refined.result.hits == genuine.result.hits == []
     assert refined.result.bust_ts is None

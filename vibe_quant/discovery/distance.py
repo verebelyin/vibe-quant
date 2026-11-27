@@ -22,16 +22,16 @@ from vibe_quant.discovery.operators import (
 from vibe_quant.discovery.param_genome import ParamGenome, param_distance
 
 # Weights for gene components (structural vs parametric)
-_W_INDICATOR: float = 2.0   # categorical: 0 or 1
-_W_CONDITION: float = 1.0   # categorical: 0 or 1
-_W_THRESHOLD: float = 1.0   # continuous: normalized
-_W_PARAMS: float = 1.0      # continuous: avg normalized param distance
+_W_INDICATOR: float = 2.0  # categorical: 0 or 1
+_W_CONDITION: float = 1.0  # categorical: 0 or 1
+_W_THRESHOLD: float = 1.0  # continuous: normalized
+_W_PARAMS: float = 1.0  # continuous: avg normalized param distance
 
 # Weights for chromosome-level components
-_W_GENES: float = 3.0       # gene-by-gene distance (dominant)
-_W_DIRECTION: float = 1.0   # categorical: 0, 0.5, or 1
-_W_SL: float = 0.5          # continuous: normalized
-_W_TP: float = 0.5          # continuous: normalized
+_W_GENES: float = 3.0  # gene-by-gene distance (dominant)
+_W_DIRECTION: float = 1.0  # categorical: 0, 0.5, or 1
+_W_SL: float = 0.5  # continuous: normalized
+_W_TP: float = 0.5  # continuous: normalized
 
 # Global threshold range for normalization (populated on first use)
 _THRESHOLD_GLOBAL_RANGE: float = 400.0  # CCI range [-200, 200] is widest
@@ -44,6 +44,7 @@ def _init_direction_distances() -> None:
     if _DIRECTION_DISTANCES:
         return
     from vibe_quant.discovery.operators import Direction
+
     dirs = [Direction.LONG, Direction.SHORT, Direction.BOTH]
     for a in dirs:
         for b in dirs:
@@ -83,6 +84,7 @@ def gene_distance(a: StrategyGene, b: StrategyGene) -> float:
     if ind_same:
         # Threshold distance (continuous, same indicator scale)
         from vibe_quant.discovery.operators import THRESHOLD_RANGES
+
         if a.indicator_type in THRESHOLD_RANGES:
             tlo, thi = THRESHOLD_RANGES[a.indicator_type]
             rng = thi - tlo
@@ -93,6 +95,7 @@ def gene_distance(a: StrategyGene, b: StrategyGene) -> float:
 
         # Parameter distance (continuous, shared params)
         from vibe_quant.discovery.operators import INDICATOR_POOL
+
         ranges = INDICATOR_POOL.get(a.indicator_type, {})
         if ranges:
             param_dists: list[float] = []

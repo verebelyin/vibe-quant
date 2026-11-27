@@ -266,9 +266,7 @@ def test_settlement_at_fill_ts_through_accumulator(tmp_path: Path) -> None:
     """A fill stamped at the settlement instant pays on the qty before it."""
     calc = _archive(tmp_path / "a.db", {1: 0.0001, 2: 0.0001})
     fills = [_fill("BTCUSDT", _settle(1) + 3_000_000, 100)]
-    acc = FundingAccumulator(
-        calc, {"BTCUSDT": _marks(51000.0)}, _specs(), _settle(1)
-    )
+    acc = FundingAccumulator(calc, {"BTCUSDT": _marks(51000.0)}, _specs(), _settle(1))
     payments = acc.advance(fills, _settle(2) + 10**9)
     assert [p.ts for p in payments] == [_settle(2) + 3_000_000]
     assert payments[0].amount == pytest.approx(0.51, rel=1e-12)
@@ -278,9 +276,7 @@ def test_settlements_at_or_after_end_ignored(tmp_path: Path) -> None:
     """The final window excludes settlements at or after ``end_ns``."""
     calc = _archive(tmp_path / "a.db", {1: 0.0001, 2: 0.0001})
     fills = [_fill("BTCUSDT", _settle(1) - _HOUR_NS, 100)]
-    acc = FundingAccumulator(
-        calc, {"BTCUSDT": _marks(51000.0)}, _specs(), _settle(1)
-    )
+    acc = FundingAccumulator(calc, {"BTCUSDT": _marks(51000.0)}, _specs(), _settle(1))
     payments = acc.advance(fills, _settle(2))
     assert [p.ts for p in payments] == [_settle(1) + 3_000_000]
     assert all(p.ts < _settle(2) for p in acc.payments)

@@ -97,9 +97,7 @@ def test_validation_of_the_stored_dsl_ignores_a_newer_override_run(
     a = _run(state, sid, [({"rsi_period": 7}, 9.9, 30)], {"dsl_override": _override_dsl()})
     assert a > b, "the override run must be the newest so the old fallback picks it"
 
-    ref = find_screening_reference(
-        state, sid, DSL_NAME, validated_params={"rsi.period": 14}
-    )
+    ref = find_screening_reference(state, sid, DSL_NAME, validated_params={"rsi.period": 14})
 
     assert ref is not None
     assert (ref.sharpe, ref.trades) == (1.5, 20), "compared against another strategy"
@@ -132,9 +130,7 @@ def test_an_override_of_the_same_body_is_the_same_strategy(state: StateManager) 
     reordered = {key: _stored_dsl()[key] for key in reversed(list(_stored_dsl()))}
     newest = _run(state, sid, [({"rsi_period": 14}, 2.4, 25)], {"dsl_override": reordered})
 
-    ref = find_screening_reference(
-        state, sid, DSL_NAME, validated_params={"rsi.period": 14}
-    )
+    ref = find_screening_reference(state, sid, DSL_NAME, validated_params={"rsi.period": 14})
 
     assert ref is not None
     assert (ref.sharpe, ref.trades) == (2.4, 25)
@@ -149,9 +145,7 @@ def test_only_rows_of_another_dsl_are_refused_with_a_reason(
     a = _run(state, sid, [({"rsi_period": 7}, 9.9, 30)], {"dsl_override": _override_dsl()})
 
     with caplog.at_level(logging.WARNING, logger="vibe_quant.validation.consistency"):
-        ref = find_screening_reference(
-            state, sid, DSL_NAME, validated_params={"rsi.period": 14}
-        )
+        ref = find_screening_reference(state, sid, DSL_NAME, validated_params={"rsi.period": 14})
 
     assert ref is None, "fell back to a row of another strategy"
     assert f"screening run {a} executed a different effective DSL" in caplog.text
@@ -165,9 +159,7 @@ def test_the_best_row_fallback_stays_inside_the_same_dsl(
     b = _run(state, sid, [({"rsi_period": 13}, 1.5, 20)])
     _run(state, sid, [({"rsi_period": 14}, 9.9, 30)], {"dsl_override": _override_dsl()})
 
-    ref = find_screening_reference(
-        state, sid, DSL_NAME, validated_params={"rsi.period": 14}
-    )
+    ref = find_screening_reference(state, sid, DSL_NAME, validated_params={"rsi.period": 14})
 
     assert ref is not None
     assert (ref.sharpe, ref.trades) == (1.5, 20)
@@ -186,9 +178,7 @@ def test_unreadable_parameters_refuse_the_run_with_a_reason(
     state.conn.commit()
 
     with caplog.at_level(logging.WARNING, logger="vibe_quant.validation.consistency"):
-        ref = find_screening_reference(
-            state, sid, DSL_NAME, validated_params={"rsi.period": 14}
-        )
+        ref = find_screening_reference(state, sid, DSL_NAME, validated_params={"rsi.period": 14})
 
     assert ref is None
     assert f"screening run {run_id} has unreadable parameters" in caplog.text
@@ -289,9 +279,7 @@ def test_a_different_entry_rule_is_a_different_strategy(state: StateManager) -> 
     stricter = {**_stored_dsl(), "entry_conditions": {"long": ["rsi < 20"]}}
     _run(state, sid, [({"rsi_period": 14}, 9.9, 30)], {"dsl_override": stricter})
 
-    ref = find_screening_reference(
-        state, sid, DSL_NAME, validated_params={"rsi.period": 14}
-    )
+    ref = find_screening_reference(state, sid, DSL_NAME, validated_params={"rsi.period": 14})
 
     assert ref is None, "RSI < 20 run was compared as the RSI < 30 strategy"
 
@@ -315,9 +303,7 @@ def test_explicit_defaults_are_the_same_strategy(state: StateManager) -> None:
     explicit = {**_stored_dsl(), "description": "", "version": 1, "additional_timeframes": []}
     newest = _run(state, sid, [({"rsi_period": 14}, 2.4, 25)], {"dsl_override": explicit})
 
-    ref = find_screening_reference(
-        state, sid, DSL_NAME, validated_params={"rsi.period": 14}
-    )
+    ref = find_screening_reference(state, sid, DSL_NAME, validated_params={"rsi.period": 14})
 
     assert ref is not None
     assert ref.source == f"screening_run:{newest}"

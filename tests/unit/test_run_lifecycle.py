@@ -106,9 +106,7 @@ def _run_full(conn: sqlite3.Connection, run_id: int) -> dict[str, Any]:
 
 
 def _job_full(conn: sqlite3.Connection, run_id: int) -> dict[str, Any]:
-    row = conn.execute(
-        "SELECT * FROM background_jobs WHERE run_id = ?", (run_id,)
-    ).fetchone()
+    row = conn.execute("SELECT * FROM background_jobs WHERE run_id = ?", (run_id,)).fetchone()
     assert row is not None
     return dict(row)
 
@@ -120,9 +118,7 @@ def _stamp_heartbeats(conn: sqlite3.Connection, run_id: int) -> None:
     conn.execute(
         "UPDATE background_jobs SET heartbeat_at = ? WHERE run_id = ?", (OLD_HEARTBEAT, run_id)
     )
-    conn.execute(
-        "UPDATE backtest_runs SET heartbeat_at = ? WHERE id = ?", (OLD_HEARTBEAT, run_id)
-    )
+    conn.execute("UPDATE backtest_runs SET heartbeat_at = ? WHERE id = ?", (OLD_HEARTBEAT, run_id))
     conn.commit()
 
 
@@ -166,9 +162,7 @@ def test_finish_commits_before_returning(conn: sqlite3.Connection, db_path: Path
 
     other = get_connection(db_path)
     try:
-        run = other.execute(
-            "SELECT status FROM backtest_runs WHERE id = ?", (run_id,)
-        ).fetchone()
+        run = other.execute("SELECT status FROM backtest_runs WHERE id = ?", (run_id,)).fetchone()
         job = other.execute(
             "SELECT status FROM background_jobs WHERE run_id = ?", (run_id,)
         ).fetchone()
@@ -187,9 +181,7 @@ def test_claim_without_a_job_row_refuses_without_writing(conn: sqlite3.Connectio
 
     from vibe_quant.db.run_lifecycle import claim
 
-    refusal = (
-        f"Refusing to trade: run {run_id} has no job or run row to record this process in"
-    )
+    refusal = f"Refusing to trade: run {run_id} has no job or run row to record this process in"
     assert claim(conn, run_id, 5150, "linux:123") == refusal
     assert _run_row(conn, run_id)["status"] == "running"
 
@@ -202,8 +194,7 @@ def test_claim_refuses_another_attempts_pid(conn: sqlite3.Connection) -> None:
     from vibe_quant.db.run_lifecycle import claim
 
     refusal = (
-        f"Refusing to trade: run {run_id} is recorded for pid 777, "
-        "not this process (pid 5150)"
+        f"Refusing to trade: run {run_id} is recorded for pid 777, not this process (pid 5150)"
     )
     assert claim(conn, run_id, 5150, "linux:123") == refusal
     job = _job_row(conn, run_id)
@@ -218,8 +209,7 @@ def test_claim_refuses_a_reused_pid_of_another_attempt(conn: sqlite3.Connection)
     from vibe_quant.db.run_lifecycle import claim
 
     refusal = (
-        f"Refusing to trade: run {run_id} is recorded for pid 5150, "
-        "not this process (pid 5150)"
+        f"Refusing to trade: run {run_id} is recorded for pid 5150, not this process (pid 5150)"
     )
     assert claim(conn, run_id, 5150, "linux:123") == refusal
     job = _job_row(conn, run_id)
@@ -253,7 +243,9 @@ def test_fail_orphan_run_guards_on_the_current_status(conn: sqlite3.Connection) 
 
     reason = "reaped at startup: no live job (was pending)"
     assert fail_orphan_run(conn, reaped, reason) is True
-    assert fail_orphan_run(conn, finished, "reaped at startup: no live job (was completed)") is False
+    assert (
+        fail_orphan_run(conn, finished, "reaped at startup: no live job (was completed)") is False
+    )
 
     row = _run_row(conn, reaped)
     assert (row["status"], row["error_message"]) == ("failed", reason)
@@ -364,9 +356,12 @@ def test_restore_attempt_deletes_a_freshly_inserted_job(
 
     run_lifecycle.restore_attempt(conn, run_id, None, prior_run)
 
-    assert conn.execute(
-        "SELECT COUNT(*) FROM background_jobs WHERE run_id = ?", (run_id,)
-    ).fetchone()[0] == 0
+    assert (
+        conn.execute("SELECT COUNT(*) FROM background_jobs WHERE run_id = ?", (run_id,)).fetchone()[
+            0
+        ]
+        == 0
+    )
     run = _run_full(conn, run_id)
     assert (run["status"], run["pid"]) == ("pending", None)
     assert (run["started_at"], run["completed_at"], run["error_message"]) == (None, None, None)
@@ -491,9 +486,7 @@ def test_register_spawned_refuses_another_attempts_pid(
     before_job = _job_full(conn, run_id)
     before_run = _run_full(conn, run_id)
 
-    with pytest.raises(
-        ValueError, match=rf"^Run {run_id} already has an active job \(pid=777\)$"
-    ):
+    with pytest.raises(ValueError, match=rf"^Run {run_id} already has an active job \(pid=777\)$"):
         run_lifecycle.register_spawned(conn, run_id, 5150, "linux:123")
 
     assert _job_full(conn, run_id) == before_job
@@ -561,7 +554,6 @@ def test_set_run_status_running_sets_the_pid_and_started_at(conn: sqlite3.Connec
     second = _run_full(conn, without_pid)
     assert (second["status"], second["pid"]) == ("running", None)
     assert second["started_at"] is not None
-
 
 
 # --- public delegates --------------------------------------------------------

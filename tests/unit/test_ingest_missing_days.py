@@ -131,9 +131,7 @@ def _daily_zip(symbol: str, day: date, rows: list[tuple[Any, ...]]) -> bytes:
     return _zip_bytes(f"{symbol}-1m-{day.isoformat()}.csv", rows, header=False)
 
 
-def _patch_http(
-    monkeypatch: pytest.MonkeyPatch, served: dict[str, bytes | Exception]
-) -> list[str]:
+def _patch_http(monkeypatch: pytest.MonkeyPatch, served: dict[str, bytes | Exception]) -> list[str]:
     """Serve Vision zips by filename; any other URL is a 404.
 
     Returns the requested URL paths so a test can assert which zips were hit.
@@ -236,7 +234,9 @@ class TestD1CompleteMonthlyMonth:
         self, archive: RawDataArchive, fast: None, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         rows = _month_day_rows(2024, 1)
-        seen = _patch_http(monkeypatch, {"BTCUSDT-1m-2024-01.zip": _monthly_zip("BTCUSDT", 2024, 1, rows)})
+        seen = _patch_http(
+            monkeypatch, {"BTCUSDT-1m-2024-01.zip": _monthly_zip("BTCUSDT", 2024, 1, rows)}
+        )
 
         first = _run_symbol(archive)
         assert first["klines_inserted"] == 31
@@ -289,9 +289,7 @@ class TestD2InteriorHoleFilledFromDaily:
         self, archive: RawDataArchive, fast: None, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         rows = _month_day_rows(2024, 1, skip={JAN_HOLE})
-        _patch_http(
-            monkeypatch, {"BTCUSDT-1m-2024-01.zip": _monthly_zip("BTCUSDT", 2024, 1, rows)}
-        )
+        _patch_http(monkeypatch, {"BTCUSDT-1m-2024-01.zip": _monthly_zip("BTCUSDT", 2024, 1, rows)})
 
         counts = _run_symbol(archive)
         assert counts["missing_days"] == ["2024-01-04"]
@@ -333,11 +331,7 @@ class TestD3CoveredMonthStillFillsHole:
 
         seen = _patch_http(
             monkeypatch,
-            {
-                "BTCUSDT-1m-2024-01-15.zip": _daily_zip(
-                    "BTCUSDT", hole, _full_day_rows(hole)
-                )
-            },
+            {"BTCUSDT-1m-2024-01-15.zip": _daily_zip("BTCUSDT", hole, _full_day_rows(hole))},
         )
 
         counts = _run_symbol(archive)
@@ -367,9 +361,7 @@ class TestD4SessionStatus:
         monkeypatch.setattr(ingest, "ingest_funding_rates", lambda *a, **k: 0)
 
         rows = _month_day_rows(2024, 1, skip={JAN_HOLE})
-        _patch_http(
-            monkeypatch, {"BTCUSDT-1m-2024-01.zip": _monthly_zip("BTCUSDT", 2024, 1, rows)}
-        )
+        _patch_http(monkeypatch, {"BTCUSDT-1m-2024-01.zip": _monthly_zip("BTCUSDT", 2024, 1, rows)})
 
         results = ingest.ingest_all(
             symbols=["BTCUSDT"], start_date=JAN_FIRST, end_date=FEB_FIRST, verbose=False
@@ -384,9 +376,7 @@ class TestD4SessionStatus:
         assert row["status"] == "partial"
         assert json.loads(row["error_message"])["BTCUSDT"]["missing_days"] == ["2024-01-04"]
 
-    def test_cli_exit_stays_0_for_missing_days_only(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_cli_exit_stays_0_for_missing_days_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # A missing day is a recorded hole, not a failure: only failed_months /
         # failed_ranges are fatal for the ingest CLI.
         monkeypatch.setattr(
@@ -408,9 +398,7 @@ class TestD5InteriorBoundaries:
         self, archive: RawDataArchive, fast: None, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         present = [day for day in _days(date(2024, 1, 10), date(2024, 1, 20)) if day.day != 15]
-        archive.insert_klines(
-            "BTCUSDT", "1m", [_kline(_day_start_ms(d)) for d in present], "test"
-        )
+        archive.insert_klines("BTCUSDT", "1m", [_kline(_day_start_ms(d)) for d in present], "test")
         hole = date(2024, 1, 15)
         seen = _patch_http(
             monkeypatch,
@@ -499,9 +487,7 @@ class TestD6MarkKlines:
         self, archive: RawDataArchive, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         rows = _month_day_rows(2024, 1, skip={JAN_HOLE}, mark=True)
-        _patch_http(
-            monkeypatch, {"BTCUSDT-1m-2024-01.zip": _monthly_zip("BTCUSDT", 2024, 1, rows)}
-        )
+        _patch_http(monkeypatch, {"BTCUSDT-1m-2024-01.zip": _monthly_zip("BTCUSDT", 2024, 1, rows)})
         counts = _run_mark(archive)
         assert counts["missing_days"] == ["2024-01-04"]
         assert counts["failed_months"] == []
@@ -519,9 +505,7 @@ class TestDailyDownloaderContract:
         assert download_daily_klines("BTCUSDT", "1m", JAN_HOLE, client=client) is None
         assert len(calls) == 1
 
-    def test_klines_and_mark_urls_are_daily_paths(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_klines_and_mark_urls_are_daily_paths(self, monkeypatch: pytest.MonkeyPatch) -> None:
         rows = _full_day_rows(JAN_HOLE)
         seen: list[str] = []
 
@@ -557,7 +541,10 @@ class TestD7VerifyReportsMissingDays:
         archive.insert_klines(
             "BTCUSDT",
             "1m",
-            [_kline(_day_start_ms(d)) for d in (date(2024, 1, 1), date(2024, 1, 2), date(2024, 1, 4))],
+            [
+                _kline(_day_start_ms(d))
+                for d in (date(2024, 1, 1), date(2024, 1, 2), date(2024, 1, 4))
+            ],
             "test",
         )
         archive.insert_mark_klines(
@@ -719,9 +706,7 @@ class TestR9FinalMissingDaysAfterAllFillPasses:
     ) -> None:
         db = tmp_path / "raw.db"
         seed = RawDataArchive(db)
-        seed.insert_klines(
-            "BTCUSDT", "1m", [_kline(_day_start_ms(date(2024, 1, 1)))], "test"
-        )
+        seed.insert_klines("BTCUSDT", "1m", [_kline(_day_start_ms(date(2024, 1, 1)))], "test")
         seed.close()
         # One archived day -> no interior hole before REST; REST adds Jan 3 and
         # thereby makes Jan 2 an interior hole nobody has tried to fill.
@@ -821,7 +806,11 @@ class TestVerifyMarkOnlyHoles:
         archive.insert_klines(
             "BTCUSDT",
             "1m",
-            [row for day in _days(date(2024, 1, 1), date(2024, 1, 3)) for row in _full_day_rows(day)],
+            [
+                row
+                for day in _days(date(2024, 1, 1), date(2024, 1, 3))
+                for row in _full_day_rows(day)
+            ],
             "test",
         )
         archive.insert_mark_klines(
@@ -851,7 +840,11 @@ class TestVerifyMarkOnlyHoles:
         archive.insert_klines(
             "ETHUSDT",
             "1m",
-            [row for day in _days(date(2024, 1, 1), date(2024, 1, 2)) for row in _full_day_rows(day)],
+            [
+                row
+                for day in _days(date(2024, 1, 1), date(2024, 1, 2))
+                for row in _full_day_rows(day)
+            ],
             "test",
         )
         archive.insert_mark_klines(

@@ -109,7 +109,9 @@ def _equal(one: object, other: object) -> bool:
     if isinstance(one, Mapping) and isinstance(other, Mapping):
         return one.keys() == other.keys() and all(_equal(one[key], other[key]) for key in one)
     if isinstance(one, (tuple, list)) and isinstance(other, (tuple, list)):
-        return len(one) == len(other) and all(_equal(x, y) for x, y in zip(one, other, strict=False))
+        return len(one) == len(other) and all(
+            _equal(x, y) for x, y in zip(one, other, strict=False)
+        )
     return one == other
 
 

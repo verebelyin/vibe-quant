@@ -174,9 +174,7 @@ def capture(monkeypatch: pytest.MonkeyPatch) -> _Capture:
 
     cap = _Capture()
 
-    def _fake_run_engine(
-        spec: Any, consume: Any, *, costs: Any, prepare: Any = None
-    ) -> Any:
+    def _fake_run_engine(spec: Any, consume: Any, *, costs: Any, prepare: Any = None) -> Any:
         for importable in spec.strategy_configs:
             strategy = StrategyFactory.create(importable)
             cap.configs.append(strategy.config)
@@ -218,9 +216,7 @@ def _run_wfa(db: Path) -> Any:
 
 
 def _run_cv(db: Path) -> Any:
-    pipeline = OverfittingPipeline(
-        db, cv_runner=NTPurgedKFoldRunner(run_id=_RUN_ID, db_path=db)
-    )
+    pipeline = OverfittingPipeline(db, cv_runner=NTPurgedKFoldRunner(run_id=_RUN_ID, db_path=db))
     try:
         return pipeline.run(
             run_id=_RUN_ID,
@@ -257,18 +253,14 @@ def test_wfa_rerun_binds_typed_row_params(
     assert capture.raw == [_built_config(**typed)] * len(capture.raw)
 
 
-def test_wfa_rerun_numeric_only_row_is_byte_identical(
-    tmp_path: Path, capture: _Capture
-) -> None:
+def test_wfa_rerun_numeric_only_row_is_byte_identical(tmp_path: Path, capture: _Capture) -> None:
     """A numeric-only row binds exactly as before: same config dict, no typed override."""
     db = _seed_db(tmp_path, {"rsi_period": 14, "stop_loss_percent": 2.5})
 
     _run_wfa(db)
 
     assert capture.configs
-    assert capture.raw == [
-        _built_config(rsi_period=14, stop_loss_percent=2.5)
-    ] * len(capture.raw)
+    assert capture.raw == [_built_config(rsi_period=14, stop_loss_percent=2.5)] * len(capture.raw)
     for config in capture.configs:
         assert config.rsi_period == 14
         assert config.stop_loss_percent == 2.5
@@ -316,17 +308,13 @@ def test_cv_rerun_binds_typed_row_params(
     assert capture.raw == [_built_config(**typed)] * len(capture.raw)
 
 
-def test_cv_rerun_numeric_only_row_is_byte_identical(
-    tmp_path: Path, capture: _Capture
-) -> None:
+def test_cv_rerun_numeric_only_row_is_byte_identical(tmp_path: Path, capture: _Capture) -> None:
     db = _seed_db(tmp_path, {"rsi_period": 14, "stop_loss_percent": 2.5})
 
     _run_cv(db)
 
     assert capture.configs
-    assert capture.raw == [
-        _built_config(rsi_period=14, stop_loss_percent=2.5)
-    ] * len(capture.raw)
+    assert capture.raw == [_built_config(rsi_period=14, stop_loss_percent=2.5)] * len(capture.raw)
     for config in capture.configs:
         assert config.rsi_period == 14
         assert config.stop_loss_percent == 2.5
@@ -375,9 +363,7 @@ def test_wfa_pipeline_fails_candidate_closed_on_unknown_typed_key(
     assert capture.configs == []
 
 
-def test_cv_rerun_unknown_typed_key_fails_closed(
-    tmp_path: Path, capture: _Capture
-) -> None:
+def test_cv_rerun_unknown_typed_key_fails_closed(tmp_path: Path, capture: _Capture) -> None:
     db = _seed_db(tmp_path, {"stop_lossy_typo": "x"})
 
     with pytest.raises(UnknownStrategyParamError, match="stop_lossy_typo"):

@@ -86,18 +86,33 @@ def _delivered(tmp_path: Path) -> list[str]:
 
 def test_append_after_a_crashed_writer_fragment_is_still_delivered(tmp_path: Path) -> None:
     path = tmp_path / "messages.jsonl"
-    old = json.dumps({"id": "a", "from": "w", "to": "chief", "kind": "info", "body": "before"}, ensure_ascii=False)
+    old = json.dumps(
+        {"id": "a", "from": "w", "to": "chief", "kind": "info", "body": "before"},
+        ensure_ascii=False,
+    )
     # a writer died mid-record: a torn tail with no newline, cut inside a multibyte character
     path.write_bytes(old.encode() + b"\n" + b'{"id": "torn", "body": "\xe2\x82')
     stored = bus.post(tmp_path, "sa", "chief", "info", "after", client_id="c1")
-    assert _delivered(tmp_path) == ["before", "after"]  # the new record did not get glued to the fragment
+    assert _delivered(tmp_path) == [
+        "before",
+        "after",
+    ]  # the new record did not get glued to the fragment
     assert bus.post(tmp_path, "sa", "chief", "info", "after", client_id="c1")["id"] == stored["id"]
-    assert _delivered(tmp_path) == []  # the retry stored nothing new: the cursor has nothing to deliver
+    assert (
+        _delivered(tmp_path) == []
+    )  # the retry stored nothing new: the cursor has nothing to deliver
     assert len([ln for ln in path.read_bytes().split(b"\n") if ln]) == 3  # old, fragment, new
     # a FULLY written record that merely lost its newline is deduped and delivered exactly once
     loose = tmp_path / "loose"
     loose.mkdir()
-    rec = {"id": "orig", "from": "sa", "to": "chief", "kind": "info", "body": "once", "client_id": "c1"}
+    rec = {
+        "id": "orig",
+        "from": "sa",
+        "to": "chief",
+        "kind": "info",
+        "body": "once",
+        "client_id": "c1",
+    }
     (loose / "messages.jsonl").write_text(json.dumps(rec), encoding="utf-8")
     assert bus.post(loose, "sa", "chief", "info", "once", client_id="c1")["id"] == "orig"
     assert _delivered(loose) == ["once"]  # the acknowledged message is deliverable, exactly once
@@ -112,8 +127,13 @@ _BUS_SHIM = _BUS_PATH.with_name("bus")
 
 def test_bus_shim_invokes_bus_py(tmp_path: Path) -> None:
     assert _BUS_SHIM.exists(), f"{_BUS_SHIM} is missing"
-    assert os.access(_BUS_SHIM, os.X_OK)  # committed executable: `bus ...` works without a python prefix
-    env = {**os.environ, "PATH": f"{Path(sys.executable).parent}{os.pathsep}{os.environ.get('PATH', '')}"}
+    assert os.access(
+        _BUS_SHIM, os.X_OK
+    )  # committed executable: `bus ...` works without a python prefix
+    env = {
+        **os.environ,
+        "PATH": f"{Path(sys.executable).parent}{os.pathsep}{os.environ.get('PATH', '')}",
+    }
     help_run = subprocess.run([str(_BUS_SHIM), "--help"], capture_output=True, text=True, env=env)
     assert help_run.returncode == 0
     assert "status" in help_run.stdout and "needs-user answer" in help_run.stdout
@@ -128,10 +148,27 @@ _GOOD_HANDOFF = "## Handoff\nstatus: done\nrole: implementer\nevidence:\n- red t
 
 
 def _done(job: Path, *extra: str) -> int:
-    return bus.main(["--bus", str(job / "bus"), "--as", "w1", "post", "--to", "chief", "--kind", "done", "--body", "ok", *extra])
+    return bus.main(
+        [
+            "--bus",
+            str(job / "bus"),
+            "--as",
+            "w1",
+            "post",
+            "--to",
+            "chief",
+            "--kind",
+            "done",
+            "--body",
+            "ok",
+            *extra,
+        ]
+    )
 
 
-def test_done_refused_when_handoff_fails_lint(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_done_refused_when_handoff_fails_lint(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     (tmp_path / "bus").mkdir()
     (tmp_path / "handoffs").mkdir()
     (tmp_path / "handoffs" / "w1.md").write_text("## Handoff\nstatus: done\n")
@@ -160,7 +197,9 @@ def test_done_refused_when_handoff_fails_lint(tmp_path: Path, capsys: pytest.Cap
         ("use SWARM_BUS=/x and SWARM_AGENT=y", True),
     ],
 )
-def test_cli_refuses_a_body_that_looks_like_a_secret(tmp_path: Path, body: str, posted: bool) -> None:
+def test_cli_refuses_a_body_that_looks_like_a_secret(
+    tmp_path: Path, body: str, posted: bool
+) -> None:
     argv = ["--bus", str(tmp_path), "--as", "sa", "post", "--to", "chief", "--body", body]
     if posted:
         assert bus.main(argv) == 0

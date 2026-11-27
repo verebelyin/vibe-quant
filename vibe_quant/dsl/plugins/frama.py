@@ -178,8 +178,7 @@ indicator_registry.register_spec(
         requires_high_low=True,
         display_name="Fractal Adaptive MA",
         description=(
-            "Ehlers' FRAMA: smoothing adapts to fractal dimension — "
-            "fast in trends, slow in chop."
+            "Ehlers' FRAMA: smoothing adapts to fractal dimension — fast in trends, slow in chop."
         ),
         category="Trend",
         chart_placement="overlay",

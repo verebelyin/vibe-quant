@@ -312,7 +312,7 @@ class FundingCalculator:
 
     @staticmethod
     def symbol_from_instrument_id(instrument_id: str) -> str:
-        """"BTCUSDT-PERP.BINANCE" -> "BTCUSDT" (archive symbol key)."""
+        """ "BTCUSDT-PERP.BINANCE" -> "BTCUSDT" (archive symbol key)."""
         return instrument_id.split(".")[0].removesuffix("-PERP")
 
     def _load_rates(self, symbol: str) -> tuple[list[int], list[float]]:
@@ -433,7 +433,9 @@ class FundingCalculator:
         The same per-interval grid :meth:`accrue` charges the fallback rate on.
         """
         times = self._load_rates(symbol)[0]
-        return [ts for ts, _ in missing_settlements(times, self._load_intervals(symbol), lo_ns, hi_ns)]
+        return [
+            ts for ts, _ in missing_settlements(times, self._load_intervals(symbol), lo_ns, hi_ns)
+        ]
 
     def last_settlement_ns(self, symbol: str) -> int | None:
         """The symbol's latest archived settlement time (ns), None when it has none."""

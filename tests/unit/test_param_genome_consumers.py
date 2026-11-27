@@ -138,7 +138,9 @@ def _genome(port: Port, **changes: Any) -> ParamGenome:
 # ---------------------------------------------------------------------------
 
 
-def _run_buy_hold(chrom: Any, sharpe_ann: float) -> tuple[list[Any], dict[str, Any], list[dict[str, Any]]]:
+def _run_buy_hold(
+    chrom: Any, sharpe_ann: float
+) -> tuple[list[Any], dict[str, Any], list[dict[str, Any]]]:
     closes = _bh_closes()
     gates = GateChain(
         _cfg(),
@@ -311,7 +313,10 @@ def test_corrupt_legacy_seed_still_degrades_to_none() -> None:
 def test_champion_entry_carries_rendered_dsl_and_own_values(tmp_path: Path) -> None:
     from vibe_quant.discovery.record import champion_entry
 
-    for port, changes in ((_long_port(tmp_path), {"fast": 7, "slow": 55}), (_short_port(tmp_path), {"upper": 65.0})):
+    for port, changes in (
+        (_long_port(tmp_path), {"fast": 7, "slow": 55}),
+        (_short_port(tmp_path), {"upper": 65.0}),
+    ):
         genome = _genome(port, **changes)
         entry = champion_entry(genome, _fit(), timeframe="4h", dsr=None, buy_hold=None)
         expected_dsl = genome.to_dsl()
@@ -322,20 +327,34 @@ def test_champion_entry_carries_rendered_dsl_and_own_values(tmp_path: Path) -> N
         assert entry["chromosome"]["kind"] == "param"  # type: ignore[index]
 
 
-def test_pooling_groups_param_champions_by_param_distance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pooling_groups_param_champions_by_param_distance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     port = _long_port(tmp_path)
     cfg = _cfg(top_k=3, min_diversity_distance=0.2)
     strong = _series(8.0, seed=7)
     near_a = _genome(port, fast=10, slow=40)
     near_b = _genome(port, fast=10, slow=45)  # slow differs by 5/30 of 2 params: 1/12 < 0.2
     far = _genome(port, fast=20, slow=60)  # (10/15 + 20/30)/2 = 2/3 > 0.2
-    fits = {g.uid: _fit(sharpe_ratio=s, adjusted_score=s, mtm_daily_returns=strong)
-            for g, s in ((near_a, 2.0), (near_b, 3.0), (far, 1.0))}
+    fits = {
+        g.uid: _fit(sharpe_ratio=s, adjusted_score=s, mtm_daily_returns=strong)
+        for g, s in ((near_a, 2.0), (near_b, 3.0), (far, 1.0))
+    }
     own = {g.uid: {"enforced": True} for g in (near_a, near_b, far)}
     seeds = [
-        _SeedOut((near_a, fits[near_a.uid]), cache={near_a.uid: fits[near_a.uid]}, buy_hold={near_a.uid: own[near_a.uid]}),
-        _SeedOut((near_b, fits[near_b.uid]), cache={near_b.uid: fits[near_b.uid]}, buy_hold={near_b.uid: own[near_b.uid]}),
-        _SeedOut((far, fits[far.uid]), cache={far.uid: fits[far.uid]}, buy_hold={far.uid: own[far.uid]}),
+        _SeedOut(
+            (near_a, fits[near_a.uid]),
+            cache={near_a.uid: fits[near_a.uid]},
+            buy_hold={near_a.uid: own[near_a.uid]},
+        ),
+        _SeedOut(
+            (near_b, fits[near_b.uid]),
+            cache={near_b.uid: fits[near_b.uid]},
+            buy_hold={near_b.uid: own[near_b.uid]},
+        ),
+        _SeedOut(
+            (far, fits[far.uid]), cache={far.uid: fits[far.uid]}, buy_hold={far.uid: own[far.uid]}
+        ),
     ]
 
     def _no_bh(*_a: Any, **_k: Any) -> Any:
@@ -360,13 +379,17 @@ def test_sl_tp_penalty_reads_the_rendered_dsl(tmp_path: Path) -> None:
     from vibe_quant.discovery.fitness import chromosome_sl_tp_penalty
 
     assert chromosome_sl_tp_penalty(_genome(_long_port(tmp_path))) == 0.0  # 2 / 6
-    assert chromosome_sl_tp_penalty(_genome(_long_port(tmp_path / "x", sl=30.0, tp=5.0))) == pytest.approx(0.02)
+    assert chromosome_sl_tp_penalty(
+        _genome(_long_port(tmp_path / "x", sl=30.0, tp=5.0))
+    ) == pytest.approx(0.02)
     # short only: SL 40 / TP 5 = 8, (8 - 5) * 0.02
     assert chromosome_sl_tp_penalty(_genome(_short_port(tmp_path))) == pytest.approx(0.06)
     # both sides: the worse (short, 8 -> 0.06) side counts; the long side falls back to 2 / 4
     assert chromosome_sl_tp_penalty(_genome(_both_port(tmp_path))) == pytest.approx(0.06)
     # legacy unchanged
-    assert chromosome_sl_tp_penalty(_chrom(stop_loss_pct=8.0, take_profit_pct=1.0)) == pytest.approx(0.06)
+    assert chromosome_sl_tp_penalty(
+        _chrom(stop_loss_pct=8.0, take_profit_pct=1.0)
+    ) == pytest.approx(0.06)
 
 
 def test_sl_tp_penalty_is_zero_without_two_fixed_pct_levels(tmp_path: Path) -> None:
@@ -381,7 +404,10 @@ def test_sl_tp_penalty_is_zero_without_two_fixed_pct_levels(tmp_path: Path) -> N
             "dsl": {
                 "name": "atr_stop",
                 "timeframe": "1h",
-                "indicators": {"rsi": {"type": "RSI", "period": "{{period}}"}, "atr": {"type": "ATR", "period": 14}},
+                "indicators": {
+                    "rsi": {"type": "RSI", "period": "{{period}}"},
+                    "atr": {"type": "ATR", "period": 14},
+                },
                 "entry_conditions": {"long": ["rsi < 30"], "short": []},
                 "exit_conditions": {"long": ["rsi > 50"], "short": []},
                 "stop_loss": {"type": "atr_fixed", "atr_multiplier": 9.0, "indicator": "atr"},
@@ -405,11 +431,18 @@ def test_param_genome_scores_through_evaluate_population(tmp_path: Path) -> None
     from vibe_quant.discovery.fitness import evaluate_population
 
     def backtest(_chrom: Any) -> dict[str, float | int]:
-        return {"sharpe_ratio": 2.0, "max_drawdown": 0.1, "profit_factor": 1.5,
-                "total_trades": 200, "total_return": 0.3}
+        return {
+            "sharpe_ratio": 2.0,
+            "max_drawdown": 0.1,
+            "profit_factor": 1.5,
+            "total_trades": 200,
+            "total_return": 0.3,
+        }
 
     genome = _genome(_short_port(tmp_path))
-    [result] = evaluate_population([genome], backtest, None, max_workers=None, min_trades=50, timeframe="1h")  # type: ignore[arg-type]
+    [result] = evaluate_population(
+        [genome], backtest, None, max_workers=None, min_trades=50, timeframe="1h"
+    )  # type: ignore[arg-type]
     assert result.error is None
     assert result.adjusted_score > 0
     assert result.sl_tp_penalty == pytest.approx(0.06)

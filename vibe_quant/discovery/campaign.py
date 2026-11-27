@@ -185,7 +185,9 @@ def plan_campaign(config: RegimeCrossConfig, state: StateManager) -> CampaignPla
         plan.discovery_runs[tw.label] = run_id
         logger.info(
             "planned regime-cross discovery: window=%s direction=%s run_id=%d",
-            tw.label, tw.direction, run_id,
+            tw.label,
+            tw.direction,
+            run_id,
         )
 
     return plan
@@ -239,14 +241,22 @@ def run_discovery_subprocess(
         python_bin,
         "-m",
         "vibe_quant.discovery",
-        "--run-id", str(run_id),
-        "--symbols", config.symbol,
-        "--timeframe", config.timeframe,
-        "--start-date", window.start,
-        "--end-date", window.end,
-        "--direction", window.direction,
-        "--population-size", str(config.population_size),
-        "--max-generations", str(config.max_generations),
+        "--run-id",
+        str(run_id),
+        "--symbols",
+        config.symbol,
+        "--timeframe",
+        config.timeframe,
+        "--start-date",
+        window.start,
+        "--end-date",
+        window.end,
+        "--direction",
+        window.direction,
+        "--population-size",
+        str(config.population_size),
+        "--max-generations",
+        str(config.max_generations),
         *config.extra_discovery_args,
     ]
     log_path = Path(log_dir) / f"regime_cross_{run_id}.log" if log_dir else None
@@ -284,9 +294,7 @@ def extract_top_chromosomes(
     return list(tops[:top_k])
 
 
-def plan_oos_validations(
-    plan: CampaignPlan, state: StateManager
-) -> CampaignPlan:
+def plan_oos_validations(plan: CampaignPlan, state: StateManager) -> CampaignPlan:
     """For each discovery's survivors, create a strategy + OOS run per OOS window.
 
     Mutates ``plan.oos_runs`` in place. Safe to re-call — existing OOS
@@ -318,9 +326,7 @@ def plan_oos_validations(
                     strategy_type="regime_cross",
                 )
             except Exception as exc:  # noqa: BLE001 — UNIQUE violation on rerun
-                logger.info(
-                    "strategy %s already exists, reusing (%s)", strategy_name, exc
-                )
+                logger.info("strategy %s already exists, reusing (%s)", strategy_name, exc)
                 existing_id = state.get_strategy_id_by_name(strategy_name)
                 if existing_id is None:
                     continue
@@ -350,7 +356,10 @@ def plan_oos_validations(
                 plan.oos_runs[key] = run_id
                 logger.info(
                     "planned OOS: source=%s champ=%d oos=%s run_id=%d",
-                    tw.label, idx, oos.label, run_id,
+                    tw.label,
+                    idx,
+                    oos.label,
+                    run_id,
                 )
 
     return plan
@@ -396,13 +405,9 @@ def run_campaign(
             if skip_existing and _run_completed(run_id, state):
                 logger.info("skipping completed discovery run_id=%d", run_id)
                 continue
-            rc = run_discovery_subprocess(
-                run_id, plan.config, tw, manager, log_dir=log_dir
-            )
+            rc = run_discovery_subprocess(run_id, plan.config, tw, manager, log_dir=log_dir)
             if rc != 0:
-                logger.warning(
-                    "discovery run_id=%d returned non-zero (%d); continuing", run_id, rc
-                )
+                logger.warning("discovery run_id=%d returned non-zero (%d); continuing", run_id, rc)
 
         # Phase 3: plan OOS once discoveries are done, then run them
         plan_oos_validations(plan, state)
@@ -454,19 +459,16 @@ class MatrixReport:
             f"{'source':<18}{'#':>3}  {'oos':<18}"
             f"  {'sharpe365':>9}  {'return%':>8}  {'mdd%':>7}  {'trades':>7}"
         )
-        rows = [f"Campaign {self.campaign_name} ({self.campaign_id})", "", header, "-" * len(header)]
+        rows = [
+            f"Campaign {self.campaign_name} ({self.campaign_id})",
+            "",
+            header,
+            "-" * len(header),
+        ]
         for c in self.cells:
             sharpe = f"{fmt_sharpe(c.sharpe):>9}"
-            ret = (
-                f"{c.total_return * 100:8.2f}"
-                if c.total_return is not None
-                else "   n/a  "
-            )
-            mdd = (
-                f"{c.max_drawdown * 100:7.2f}"
-                if c.max_drawdown is not None
-                else "  n/a  "
-            )
+            ret = f"{c.total_return * 100:8.2f}" if c.total_return is not None else "   n/a  "
+            mdd = f"{c.max_drawdown * 100:7.2f}" if c.max_drawdown is not None else "  n/a  "
             trades = f"{c.total_trades:7d}" if c.total_trades is not None else "   n/a "
             rows.append(
                 f"{c.source_window:<18}{c.champion_idx:>3}  {c.oos_window:<18}"

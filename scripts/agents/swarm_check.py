@@ -291,10 +291,25 @@ GOLDEN_GATE_NAME = "gate_golden.json"
 # per-round gate must not pay ~90 s of real-catalog cells for every fix round.
 GOLDEN_SKIP_PER_ROUND = "per-round: runs in --full"
 CHECK_ORDER = (
-    "scope", "clean", "bus-inbox", "stale-reads", "kb-search", "python-env", "ruff", "mypy", "tests", "slow-tests", "simple-tests",
+    "scope",
+    "clean",
+    "bus-inbox",
+    "stale-reads",
+    "kb-search",
+    "python-env",
+    "ruff",
+    "mypy",
+    "tests",
+    "slow-tests",
+    "simple-tests",
     "pinned-text",
-    "exactness", "exactness-carry", "exactness-tiers", "gate-golden", "frontend",
-    "stubs", "internal",
+    "exactness",
+    "exactness-carry",
+    "exactness-tiers",
+    "gate-golden",
+    "frontend",
+    "stubs",
+    "internal",
 )
 # Warn mode for a NEW check: until the ISO date (exclusive) its FAIL is reported as a WARN, so
 # the first job that runs it sees the backlog without failing gates (retro 2026-11-05 #5).
@@ -331,8 +346,19 @@ PINNED_TEXT_SHOWN_CHARS = 60  # how much of the removed literal a pinned-text FA
 # Checks that shell out to a real tool: their FAIL lines carry the "(full output: LOG above)"
 # pointer. scope/clean/bus-inbox/stubs/internal are git/config facts with no tool transcript.
 TOOL_CHECK_NAMES = frozenset(
-    {"python-env", "ruff", "mypy", "tests", "slow-tests", "simple-tests", "exactness", "exactness-carry", "exactness-tiers",
-     "gate-golden", "frontend"}
+    {
+        "python-env",
+        "ruff",
+        "mypy",
+        "tests",
+        "slow-tests",
+        "simple-tests",
+        "exactness",
+        "exactness-carry",
+        "exactness-tiers",
+        "gate-golden",
+        "frontend",
+    }
 )
 LINT_ERROR_RE = re.compile(r"^Found (\d+) errors?\.", re.MULTILINE)
 SUMMARY_RE = re.compile(r"passed|failed|error|errors|no tests ran")
@@ -379,7 +405,9 @@ SIMPLE_EXEMPT_NAME = re.compile(
     r"leverage|order|profit|return|equity|dsr|bootstrap|kfold|wfa|lookahead|warmup|shift",
     re.I,
 )
-SIMPLE_EXEMPT_SQL = re.compile(r"\b(SELECT|INSERT|UPDATE|DELETE FROM|CREATE TABLE|ALTER TABLE|PRAGMA)\b")
+SIMPLE_EXEMPT_SQL = re.compile(
+    r"\b(SELECT|INSERT|UPDATE|DELETE FROM|CREATE TABLE|ALTER TABLE|PRAGMA)\b"
+)
 SIMPLE_EXEMPT_REGEX = re.compile(
     r"\bre\.(compile|match|search|sub|fullmatch|findall|finditer|split)\b|\b[A-Z_]+_RE\b"
 )
@@ -413,7 +441,9 @@ FAILED_COUNT_RE = re.compile(r"\b(\d+) (?:failed|errors?)\b")
 BEAD_ID_RE = re.compile(r"vibe-quant-[0-9a-z]+(?:\.[0-9]+)*")
 
 
-def xdist_auto_workers(env: dict[str, str], load1: float | None, cpus: int, running: int = 1) -> str | None:
+def xdist_auto_workers(
+    env: dict[str, str], load1: float | None, cpus: int, running: int = 1
+) -> str | None:
     """What ``-n auto`` should mean: SWARM_CHECK_WORKERS wins; else the smaller of (a) the
     free cores, but at least half of them, when other jobs already load the host past half
     its cores, and (b) an even split of the cores among the ``running`` gates (this one
@@ -448,9 +478,6 @@ def _gate_slots_module() -> Any:
     sys.modules["swarm_gate_slots"] = mod
     spec.loader.exec_module(mod)
     return mod
-
-
-
 
 
 # No cap on the importer-file selection (the reverse import closure of the changed modules):
@@ -494,8 +521,15 @@ POLICY_TRIGGERS: dict[str, tuple[str, ...]] = {
     "tests/unit/test_exception_hygiene.py": tuple(
         f"vibe_quant/{pkg}/*.py"
         for pkg in (
-            "screening", "validation", "discovery", "overfitting", "dsl", "risk", "paper",
-            "data", "portfolio",
+            "screening",
+            "validation",
+            "discovery",
+            "overfitting",
+            "dsl",
+            "risk",
+            "paper",
+            "data",
+            "portfolio",
         )
     ),
     # _steering_files() + BUDGETS (the out-of-repo MEMORY.md profile cannot be in a diff)
@@ -818,7 +852,9 @@ def git_state(wt: Path, base: str, run: RunFn, facts: GitFacts | None = None) ->
     rc, out = facts.call(wt, run, "merge-base", base, "HEAD")
     if rc != 0:
         return GitState([], [], f"no merge-base between {base} and HEAD: {tail_line(out)}")
-    rc, diff_out = facts.call(wt, run, "diff", "--name-only", "--no-renames", "-z", base + "...HEAD")
+    rc, diff_out = facts.call(
+        wt, run, "diff", "--name-only", "--no-renames", "-z", base + "...HEAD"
+    )
     if rc != 0:
         return GitState([], [], f"git diff failed: {tail_line(diff_out)}")
     rc, status_out = facts.call(wt, run, "status", "--porcelain=v1", "-z", "--untracked-files=all")
@@ -859,12 +895,7 @@ def changed_test_files(paths: Sequence[str]) -> list[str]:
 
 def k_expr(paths: Sequence[str]) -> str:
     stems = sorted(
-        {
-            Path(p).stem
-            for p in paths
-            if p.endswith(".py") and not is_changed_test(p)
-        }
-        - SKIP_STEMS
+        {Path(p).stem for p in paths if p.endswith(".py") and not is_changed_test(p)} - SKIP_STEMS
     )
     stems = [st for st in stems if st.isidentifier()]
     return " or ".join(stems)
@@ -1065,9 +1096,7 @@ def pinned_text_check(cfg: Config, state: GitState, run: RunFn, test_run: TestRu
     """FAIL when a test the gate does NOT run pins a string the diff removed from production."""
     if state.error:
         return Check("pinned-text", "SKIP", "git diff unknown (see scope)")
-    changed_py = [
-        p for p in state.changed if p.startswith("vibe_quant/") and p.endswith(".py")
-    ]
+    changed_py = [p for p in state.changed if p.startswith("vibe_quant/") and p.endswith(".py")]
     if not changed_py:
         return Check("pinned-text", "SKIP", "no vibe_quant/**/*.py changed")
     removed = removed_base_literals(cfg, changed_py, run)
@@ -1294,9 +1323,7 @@ def tree_fingerprint(worktree: Path, *subdirs: str) -> tuple[tuple[str, int, int
     `os.scandir` rather than `os.walk` + `os.stat`: the directory entry carries the stat
     fields, so one syscall per file instead of two (this walk is on every plan's path)."""
     out: list[tuple[str, int, int]] = []
-    pending = [
-        str(worktree / sub) for sub in subdirs if os.path.isdir(str(worktree / sub))
-    ]
+    pending = [str(worktree / sub) for sub in subdirs if os.path.isdir(str(worktree / sub))]
     while pending:
         with os.scandir(pending.pop()) as entries:
             for entry in entries:
@@ -1347,9 +1374,9 @@ def import_graph_pair(
     cache) - 705 sets and a dict per call. A plan only reads, and that copy was most of the
     garbage a plan produced: with it in place the 241-plan cap test spent 34.5 ms per plan,
     of which GC pauses were 22 (same loop, gc.disable() -> 12.6 ms)."""
-    gone = tuple(sorted(
-        p for p in extra_modules if graph_module_name(p) and not (worktree / p).exists()
-    ))
+    gone = tuple(
+        sorted(p for p in extra_modules if graph_module_name(p) and not (worktree / p).exists())
+    )
     walked = _snapshot_or_walk(worktree, snapshot)
     key = ("graph", worktree.resolve(), walked, gone)
     if key not in _TREE_CACHE:
@@ -1416,7 +1443,11 @@ def _build_import_graph(
         except (OSError, ValueError) as exc:
             raise GraphError(f"cannot read {rel}: {exc}") from exc
         imports = parse_imports(
-            source, _dotted(rel), known, is_package=rel.endswith("__init__.py"), bare=bare,
+            source,
+            _dotted(rel),
+            known,
+            is_package=rel.endswith("__init__.py"),
+            bare=bare,
             runtime_only=rel.endswith("/conftest.py"),
         )
         if imports is None:
@@ -1878,9 +1909,7 @@ def gate_summary(checks: Sequence[Check]) -> tuple[str, int]:
 
 
 def to_json_dict(checks: Sequence[Check]) -> dict[str, Any]:
-    data: dict[str, Any] = {
-        c.name: {"status": c.status, "detail": c.detail} for c in checks
-    }
+    data: dict[str, Any] = {c.name: {"status": c.status, "detail": c.detail} for c in checks}
     _, failed = gate_summary(checks)
     data["gate"] = "FAIL" if failed else "PASS"
     return data
@@ -2195,14 +2224,11 @@ def write_stamp(
     path = stamp_path(wt, run, key, facts)
     if path is None:
         return
+
     # `facts` is the POST-run memo: its HEAD/base answers are the ones the key was checked
     # against, so the stamp records exactly what was gated (and asks git nothing new).
     def out(*args: str) -> str:
-        return (
-            facts.out(wt, run, *args)
-            if facts is not None
-            else _git_out(wt, run, *args)
-        )
+        return facts.out(wt, run, *args) if facts is not None else _git_out(wt, run, *args)
 
     data = {
         "version": CACHE_VERSION,
@@ -2329,11 +2355,25 @@ def reusable_test_files(
     for tree, tests in by_tree.items():
         reached: set[str] | None = set()
         if tree != head_tree:
-            if run(["git", "-C", str(wt), "cat-file", "-e", f"{tree}^{{tree}}"], wt, None, TOOL_TIMEOUT)[0]:
+            if run(
+                ["git", "-C", str(wt), "cat-file", "-e", f"{tree}^{{tree}}"], wt, None, TOOL_TIMEOUT
+            )[0]:
                 continue
             rc, diff = run(
-                ["git", "-C", str(wt), "diff", "--name-only", "--no-renames", "-z", tree, head_tree],
-                wt, None, TOOL_TIMEOUT,
+                [
+                    "git",
+                    "-C",
+                    str(wt),
+                    "diff",
+                    "--name-only",
+                    "--no-renames",
+                    "-z",
+                    tree,
+                    head_tree,
+                ],
+                wt,
+                None,
+                TOOL_TIMEOUT,
             )
             reached = diff_reaches(wt, [p for p in diff.split("\0") if p]) if rc == 0 else None
         if reached is not None:
@@ -2498,7 +2538,9 @@ class TestPlan:
     full: bool
     notes: list[str]
     files: list[str]
-    reasons: dict[str, list[str]] = field(default_factory=dict)  # selection kind -> files (--list-tests)
+    reasons: dict[str, list[str]] = field(
+        default_factory=dict
+    )  # selection kind -> files (--list-tests)
     # How many leading commands fail fast: a red one ends the tests step (the policy call).
     fail_fast: int = 0
 
@@ -2554,10 +2596,14 @@ def _selected_consumers(
     readers = fixture_reader_files(changed, worktree)
     if implicit := [r for r in readers if Path(r).stem in FULL_SUITE_STEMS]:
         raise FullSuite(f"{implicit[0]} may read a changed fixture (loaded by pytest itself)")
-    add("fixture", [
-        r for r in readers
-        if r.startswith("tests/unit/") and is_changed_test(r) and not is_gate_meta_test(r)
-    ])
+    add(
+        "fixture",
+        [
+            r
+            for r in readers
+            if r.startswith("tests/unit/") and is_changed_test(r) and not is_gate_meta_test(r)
+        ],
+    )
     changed = [*changed, *(r for r in readers if r not in changed)]
     seeds = selection_seeds(changed)
     snapshot = plan_snapshot(worktree)  # ONE walk, shared by every tree-wide scan below
@@ -2592,8 +2638,10 @@ def _names_pytest_plugins(tree: ast.AST) -> bool:
     registration is what pytest reads."""
     for sub in ast.walk(tree):
         name = (
-            sub.id if isinstance(sub, ast.Name)
-            else sub.attr if isinstance(sub, ast.Attribute)
+            sub.id
+            if isinstance(sub, ast.Name)
+            else sub.attr
+            if isinstance(sub, ast.Attribute)
             else None
         )
         if name == "pytest_plugins":
@@ -2820,9 +2868,7 @@ def _conftest_parts(
         params |= runtime
         own_strings = string_module_refs(LOADED_ONLY_RE.sub("None", ast.unparse(fn)), known)
         patch_only = (
-            not helper_deps
-            and not own_strings
-            and _only_patched(fn, _bound_import_names(fn))
+            not helper_deps and not own_strings and _only_patched(fn, _bound_import_names(fn))
         )
         out.append(_Fixture(name, autouse, params, deps, patch_only, dynamic))
     return shared, out
@@ -3035,7 +3081,9 @@ def adds_marks_dynamically(source: str) -> bool:
             continue
         arg = node.args[0] if node.args else None
         named = bound.get(arg.id, []) if isinstance(arg, ast.Name) else []
-        if arg is None or not (_is_literal_mark(arg) or (named and all(map(_is_literal_mark, named)))):
+        if arg is None or not (
+            _is_literal_mark(arg) or (named and all(map(_is_literal_mark, named)))
+        ):
             return True
     return False
 
@@ -3060,7 +3108,9 @@ def timing_test_files(worktree: Path) -> list[str] | None:
     if any(not p.name.startswith("test_") for p in root.rglob("*_test.py")):
         return None
     return [
-        p.relative_to(worktree).as_posix() for p in sorted(root.rglob("test_*.py")) if has_timing_mark(p)
+        p.relative_to(worktree).as_posix()
+        for p in sorted(root.rglob("test_*.py"))
+        if has_timing_mark(p)
     ]
 
 
@@ -3110,11 +3160,27 @@ def plan_tests(cfg: Config, state: GitState) -> TestPlan:
         timing_args = ["tests/unit"] if timing is None else timing  # [] = no timing test
         return TestPlan(
             [
-                *([([*policy, "-m", f"not {TIMING_MARK}"], True, "no policy tests matched")] if policy else []),
-                (["tests/unit", *ignore, *PYTEST_PARALLEL_ARGS, "-m", f"not {TIMING_MARK}"], False, ""),
-                *([([*timing_args, "-m", TIMING_MARK], True, "no timing tests matched")] if timing_args else []),
+                *(
+                    [([*policy, "-m", f"not {TIMING_MARK}"], True, "no policy tests matched")]
+                    if policy
+                    else []
+                ),
+                (
+                    ["tests/unit", *ignore, *PYTEST_PARALLEL_ARGS, "-m", f"not {TIMING_MARK}"],
+                    False,
+                    "",
+                ),
+                *(
+                    [([*timing_args, "-m", TIMING_MARK], True, "no timing tests matched")]
+                    if timing_args
+                    else []
+                ),
             ],
-            frozenset(), True, [f"full tests/unit: {reason}"], ["tests/unit"], fail_fast=int(bool(policy)),
+            frozenset(),
+            True,
+            [f"full tests/unit: {reason}"],
+            ["tests/unit"],
+            fail_fast=int(bool(policy)),
         )
     targets = [p for p in changed_test_files(changed) if (cfg.worktree / p).exists()]
     # Repo-wide policy tests SCAN the tree instead of importing the changed module, so they
@@ -3148,29 +3214,45 @@ def plan_tests(cfg: Config, state: GitState) -> TestPlan:
     if policy:  # serial: 7 files cost less than an xdist start-up
         commands.append(([*policy, "-m", f"not {TIMING_MARK}"], True, "no policy tests matched"))
     if selection or merged:
-        args = [*selection, *k_files, "-k", " or ".join([expr, *file_stems])] if merged else selection
+        args = (
+            [*selection, *k_files, "-k", " or ".join([expr, *file_stems])] if merged else selection
+        )
         commands.append(
             # rc5 is a real failure when a changed test file is in the call (it collected
             # nothing), a SKIP note otherwise
-            ([*args, *PYTEST_PARALLEL_ARGS, "-m", f"not {TIMING_MARK}"],
-             not any(t in selection for t in targets),
-             f"no tests matched -k {expr} in the selected files" if merged
-             else "no non-timing tests in the selected files")
+            (
+                [*args, *PYTEST_PARALLEL_ARGS, "-m", f"not {TIMING_MARK}"],
+                not any(t in selection for t in targets),
+                f"no tests matched -k {expr} in the selected files"
+                if merged
+                else "no non-timing tests in the selected files",
+            )
         )
     if k_files and not merged:
         commands.append(
-            ([*k_files, "-k", expr, *PYTEST_PARALLEL_ARGS, "-m", f"not {TIMING_MARK}"], True,
-             f"no tests matched -k {expr}")
+            (
+                [*k_files, "-k", expr, *PYTEST_PARALLEL_ARGS, "-m", f"not {TIMING_MARK}"],
+                True,
+                f"no tests matched -k {expr}",
+            )
         )
     if timing_targets := [t for t in targets if has_timing_mark(cfg.worktree / t)]:
         # a changed test file runs whole: its relative-speed tests too, uncontended (only
         # when it has one: the call otherwise collects for ~1 s and exits 5)
         commands.append(
-            ([*timing_targets, "-m", TIMING_MARK], True,
-             "no timing tests in the changed test files")
+            (
+                [*timing_targets, "-m", TIMING_MARK],
+                True,
+                "no timing tests in the changed test files",
+            )
         )
     return TestPlan(
-        commands, frozenset(explicit), False, notes, [*explicit, *k_files], reasons,
+        commands,
+        frozenset(explicit),
+        False,
+        notes,
+        [*explicit, *k_files],
+        reasons,
         fail_fast=int(bool(policy)),
     )
 
@@ -3206,7 +3288,11 @@ def _slow_mark(node: ast.expr, mark: str = SLOW_TEST_MARK) -> str | None:
     ):
         return None
     for kw in call.keywords if call else ():
-        if kw.arg == "reason" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+        if (
+            kw.arg == "reason"
+            and isinstance(kw.value, ast.Constant)
+            and isinstance(kw.value.value, str)
+        ):
             return kw.value.value
     return ""
 
@@ -3223,12 +3309,16 @@ def _test_functions(
     """(enclosing class, node, slow reason) for every module-level and `Test*` class test."""
     found: list[tuple[str, ast.FunctionDef | ast.AsyncFunctionDef, str | None]] = []
     for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith(
+            "test_"
+        ):
             found.append(("", node, _slow_reason([_slow_mark(d) for d in node.decorator_list])))
         elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
             class_marks = [_slow_mark(d) for d in node.decorator_list]
             for child in node.body:
-                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name.startswith("test_"):
+                if isinstance(
+                    child, (ast.FunctionDef, ast.AsyncFunctionDef)
+                ) and child.name.startswith("test_"):
                     marks = [_slow_mark(d) for d in child.decorator_list]
                     found.append((node.name, child, _slow_reason([*marks, *class_marks])))
     return found
@@ -3249,7 +3339,9 @@ def _parse(source: str) -> ast.Module | None:
         return None
 
 
-def _lost_a_decorator(base_tree: ast.Module, hunk_removed: AbstractSet[int], all_removed: AbstractSet[int]) -> bool:
+def _lost_a_decorator(
+    base_tree: ast.Module, hunk_removed: AbstractSet[int], all_removed: AbstractSet[int]
+) -> bool:
     """True when a BASE line this hunk removed sat in a decorator of a def/class whose own
     `def`/`class` line was NOT removed (anywhere in the file's diff): a decorator (e.g.
     `@pytest.mark.slow`) came off a test that still exists. A removed whole test takes its
@@ -3257,7 +3349,9 @@ def _lost_a_decorator(base_tree: ast.Module, hunk_removed: AbstractSet[int], all
     for node in ast.walk(base_tree):
         if isinstance(node, _Def) and node.lineno not in all_removed:
             for dec in node.decorator_list:
-                if any(n in hunk_removed for n in range(dec.lineno, (dec.end_lineno or dec.lineno) + 1)):
+                if any(
+                    n in hunk_removed for n in range(dec.lineno, (dec.end_lineno or dec.lineno) + 1)
+                ):
                     return True
     return False
 
@@ -3290,12 +3384,14 @@ def _changed_test_lines(worktree: Path, base: str, run: RunFn) -> dict[str, set[
     merge_base = _git_out(worktree, run, "merge-base", base, "HEAD") or base
     out = _git_out(worktree, run, "diff", "-U0", "--no-renames", merge_base, "--", "tests/")
     lines: dict[str, set[int]] = {}
-    hunks: dict[str, list[tuple[int, int, int, int]]] = {}  # (old start, old count, head start, head count)
+    hunks: dict[
+        str, list[tuple[int, int, int, int]]
+    ] = {}  # (old start, old count, head start, head count)
     current = ""
     for line in out.splitlines():
         if line.startswith(("diff --git ", "+++ b/")):
             if line.startswith("+++ b/"):
-                current = line[len("+++ b/"):]
+                current = line[len("+++ b/") :]
                 lines.setdefault(current, set())
             continue
         match = HUNK_RE.match(line)
@@ -3331,7 +3427,9 @@ def _changed_test_lines(worktree: Path, base: str, run: RunFn) -> dict[str, set[
     return lines
 
 
-def _spans(lines: AbstractSet[int], node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) -> bool:
+def _spans(
+    lines: AbstractSet[int], node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
+) -> bool:
     """True when a diff line falls inside the test (its decorators included)."""
     if not lines:
         return False
@@ -3378,7 +3476,9 @@ def changed_test_functions(cfg: Config, state: GitState, run: RunFn) -> list[Cha
         headers = _class_headers(tree)
         for cls, node, reason in _test_functions(tree):
             header = headers.get(cls)
-            header_hit = header is not None and any(header[0] <= n <= header[1] for n in touched or ())
+            header_hit = header is not None and any(
+                header[0] <= n <= header[1] for n in touched or ()
+            )
             if whole or header_hit or _spans(touched or set(), node):
                 found.append(ChangedTest(path, cls, node.name, reason))
     return found
@@ -3417,7 +3517,7 @@ def _match_changed_test(modules: Mapping[str, str], classname: str) -> tuple[str
         if classname == module:
             return path, ""
         if classname.startswith(f"{module}."):
-            return path, classname[len(module) + 1:]
+            return path, classname[len(module) + 1 :]
     return None
 
 
@@ -3437,7 +3537,10 @@ def _alone_seconds(
     env["PYTEST_ADDOPTS"] = addopts.strip()
     rc, out = run([*tools["pytest"], node, *SLOW_ALONE_ARGS], cfg.worktree, env, SLOW_RERUN_TIMEOUT)
     if rc != 0:
-        return None, f"the serial re-run exited {rc}: {(out.strip().splitlines() or [''])[-1][:120]}"
+        return (
+            None,
+            f"the serial re-run exited {rc}: {(out.strip().splitlines() or [''])[-1][:120]}",
+        )
     try:
         cases = _junit_cases([xml])
     except ValueError as exc:
@@ -3494,7 +3597,9 @@ def slow_tests_check(
     unseen = [f"{test.file}::{test.name}" for key, test in wanted.items() if key not in seen]
     if unseen:
         return Check(
-            "slow-tests", "FAIL", f"no timing for changed tests (not run or not mapped): {_id_list(unseen)}"
+            "slow-tests",
+            "FAIL",
+            f"no timing for changed tests (not run or not mapped): {_id_list(unseen)}",
         )
     ordered = sorted(over.items(), key=lambda item: -item[1][1])  # slowest first
     marked = [f"{node} ({secs:g}s)" for node, (test, secs) in ordered if test.reason]
@@ -3520,7 +3625,9 @@ def slow_tests_check(
                 f" {'load unknown' if load1 is None else f'load1 {load1:.2f}'})"
             )
             if why:
-                failure = f"{seen_alone}; {why}" if times else f"{node} {secs:g}s in the gate; {why}"
+                failure = (
+                    f"{seen_alone}; {why}" if times else f"{node} {secs:g}s in the gate; {why}"
+                )
             elif min(times) > SLOW_TEST_SECONDS:
                 fix = (
                     f"mark it {SLOW_TEST_HINT} or make it faster"
@@ -3541,7 +3648,9 @@ def slow_tests_check(
             )
         return Check("slow-tests", "FAIL", " | ".join(parts))
     if not marked and not noise:
-        return Check("slow-tests", "PASS", f"{len(changed)} changed tests, none over {SLOW_TEST_SECONDS:g}s")
+        return Check(
+            "slow-tests", "PASS", f"{len(changed)} changed tests, none over {SLOW_TEST_SECONDS:g}s"
+        )
     parts = [f"slow-marked: {', '.join(marked)}"] if marked else []
     if noise:
         parts.append("load noise, not slow: " + ", ".join(noise))
@@ -3558,7 +3667,11 @@ def _new_unmarked_tests(cfg: Config, state: GitState, run: RunFn) -> list[str]:
     nodes: list[str] = []
     for path, tests in by_file.items():
         base_tree = _parse(_git_out(cfg.worktree, run, "show", f"{merge_base}:{path}"))
-        old = {(cls, node.name) for cls, node, _ in _test_functions(base_tree)} if base_tree else set()
+        old = (
+            {(cls, node.name) for cls, node, _ in _test_functions(base_tree)}
+            if base_tree
+            else set()
+        )
         head = _parse((cfg.worktree / path).read_text(encoding="utf-8", errors="replace"))
         marks: dict[tuple[str, str], bool] = {}
         for node in head.body if head else ():
@@ -3597,7 +3710,9 @@ def _covered_by_test(db_path: Path, roots: Sequence[Path]) -> dict[str, dict[str
                     files[fid] = resolved.relative_to(root.resolve()).as_posix()
                     break
         contexts = dict(db.execute("select id, context from context"))
-        tables = {name for (name,) in db.execute("select name from sqlite_master where type='table'")}
+        tables = {
+            name for (name,) in db.execute("select name from sqlite_master where type='table'")
+        }
         rows: list[tuple[int, int, int]] = []
         if "arc" in tables:
             for fid, cid, a, b in db.execute("select file_id, context_id, fromno, tono from arc"):
@@ -3607,7 +3722,10 @@ def _covered_by_test(db_path: Path, roots: Sequence[Path]) -> dict[str, dict[str
             # which has no `coverage` (bit i of byte j = line 8*j + i)
             for fid, cid, bits in db.execute("select file_id, context_id, numbits from line_bits"):
                 rows.extend(
-                    (fid, cid, 8 * j + i) for j, byte in enumerate(bits) for i in range(8) if byte >> i & 1
+                    (fid, cid, 8 * j + i)
+                    for j, byte in enumerate(bits)
+                    for i in range(8)
+                    if byte >> i & 1
                 )
     finally:
         db.close()
@@ -3643,7 +3761,11 @@ def simple_tests_check(
                 "--cov-report=", "-n", "0"]  # fmt: skip
         rc, out = run([*tools["pytest"], *nodes, *args], cfg.worktree, env, TEST_TIMEOUT)
         if rc != 0:
-            return Check("simple-tests", "FAIL", f"the coverage run of {len(nodes)} new tests exited {rc}: {tail_line(out)}")
+            return Check(
+                "simple-tests",
+                "FAIL",
+                f"the coverage run of {len(nodes)} new tests exited {rc}: {tail_line(out)}",
+            )
         try:
             covered = _covered_by_test(Path(tmp) / ".coverage", [cfg.worktree, cfg.main_root])
         except sqlite3.Error as exc:
@@ -3660,7 +3782,9 @@ def simple_tests_check(
         }
     except (ValueError, KeyError, TypeError):
         return Check("simple-tests", "FAIL", f"cccc failed (exit {rc}): {tail_line(out)}")
-    simple: dict[tuple[str, int], str] = {}  # (file, body line) -> "file:name cog=N", "" when not simple
+    simple: dict[
+        tuple[str, int], str
+    ] = {}  # (file, body line) -> "file:name cog=N", "" when not simple
     for rel in files:
         source = cfg.worktree / rel
         if not source.is_file():
@@ -3757,7 +3881,9 @@ def _flake_retry_ids(entries: Sequence[str], red: Sequence[RedCall]) -> list[str
     adds to rc 1 without a junit case); 1..LOAD_FLAKE_CAP node ids in all."""
     nodes: list[str] = []
     for call in red:
-        timing = any(a == "-m" and b == TIMING_MARK for a, b in zip(call.args, call.args[1:], strict=False))
+        timing = any(
+            a == "-m" and b == TIMING_MARK for a, b in zip(call.args, call.args[1:], strict=False)
+        )
         if call.rc != PYTEST_FAILED_RC or timing:
             return []
         try:
@@ -3785,7 +3911,8 @@ def _passed_in(junit: Path, node: str) -> bool:
     except (ET.ParseError, OSError):
         return False
     return any(
-        c.get("classname") == classname and c.get("name") == path[-1]
+        c.get("classname") == classname
+        and c.get("name") == path[-1]
         and all(c.find(tag) is None for tag in ("failure", "error", "skipped"))
         for c in cases
     )
@@ -3809,7 +3936,9 @@ def _retry_alone(
         xml = tmp / f"retry-{index}.xml"
         env = dict(test_env)
         env["PYTEST_ADDOPTS"] = f"{env.get('PYTEST_ADDOPTS', '')} {JUNIT_OPT}{xml}".strip()
-        rc, _ = run([*tools["pytest"], node, *SLOW_ALONE_ARGS], cfg.worktree, env, SLOW_RERUN_TIMEOUT)
+        rc, _ = run(
+            [*tools["pytest"], node, *SLOW_ALONE_ARGS], cfg.worktree, env, SLOW_RERUN_TIMEOUT
+        )
         if rc != 0 or not _passed_in(xml, node):
             again.append(node)
     return again
@@ -3820,7 +3949,9 @@ def _run_tests(
 ) -> TestRun:
     plan = plan_tests(cfg, state)
     test_env = dict(wt_env)
-    test_env["PYTEST_ADDOPTS"] = f"{wt_env.get('PYTEST_ADDOPTS', '')} {PYTEST_QUIET_ADDOPTS}".strip()
+    test_env["PYTEST_ADDOPTS"] = (
+        f"{wt_env.get('PYTEST_ADDOPTS', '')} {PYTEST_QUIET_ADDOPTS}".strip()
+    )
     flakes, bad_list = load_flakes(cfg.main_root / LOAD_FLAKES_FILE)
     bad_list = bad_list or load_flakes(cfg.worktree / LOAD_FLAKES_FILE)[1]
     if bad_list:
@@ -3849,23 +3980,33 @@ def _run_tests(
         if reused and not any(a.startswith("tests/") for a in kept):
             continue  # every file of this call PASSed at a tree the diff since cannot reach
         commands.append((kept, rc5_skip, rc5_note, index < plan.fail_fast))
-    with contextlib.ExitStack() as slot, tempfile.TemporaryDirectory(prefix="swarm-check-junit-") as tmp:
+    with (
+        contextlib.ExitStack() as slot,
+        tempfile.TemporaryDirectory(prefix="swarm-check-junit-") as tmp,
+    ):
         load1 = sample_load()  # ONE reading: the LOG note states what the sizing used
         if cfg.slots_dir is not None:
             # Decided now, not at gate start: other gates may have started (or ended) since.
             # An explicit PYTEST_XDIST_AUTO_NUM_WORKERS keeps its value but still holds a slot,
             # so peers count this gate.
-            running = slot.enter_context(_gate_slots_module().gate_slot(cfg.slots_dir, TEST_TIMEOUT))
+            running = slot.enter_context(
+                _gate_slots_module().gate_slot(cfg.slots_dir, TEST_TIMEOUT)
+            )
             workers = xdist_auto_workers(dict(os.environ), load1, os.cpu_count() or 1, running)
             if workers is not None and "PYTEST_XDIST_AUTO_NUM_WORKERS" not in os.environ:
                 test_env["PYTEST_XDIST_AUTO_NUM_WORKERS"] = workers
-                print(f"gate: {running} gate(s) running, xdist auto = {workers} workers", file=sys.stderr)
+                print(
+                    f"gate: {running} gate(s) running, xdist auto = {workers} workers",
+                    file=sys.stderr,
+                )
         if isinstance(run, ToolLog):  # the LOG says what load a slow run ran under
             run.note(load_line(load1))
         junits: list[Path] = []
         records: list[Path] = []  # per call holding cacheable files: its deselection record
         if cache.cacheable:
-            (Path(tmp) / f"{DESELECT_PLUGIN}.py").write_text(DESELECT_PLUGIN_SOURCE, encoding="utf-8")
+            (Path(tmp) / f"{DESELECT_PLUGIN}.py").write_text(
+                DESELECT_PLUGIN_SOURCE, encoding="utf-8"
+            )
         for index, (args, rc5_skip, rc5_note, fail_fast) in enumerate(commands):
             xml = Path(tmp) / f"run-{index}.xml"
             junits.append(xml)
@@ -3906,7 +4047,12 @@ def _run_tests(
             if stopped
             else slow_tests_check(cfg, state, tools, run, test_env, junits)
         )
-        if not failed and not retried and cache.cacheable and (dropped := deselected_files(records)) is not None:
+        if (
+            not failed
+            and not retried
+            and cache.cacheable
+            and (dropped := deselected_files(records)) is not None
+        ):
             passed_files = junit_passed_files(junits, cache.cacheable)
             _store_file_passes(cfg, run, cache, [f for f in passed_files if f not in dropped])
     summaries.extend(plan.notes)  # what the selection was made of, or why the full suite ran
@@ -3918,7 +4064,10 @@ def _run_tests(
     if again:
         summaries.append(f"retry alone also failed: {', '.join(again)}")
     if retried:
-        summaries.insert(0, f"RETRIED-ALONE: {', '.join(retried)} failed in the gate, passed alone (load_flakes.txt)")
+        summaries.insert(
+            0,
+            f"RETRIED-ALONE: {', '.join(retried)} failed in the gate, passed alone (load_flakes.txt)",
+        )
     if failed:
         check = Check("tests", "FAIL", " | ".join(summaries))
     elif passed == 0:
@@ -3972,10 +4121,17 @@ def _file_cache_plan(cfg: Config, state: GitState, plan: TestPlan, run: RunFn) -
         cacheable = []
         for f in sorted(plan.explicit):
             text = (cfg.worktree / f).read_text(encoding="utf-8", errors="replace")
-            if f in in_diff or f in pinned or TIMING_MARK_RE.search(text) or EXTERNAL_DATA_RE.search(text):
+            if (
+                f in in_diff
+                or f in pinned
+                or TIMING_MARK_RE.search(text)
+                or EXTERNAL_DATA_RE.search(text)
+            ):
                 continue
             cacheable.append(f)
-        return FileCacheRun(cacheable, reusable_test_files(cfg, run, cacheable, head[1], env), env, head)
+        return FileCacheRun(
+            cacheable, reusable_test_files(cfg, run, cacheable, head[1], env), env, head
+        )
     except Exception:  # fail closed: no reuse, no store
         return FileCacheRun()
 
@@ -4014,7 +4170,11 @@ def _run_exactness(cfg: Config, tools: dict[str, list[str]], run: RunFn) -> Chec
         TEST_TIMEOUT,
     )
     if rc == 0 and "IDENTICAL" in out:
-        return Check("exactness", "PASS", f"IDENTICAL to declared pins {cfg.expect_pins}" if expect else "IDENTICAL")
+        return Check(
+            "exactness",
+            "PASS",
+            f"IDENTICAL to declared pins {cfg.expect_pins}" if expect else "IDENTICAL",
+        )
     return Check("exactness", "FAIL", f"drift (rc={rc}): " + tail_line(out))
 
 
@@ -4062,9 +4222,12 @@ def _frontend_deps(cfg: Config, run: RunFn) -> tuple[str, str]:
 
 
 def _vitest_summary(output: str) -> str:
-    """"1 failed | 41 passed (42)" off vitest's "Tests" line (its last line is the duration)."""
+    """ "1 failed | 41 passed (42)" off vitest's "Tests" line (its last line is the duration)."""
     lines = (ln.strip() for ln in output.splitlines())
-    return next((ln.removeprefix("Tests").strip() for ln in lines if ln.startswith("Tests ")), tail_line(output))
+    return next(
+        (ln.removeprefix("Tests").strip() for ln in lines if ln.startswith("Tests ")),
+        tail_line(output),
+    )
 
 
 def _run_frontend(cfg: Config, run: RunFn) -> Check:
@@ -4094,7 +4257,11 @@ def _run_frontend(cfg: Config, run: RunFn) -> Check:
     prefix = f"{deps}; " if deps else ""
     if problems:
         return Check("frontend", "FAIL", prefix + "; ".join(problems) + "; " + counts)
-    return Check("frontend", "PASS", f"{prefix}tsc ok, build ok, vitest {_vitest_summary(vitest_out)}, {counts}")
+    return Check(
+        "frontend",
+        "PASS",
+        f"{prefix}tsc ok, build ok, vitest {_vitest_summary(vitest_out)}, {counts}",
+    )
 
 
 def _exactness_check(
@@ -4111,7 +4278,8 @@ def _exactness_check(
         "SKIP",
         "auto: nothing changed under vibe_quant/ (except "
         + ", ".join(d.rstrip("/").removeprefix("vibe_quant/") for d in EXACTNESS_SAFE_DIRS)
-        + ") nor in " + ", ".join(EXACTNESS_FILES),
+        + ") nor in "
+        + ", ".join(EXACTNESS_FILES),
     )
 
 
@@ -4122,9 +4290,7 @@ def _exactness_carry_check(
     can land before the carry engine does."""
     if cfg.exactness == "never":
         return Check("exactness-carry", "SKIP", "disabled")
-    if cfg.exactness == "always" or (
-        not state.error and should_run_exactness_carry(state.changed)
-    ):
+    if cfg.exactness == "always" or (not state.error and should_run_exactness_carry(state.changed)):
         return _run_exactness_carry(cfg, tools, run)
     if state.error:
         return Check("exactness-carry", "SKIP", "git diff unknown (see scope)")
@@ -4223,8 +4389,7 @@ def _run_golden_proof(
     if rc == 0 and identical(out):
         return Check(name, "PASS", "IDENTICAL" + suffix)
     capture = (
-        f"PYTHONPATH={cfg.worktree} {' '.join(tools['python'])} {wt_script} "
-        f"{capture_flag} {golden}"
+        f"PYTHONPATH={cfg.worktree} {' '.join(tools['python'])} {wt_script} {capture_flag} {golden}"
     )
     detail = (
         f"drift (rc={rc}): {evidence(out) or tail_line(out)}"
@@ -4245,15 +4410,15 @@ def _run_golden_proof(
     return Check(name, "FAIL", detail + f"; pre-existing on main (main: {main_evidence})")
 
 
-def _exactness_tiers_check(
-    cfg: Config, tools: dict[str, list[str]], run: RunFn
-) -> Check:
+def _exactness_tiers_check(cfg: Config, tools: dict[str, list[str]], run: RunFn) -> Check:
     """The 8-cell real-catalog golden: the proof nobody ran when 98cc4b86 moved the numbers."""
     skipped = _golden_skip(cfg)
     if skipped:
         return Check("exactness-tiers", "SKIP", skipped)
     return _run_golden_proof(
-        cfg, tools, run,
+        cfg,
+        tools,
+        run,
         name="exactness-tiers",
         script=EXACTNESS_TIERS_SCRIPT,
         golden_name=GOLDEN_TIERS_NAME,
@@ -4270,7 +4435,9 @@ def _gate_golden_check(cfg: Config, tools: dict[str, list[str]], run: RunFn) -> 
     if skipped:
         return Check("gate-golden", "SKIP", skipped)
     return _run_golden_proof(
-        cfg, tools, run,
+        cfg,
+        tools,
+        run,
         name="gate-golden",
         script=GATE_GOLDEN_SCRIPT,
         golden_name=GOLDEN_GATE_NAME,
@@ -4291,9 +4458,7 @@ def _frontend_check(cfg: Config, state: GitState, run: RunFn) -> Check:
     return Check("frontend", "SKIP", "auto: nothing under frontend/ changed")
 
 
-def run_checks(
-    cfg: Config, run: RunFn = real_run, facts: GitFacts | None = None
-) -> list[Check]:
+def run_checks(cfg: Config, run: RunFn = real_run, facts: GitFacts | None = None) -> list[Check]:
     state = git_state(cfg.worktree, cfg.base, run, facts)
     wt_env = {"PYTHONPATH": str(cfg.worktree)}
     checks: list[Check] = []
@@ -4349,7 +4514,10 @@ def run_checks(
     env_check, py_root = sync_python_env(cfg, run)
     checks.append(env_check)
     if env_check.status == "FAIL":
-        checks += [Check(n, "SKIP", "python-env FAIL: fix the env first") for n in TOOL_CHECK_NAMES - {"python-env"}]
+        checks += [
+            Check(n, "SKIP", "python-env FAIL: fix the env first")
+            for n in TOOL_CHECK_NAMES - {"python-env"}
+        ]
         checks.append(bus_inbox_check(cfg))
         order = {name: i for i, name in enumerate(CHECK_ORDER)}
         return sorted(checks, key=lambda c: order.get(c.name, len(order)))
@@ -4585,9 +4753,13 @@ def bus_inbox_check(cfg: Config) -> Check:
     if not cfg.bus_agent and not cfg.bus:
         return Check("bus-inbox", "SKIP", "no --bus-agent/SWARM_AGENT or --bus/SWARM_BUS")
     if not cfg.bus_agent:
-        return Check("bus-inbox", "SKIP", f"bus {cfg.bus} given but no --bus-agent/SWARM_AGENT to peek")
+        return Check(
+            "bus-inbox", "SKIP", f"bus {cfg.bus} given but no --bus-agent/SWARM_AGENT to peek"
+        )
     if not cfg.bus:
-        return Check("bus-inbox", "FAIL", f"agent {cfg.bus_agent} given but no --bus/SWARM_BUS to peek")
+        return Check(
+            "bus-inbox", "FAIL", f"agent {cfg.bus_agent} given but no --bus/SWARM_BUS to peek"
+        )
     if not Path(cfg.bus).is_dir():
         return Check("bus-inbox", "FAIL", f"configured bus {cfg.bus} is not a directory")
     board = False
@@ -4596,7 +4768,8 @@ def bus_inbox_check(cfg: Config) -> Check:
         board = mod.store_kind() == "board"
         job = Path(cfg.bus).resolve().parent
         done = [
-            hit for hit in _handoff_lint_module().done_without_handoff(mod._all(Path(cfg.bus)), job)
+            hit
+            for hit in _handoff_lint_module().done_without_handoff(mod._all(Path(cfg.bus)), job)
             if hit[0] == cfg.bus_agent
         ]
         inbox = _board_inbox(cfg) if board else Check("bus-inbox", "FAIL", _NO_FILE_INBOX)
@@ -4604,14 +4777,18 @@ def bus_inbox_check(cfg: Config) -> Check:
         reason = str(exc) if isinstance(exc, SystemExit) else f"{type(exc).__name__}: {exc}"
         if board:
             return Check(
-                "bus-inbox", "FAIL",
+                "bus-inbox",
+                "FAIL",
                 f"cannot read the board for {cfg.bus_agent}: {reason} — start it: scripts/agents/board-up.sh",
             )
         return Check("bus-inbox", "FAIL", f"cannot read bus {cfg.bus}: {reason}")
     if not done:
         return inbox
     path = job / "handoffs" / f"{cfg.bus_agent}.md"
-    details = [f"{a} posted done ({mid}) without a handoff: {why} — write and lint {path}" for a, mid, why in done]
+    details = [
+        f"{a} posted done ({mid}) without a handoff: {why} — write and lint {path}"
+        for a, mid, why in done
+    ]
     if inbox.status != "PASS":
         details.append(inbox.detail)
     return Check("bus-inbox", "FAIL", "; ".join(details))
@@ -4644,22 +4821,35 @@ def _board_inbox(cfg: Config) -> Check:
 
     def author(m: Mapping[str, object]) -> str:
         by = m.get("by")
-        return str(labels(m).get("from") or (by.get("profile") if isinstance(by, dict) else "") or "")
+        return str(
+            labels(m).get("from") or (by.get("profile") if isinstance(by, dict) else "") or ""
+        )
 
     roots = [
-        m for m in bs.read_channel(bs.ns() + channel)
+        m
+        for m in bs.read_channel(bs.ns() + channel)
         if not m.get("re") and not m.get("deleted") and labels(m).get("agent") == agent
     ]
     if not roots:
         return Check("bus-inbox", "FAIL", f"no task thread for {agent} in {channel}")
     tid = str(roots[-1]["id"])
     me = {agent, bs.profile_of(agent)}
-    talk = [m for m in bs.read_thread(tid) if not m.get("deleted") and (author(m) in me or author(m) == "chief")]
+    talk = [
+        m
+        for m in bs.read_thread(tid)
+        if not m.get("deleted") and (author(m) in me or author(m) == "chief")
+    ]
     last_mine = max((i for i, m in enumerate(talk) if author(m) in me), default=-1)
-    unread = [m for m in talk[last_mine + 1:] if author(m) == "chief"]
+    unread = [m for m in talk[last_mine + 1 :] if author(m) == "chief"]
     if last_mine < 0:
-        quote = f"; newest chief message {unread[-1]['id']} {unread[-1].get('text')}" if unread else ""
-        return Check("bus-inbox", "FAIL", f"no reply by {agent} in thread {tid}{quote} — reply in thread {tid}")
+        quote = (
+            f"; newest chief message {unread[-1]['id']} {unread[-1].get('text')}" if unread else ""
+        )
+        return Check(
+            "bus-inbox",
+            "FAIL",
+            f"no reply by {agent} in thread {tid}{quote} — reply in thread {tid}",
+        )
     if not unread:
         return Check("bus-inbox", "PASS", f"no unread chief message in thread {tid} for {agent}")
     listed = "; ".join(f"{m['id']} {m.get('text')}" for m in unread)
@@ -4672,7 +4862,9 @@ def _board_inbox(cfg: Config) -> Check:
             "WARN",
             f"{len(unread)} unread from chief in thread {tid}, all older than last commit {last[1]}: {listed}{tail}",
         )
-    return Check("bus-inbox", "FAIL", f"{len(unread)} unread from chief in thread {tid}: {listed}{tail}")
+    return Check(
+        "bus-inbox", "FAIL", f"{len(unread)} unread from chief in thread {tid}: {listed}{tail}"
+    )
 
 
 def list_tests(cfg: Config, run: RunFn) -> int:
@@ -4692,7 +4884,10 @@ def list_tests(cfg: Config, run: RunFn) -> int:
     for note in plan.notes:
         print(f"# {note}", file=sys.stderr)
     for kind, paths in plan.reasons.items():  # why each file is in the list (a file may repeat)
-        print(f"# selected by {kind} ({len(paths)}): {', '.join(Path(f).stem for f in paths)}", file=sys.stderr)
+        print(
+            f"# selected by {kind} ({len(paths)}): {', '.join(Path(f).stem for f in paths)}",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -4708,25 +4903,41 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
     parser.add_argument("--json", dest="json_out", default=None)
     parser.add_argument("--no-cache", dest="no_cache", action="store_true")
     parser.add_argument(
-        "--full", action="store_true",
+        "--full",
+        action="store_true",
         help="integration mode: whole tests/unit + every timing test (the verifier, before land)",
     )
     parser.add_argument(
-        "--list-tests", dest="list_tests", action="store_true",
+        "--list-tests",
+        dest="list_tests",
+        action="store_true",
         help="print the test files this gate would run (one per line) and exit; runs no tool",
     )
-    parser.add_argument("--bus", default=None, help="job bus dir for the bus-inbox check (else $SWARM_BUS)")
-    parser.add_argument("--bus-agent", dest="bus_agent", default=None, help="whose inbox to peek (else $SWARM_AGENT)")
     parser.add_argument(
-        "--expect-pins", dest="expect_pins", default=None,
+        "--bus", default=None, help="job bus dir for the bus-inbox check (else $SWARM_BUS)"
+    )
+    parser.add_argument(
+        "--bus-agent",
+        dest="bus_agent",
+        default=None,
+        help="whose inbox to peek (else $SWARM_AGENT)",
+    )
+    parser.add_argument(
+        "--expect-pins",
+        dest="expect_pins",
+        default=None,
         help="declared comparability-break pins JSON for exactness_239 --expect (else $SWARM_EXPECT_PINS)",
     )
     args = parser.parse_args(argv)
 
     wt = Path(args.worktree).resolve()
-    if not (wt / ".git").exists() and subprocess.run(
-        ["git", "-C", str(wt), "rev-parse", "--git-dir"], capture_output=True
-    ).returncode != 0:
+    if (
+        not (wt / ".git").exists()
+        and subprocess.run(
+            ["git", "-C", str(wt), "rev-parse", "--git-dir"], capture_output=True
+        ).returncode
+        != 0
+    ):
         print(f"not a git worktree: {wt}")
         return 2
 
@@ -4755,7 +4966,9 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
         ),
         bus=args.bus or os.environ.get("SWARM_BUS") or "",
         bus_agent=args.bus_agent or os.environ.get("SWARM_AGENT") or "",
-        expect_pins=str(Path(pins).resolve()) if (pins := args.expect_pins or os.environ.get("SWARM_EXPECT_PINS")) else "",
+        expect_pins=str(Path(pins).resolve())
+        if (pins := args.expect_pins or os.environ.get("SWARM_EXPECT_PINS"))
+        else "",
         empty_diff_detail=(
             "empty diff vs origin/main: nothing unpushed to gate; "
             "pass --base <sha> to gate pushed commits"
@@ -4788,7 +5001,9 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
     # --full (the verifier, before land) backstops every per-round shortcut: it never reads
     # or writes a stamp (review rev-gate-1 B4). An empty key disables both.
     key, _ = (
-        _cache_probe(cfg, runner, facts=facts) if not args.no_cache and not args.full else ("", None)
+        _cache_probe(cfg, runner, facts=facts)
+        if not args.no_cache and not args.full
+        else ("", None)
     )  # PRE-run key
     stamp = load_stamp(wt, runner, key, facts) if key else None
 
@@ -4842,9 +5057,7 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
         print(format_line(check))
     # A scope FAIL skips every tool, so the transcript would be empty: the scope line (which
     # lists every out-of-scope path) becomes the log header, so the LOG names what to fix.
-    header = next(
-        (format_line(c) for c in checks if c.name == "scope" and c.status == "FAIL"), ""
-    )
+    header = next((format_line(c) for c in checks if c.name == "scope" and c.status == "FAIL"), "")
     gate, failed = gate_summary(checks)
     post_facts = GitFacts()  # a NEW phase: a mid-run commit/edit must be seen (trailer + stamp)
     write_gate_log(
@@ -4864,9 +5077,7 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
     # B3: a bus-inbox-only FAIL is time-dependent (the DM may simply be read next run), and so
     # is a stale-reads-only FAIL (the maker can re-read from its worktree and re-run), so the
     # tool PASS is still stamped; only a real tool FAIL blocks the stamp.
-    tool_failed = [
-        c for c in checks if c.status == "FAIL" and c.name not in TIME_DEPENDENT_CHECKS
-    ]
+    tool_failed = [c for c in checks if c.status == "FAIL" and c.name not in TIME_DEPENDENT_CHECKS]
     if not args.no_cache and not tool_failed and not active_stubs() and key:
         # key is the PRE-run key (non-empty = clean start). Stamp only if nothing moved while
         # the tools ran; otherwise the verdict is for a HEAD/tree that was never gated.

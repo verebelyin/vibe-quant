@@ -428,7 +428,9 @@ def test_enrol_refuses_duplicate_inside_the_insert(env: Env) -> None:
     misses here and the in-transaction check of the insert is what refuses.
     """
     first = env.enrol()
-    with pytest.raises(EnrolRefused, match=re.escape(f"already tracked as shadow #{first} (rsi-btc, tracking)")):
+    with pytest.raises(
+        EnrolRefused, match=re.escape(f"already tracked as shadow #{first} (rsi-btc, tracking)")
+    ):
         env.enrol(source_ref={"run_id": 7}, symbols=["BTCUSDT"], parameters={})
     assert [r["id"] for r in env.sm.list_shadow_strategies()] == [first]
     other = env.enrol(parameters={"leverage": 3})
@@ -447,7 +449,9 @@ def test_enrol_refuses_duplicate_before_resolving(
     env.sm.conn.commit()
     resolved: list[object] = []
     monkeypatch.setattr(tracker, "resolve_frozen", lambda **kw: resolved.append(kw))
-    with pytest.raises(EnrolRefused, match=re.escape(f"already tracked as shadow #{first} (rsi-btc, futile)")):
+    with pytest.raises(
+        EnrolRefused, match=re.escape(f"already tracked as shadow #{first} (rsi-btc, futile)")
+    ):
         env.enrol(name="second try")
     assert resolved == []
     assert [r["id"] for r in env.sm.list_shadow_strategies()] == [first]

@@ -25,7 +25,7 @@ else:
     sys.modules["swarm_check"] = swarm_check
     _spec.loader.exec_module(swarm_check)
 
-TOOL = '''\
+TOOL = """\
 import re
 
 
@@ -49,8 +49,8 @@ def route(kind, n):
             if n == 2 or n == 5:
                 return n
     return None
-'''
-HEADER = '''\
+"""
+HEADER = """\
 import importlib.util
 from pathlib import Path
 
@@ -63,12 +63,14 @@ _spec.loader.exec_module(tool)
 
 def test_base():
     assert tool.double(1) == 2
-'''
+"""
 NEW_FILE = "tests/unit/test_tool.py"
 
 
 def _git(repo: Path, *args: str) -> None:
-    proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=False)
+    proc = subprocess.run(
+        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=False
+    )
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
@@ -84,7 +86,9 @@ def _check(tmp_path: Path, new_tests: str) -> object:
     _git(repo, "add", "-A")
     _git(repo, "-c", "user.email=m@example.com", "-c", "user.name=m", "commit", "-qm", "base")
     (repo / NEW_FILE).write_text(HEADER + new_tests)
-    cfg = swarm_check.Config(worktree=repo, main_root=repo, base="HEAD", exactness="never", frontend="never")
+    cfg = swarm_check.Config(
+        worktree=repo, main_root=repo, base="HEAD", exactness="never", frontend="never"
+    )
     state = swarm_check.GitState([NEW_FILE], [])
     tools = {"pytest": [sys.executable, "-m", "pytest"]}
     return swarm_check.simple_tests_check(cfg, state, tools, swarm_check.real_run, {})

@@ -61,11 +61,9 @@ def _warn_deprecated_creds_once() -> None:
         if os.getenv(var):
             _deprecated_creds_warned.add(var)
             logger.warning(
-                "%s detected — no longer used since the praw→.json swap. "
-                "Safe to remove from env.",
+                "%s detected — no longer used since the praw→.json swap. Safe to remove from env.",
                 var,
             )
-
 
 
 def subreddits_from_env() -> list[str]:

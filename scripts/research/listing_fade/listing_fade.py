@@ -24,7 +24,10 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[3]
 KLINE_DIRS = (ROOT / "data/swarm/20261011-h9-raw", ROOT / "data/swarm/20261011-h10b-raw")
 H10B_DIR = ROOT / "data/swarm/20261011-h10b-raw"
-FUNDING_DIRS = (ROOT / "data/swarm/20261011-h11-funding-a", ROOT / "data/swarm/20261011-h11-funding-b")
+FUNDING_DIRS = (
+    ROOT / "data/swarm/20261011-h11-funding-a",
+    ROOT / "data/swarm/20261011-h11-funding-b",
+)
 
 FILE_RE = re.compile(r"^(.+)-(\d{4})-(\d{2})\.csv$")
 EPOCH = date(1970, 1, 1)
@@ -150,9 +153,9 @@ def main() -> None:
         hi = bisect.bisect_left(times, high)
         return cumulative[hi] - cumulative[lo], hi - lo
 
-    def short_return(symbol: str, entry_day: int, exit_day: int, drift: bool = False) -> tuple[
-        float, bool
-    ]:
+    def short_return(
+        symbol: str, entry_day: int, exit_day: int, drift: bool = False
+    ) -> tuple[float, bool]:
         rows = klines[symbol]
         c_entry = rows[entry_day][0]
         c_exit = rows[exit_day][0]
@@ -269,7 +272,9 @@ def main() -> None:
         ]
     )
     planted = d_values - mean_d + drift_delta
-    planted_by_month = [planted[[i for i, month in enumerate(months) if month == key]] for key in keys]
+    planted_by_month = [
+        planted[[i for i, month in enumerate(months) if month == key]] for key in keys
+    ]
 
     rng_p = np.random.default_rng(SEED_POWER)
     hits = 0

@@ -48,8 +48,13 @@ from vibe_quant.discovery.operators import (
 )
 
 
-def _gene(ind: str = "RSI", period: int = 14, condition: ConditionType = ConditionType.GT,
-          threshold: float = 50.0, sub_value: str | None = None) -> StrategyGene:
+def _gene(
+    ind: str = "RSI",
+    period: int = 14,
+    condition: ConditionType = ConditionType.GT,
+    threshold: float = 50.0,
+    sub_value: str | None = None,
+) -> StrategyGene:
     """Helper to create a gene with minimal boilerplate."""
     params: dict[str, float] = {"period": float(period)}
     if ind == "MACD":
@@ -57,18 +62,28 @@ def _gene(ind: str = "RSI", period: int = 14, condition: ConditionType = Conditi
     elif ind == "STOCH":
         params = {"k_period": float(period), "d_period": 3.0}
     return StrategyGene(
-        indicator_type=ind, parameters=params, condition=condition,
-        threshold=threshold, sub_value=sub_value,
+        indicator_type=ind,
+        parameters=params,
+        condition=condition,
+        threshold=threshold,
+        sub_value=sub_value,
     )
 
 
-def _chrom(entry_genes: list[StrategyGene], exit_genes: list[StrategyGene],
-           sl: float = 2.0, tp: float = 5.0,
-           direction: Direction = Direction.LONG) -> StrategyChromosome:
+def _chrom(
+    entry_genes: list[StrategyGene],
+    exit_genes: list[StrategyGene],
+    sl: float = 2.0,
+    tp: float = 5.0,
+    direction: Direction = Direction.LONG,
+) -> StrategyChromosome:
     """Helper to create a chromosome."""
     return StrategyChromosome(
-        entry_genes=entry_genes, exit_genes=exit_genes,
-        stop_loss_pct=sl, take_profit_pct=tp, direction=direction,
+        entry_genes=entry_genes,
+        exit_genes=exit_genes,
+        stop_loss_pct=sl,
+        take_profit_pct=tp,
+        direction=direction,
     )
 
 
@@ -123,13 +138,19 @@ class TestChromosomeDistance:
         a = _chrom(
             [_gene("RSI", 14, ConditionType.GT, 50.0)],
             [_gene("ATR", 14, ConditionType.LT, 0.01)],
-            sl=1.0, tp=1.0, direction=Direction.LONG,
+            sl=1.0,
+            tp=1.0,
+            direction=Direction.LONG,
         )
         b = _chrom(
-            [_gene("CCI", 50, ConditionType.CROSSES_BELOW, -200.0),
-             _gene("STOCH", 21, ConditionType.LTE, 20.0)],
+            [
+                _gene("CCI", 50, ConditionType.CROSSES_BELOW, -200.0),
+                _gene("STOCH", 21, ConditionType.LTE, 20.0),
+            ],
             [_gene("MFI", 30, ConditionType.GT, 80.0)],
-            sl=10.0, tp=20.0, direction=Direction.SHORT,
+            sl=10.0,
+            tp=20.0,
+            direction=Direction.SHORT,
         )
         d = chromosome_distance(a, b)
         assert d > 0.5  # Very different
@@ -172,7 +193,9 @@ class TestChromosomeDistance:
         b = _chrom(
             [_gene("CCI"), _gene("STOCH"), _gene("MFI"), _gene("ADX"), _gene("WILLR")],
             [_gene("ROC"), _gene("MACD"), _gene("RSI")],
-            sl=10.0, tp=20.0, direction=Direction.SHORT,
+            sl=10.0,
+            tp=20.0,
+            direction=Direction.SHORT,
         )
         d = chromosome_distance(a, b)
         assert 0.0 <= d <= 1.0
@@ -211,16 +234,16 @@ from vibe_quant.discovery.operators import (
 )
 
 # Weights for gene components (structural vs parametric)
-_W_INDICATOR: float = 2.0   # categorical: 0 or 1
-_W_CONDITION: float = 1.0   # categorical: 0 or 1
-_W_THRESHOLD: float = 1.0   # continuous: normalized
-_W_PARAMS: float = 1.0      # continuous: avg normalized param distance
+_W_INDICATOR: float = 2.0  # categorical: 0 or 1
+_W_CONDITION: float = 1.0  # categorical: 0 or 1
+_W_THRESHOLD: float = 1.0  # continuous: normalized
+_W_PARAMS: float = 1.0  # continuous: avg normalized param distance
 
 # Weights for chromosome-level components
-_W_GENES: float = 3.0       # gene-by-gene distance (dominant)
-_W_DIRECTION: float = 1.0   # categorical: 0, 0.5, or 1
-_W_SL: float = 0.5          # continuous: normalized
-_W_TP: float = 0.5          # continuous: normalized
+_W_GENES: float = 3.0  # gene-by-gene distance (dominant)
+_W_DIRECTION: float = 1.0  # categorical: 0, 0.5, or 1
+_W_SL: float = 0.5  # continuous: normalized
+_W_TP: float = 0.5  # continuous: normalized
 
 # Global threshold range for normalization (populated on first use)
 _THRESHOLD_GLOBAL_RANGE: float = 400.0  # CCI range [-200, 200] is widest
@@ -233,6 +256,7 @@ def _init_direction_distances() -> None:
     if _DIRECTION_DISTANCES:
         return
     from vibe_quant.discovery.operators import Direction
+
     dirs = [Direction.LONG, Direction.SHORT, Direction.BOTH]
     for a in dirs:
         for b in dirs:
@@ -279,6 +303,7 @@ def gene_distance(a: StrategyGene, b: StrategyGene) -> float:
     if ind_same:
         # Threshold distance (continuous, same indicator scale)
         from vibe_quant.discovery.operators import THRESHOLD_RANGES
+
         if a.indicator_type in THRESHOLD_RANGES:
             tlo, thi = THRESHOLD_RANGES[a.indicator_type]
             rng = thi - tlo
@@ -292,6 +317,7 @@ def gene_distance(a: StrategyGene, b: StrategyGene) -> float:
 
         # Parameter distance (continuous, shared params)
         from vibe_quant.discovery.operators import INDICATOR_POOL
+
         ranges = INDICATOR_POOL.get(a.indicator_type, {})
         if ranges:
             param_dists: list[float] = []
@@ -409,6 +435,7 @@ Add to `tests/unit/test_discovery_operators.py` (or create if needed):
 ```python
 # In tests/unit/test_discovery_operators.py — append these test classes
 
+
 class TestCrowdingReplace:
     """Tests for deterministic crowding replacement."""
 
@@ -484,14 +511,17 @@ class TestCrowdingReplace:
         assert result[1].uid == parent_b.uid  # CCI slot: parent survived
 
 
-def _make_chrom(indicator: str = "RSI", direction: Direction = Direction.LONG) -> StrategyChromosome:
+def _make_chrom(
+    indicator: str = "RSI", direction: Direction = Direction.LONG
+) -> StrategyChromosome:
     """Helper to make a simple chromosome for testing."""
     from vibe_quant.discovery.operators import ConditionType, StrategyGene
 
     gene = StrategyGene(
         indicator_type=indicator,
-        parameters={"period": 14.0} if indicator != "MACD" else
-            {"fast_period": 12.0, "slow_period": 26.0, "signal_period": 9.0},
+        parameters={"period": 14.0}
+        if indicator != "MACD"
+        else {"fast_period": 12.0, "slow_period": 26.0, "signal_period": 9.0},
         condition=ConditionType.GT,
         threshold=50.0 if indicator == "RSI" else 0.0,
     )
@@ -626,13 +656,17 @@ def _evolve_tournament(
                 valid_child = mutate(child, cfg.mutation_rate)
             else:
                 if not is_valid_chromosome(valid_child):
-                    valid_child = _random_chromosome(direction_constraint=self._direction_constraint)
+                    valid_child = _random_chromosome(
+                        direction_constraint=self._direction_constraint
+                    )
                     random_fallbacks += 1
             new_pop.append(valid_child)
             remaining -= 1
 
     if retries > 0 or random_fallbacks > 0:
-        logger.info("  Evolution: %d mutation retries, %d random fallbacks", retries, random_fallbacks)
+        logger.info(
+            "  Evolution: %d mutation retries, %d random fallbacks", retries, random_fallbacks
+        )
 
     return new_pop
 
@@ -720,13 +754,15 @@ def _evolve_crowding(
 
     # Trim to population size (may have +1 from elite + pairs)
     if len(new_pop) > cfg.population_size:
-        new_pop = new_pop[:cfg.population_size]
+        new_pop = new_pop[: cfg.population_size]
     # Pad if somehow short
     while len(new_pop) < cfg.population_size:
         new_pop.append(_random_chromosome(direction_constraint=self._direction_constraint))
 
     if retries > 0 or random_fallbacks > 0:
-        logger.info("  Evolution: %d mutation retries, %d random fallbacks", retries, random_fallbacks)
+        logger.info(
+            "  Evolution: %d mutation retries, %d random fallbacks", retries, random_fallbacks
+        )
 
     return new_pop
 ```
@@ -809,8 +845,10 @@ def _gene(ind: str = "RSI") -> StrategyGene:
     elif ind == "STOCH":
         params = {"k_period": 14.0, "d_period": 3.0}
     return StrategyGene(
-        indicator_type=ind, parameters=params,
-        condition=ConditionType.GT, threshold=50.0,
+        indicator_type=ind,
+        parameters=params,
+        condition=ConditionType.GT,
+        threshold=50.0,
     )
 
 
@@ -818,7 +856,9 @@ def _chrom(indicator: str = "RSI", direction: Direction = Direction.LONG) -> Str
     return StrategyChromosome(
         entry_genes=[_gene(indicator)],
         exit_genes=[_gene(indicator)],
-        stop_loss_pct=2.0, take_profit_pct=5.0, direction=direction,
+        stop_loss_pct=2.0,
+        take_profit_pct=5.0,
+        direction=direction,
     )
 
 
@@ -955,18 +995,28 @@ def population_entropy(population: list[StrategyChromosome]) -> float:
     dir_counter: Counter[str] = Counter()
 
     for chrom in population:
-        dir_val = chrom.direction.value if hasattr(chrom.direction, "value") else str(chrom.direction)
+        dir_val = (
+            chrom.direction.value if hasattr(chrom.direction, "value") else str(chrom.direction)
+        )
         dir_counter[dir_val] += 1
         for gene in chrom.entry_genes + chrom.exit_genes:
             ind_counter[gene.indicator_type] += 1
-            cond_val = gene.condition.value if hasattr(gene.condition, "value") else str(gene.condition)
+            cond_val = (
+                gene.condition.value if hasattr(gene.condition, "value") else str(gene.condition)
+            )
             cond_counter[cond_val] += 1
 
     # Normalize by max possible entropy for each locus
     # Indicator: 9 possible types → max = log2(9) ≈ 3.17
     # Direction: 3 possible → max = log2(3) ≈ 1.58
     # Condition: 6 possible → max = log2(6) ≈ 2.58
-    from vibe_quant.discovery.operators import ConditionType, Direction, _ensure_pool, _INDICATOR_NAMES
+    from vibe_quant.discovery.operators import (
+        ConditionType,
+        Direction,
+        _ensure_pool,
+        _INDICATOR_NAMES,
+    )
+
     _ensure_pool()
 
     n_indicators = max(len(_INDICATOR_NAMES), 1)
@@ -1039,12 +1089,15 @@ from vibe_quant.discovery.diversity import (
 entropy = population_entropy(population)
 if should_inject_immigrants(entropy):
     population = inject_random_immigrants(
-        population, scores, fraction=0.1,
+        population,
+        scores,
+        fraction=0.1,
         direction_constraint=self._direction_constraint,
     )
     logger.info(
         "  Diversity intervention: entropy=%.3f < 0.3, injected %d random immigrants",
-        entropy, max(1, int(len(population) * 0.1)),
+        entropy,
+        max(1, int(len(population) * 0.1)),
     )
 ```
 
@@ -1093,24 +1146,35 @@ Fix: use `chromosome_distance` for deduplication. A new candidate is only added 
 ```python
 # In tests/unit/test_discovery_pipeline.py or new test file
 
+
 class TestStructuralDedup:
     """Tests for distance-based top-K deduplication."""
 
     def test_clones_rejected(self) -> None:
         """Structurally identical chromosomes are deduped even with different UIDs."""
         from vibe_quant.discovery.pipeline import _select_diverse_top_k
-        from vibe_quant.discovery.operators import StrategyChromosome, StrategyGene, ConditionType, Direction
+        from vibe_quant.discovery.operators import (
+            StrategyChromosome,
+            StrategyGene,
+            ConditionType,
+            Direction,
+        )
 
         gene = StrategyGene(
-            indicator_type="RSI", parameters={"period": 14.0},
-            condition=ConditionType.GT, threshold=50.0,
+            indicator_type="RSI",
+            parameters={"period": 14.0},
+            condition=ConditionType.GT,
+            threshold=50.0,
         )
         # 5 clones, different UIDs, same structure
         candidates = []
         for i in range(5):
             c = StrategyChromosome(
-                entry_genes=[gene.clone()], exit_genes=[gene.clone()],
-                stop_loss_pct=2.0, take_profit_pct=5.0, direction=Direction.LONG,
+                entry_genes=[gene.clone()],
+                exit_genes=[gene.clone()],
+                stop_loss_pct=2.0,
+                take_profit_pct=5.0,
+                direction=Direction.LONG,
             )
             candidates.append((c, 0.8 - i * 0.01))  # Slightly decreasing fitness
 
@@ -1120,7 +1184,12 @@ class TestStructuralDedup:
     def test_diverse_strategies_all_kept(self) -> None:
         """Structurally different strategies are all kept."""
         from vibe_quant.discovery.pipeline import _select_diverse_top_k
-        from vibe_quant.discovery.operators import StrategyChromosome, StrategyGene, ConditionType, Direction
+        from vibe_quant.discovery.operators import (
+            StrategyChromosome,
+            StrategyGene,
+            ConditionType,
+            Direction,
+        )
 
         indicators = ["RSI", "CCI", "ATR", "STOCH", "ADX"]
         candidates = []
@@ -1129,12 +1198,17 @@ class TestStructuralDedup:
             if ind == "STOCH":
                 params = {"k_period": 14.0, "d_period": 3.0}
             gene = StrategyGene(
-                indicator_type=ind, parameters=params,
-                condition=ConditionType.GT, threshold=50.0 if ind in ("RSI", "CCI") else 0.01,
+                indicator_type=ind,
+                parameters=params,
+                condition=ConditionType.GT,
+                threshold=50.0 if ind in ("RSI", "CCI") else 0.01,
             )
             c = StrategyChromosome(
-                entry_genes=[gene], exit_genes=[gene.clone()],
-                stop_loss_pct=2.0, take_profit_pct=5.0, direction=Direction.LONG,
+                entry_genes=[gene],
+                exit_genes=[gene.clone()],
+                stop_loss_pct=2.0,
+                take_profit_pct=5.0,
+                direction=Direction.LONG,
             )
             candidates.append((c, 0.9 - i * 0.01))
 
@@ -1183,8 +1257,7 @@ def _select_diverse_top_k(
 
         # Check distance to all already-selected
         is_diverse = all(
-            chromosome_distance(chrom, sel_chrom) >= min_distance
-            for sel_chrom, _ in selected
+            chromosome_distance(chrom, sel_chrom) >= min_distance for sel_chrom, _ in selected
         )
 
         if is_diverse:
@@ -1297,6 +1370,7 @@ class TestDiversityPreservation:
 
         # Simulate 10 generations with fake fitness (random scores)
         import random as rng
+
         for gen in range(10):
             scores = [rng.random() for _ in pop]
 
@@ -1322,6 +1396,7 @@ class TestDiversityPreservation:
                 inject_random_immigrants,
                 should_inject_immigrants,
             )
+
             entropy = population_entropy(new_pop)
             if should_inject_immigrants(entropy):
                 new_pop = inject_random_immigrants(new_pop, scores, fraction=0.1)

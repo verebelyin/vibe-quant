@@ -86,7 +86,9 @@ def _forbid_inherited_board_env() -> Iterator[None]:
     guard = pytest.MonkeyPatch()
     guard.setenv("BOARD_URL", UNROUTABLE_BOARD_URL)
     # `vb read kb/` appends to a retro log in the main checkout: never from a test
-    guard.setenv("VQ_KB_READS_LOG", str(Path(tempfile.gettempdir()) / f"vq-kb-reads-{os.getpid()}.jsonl"))
+    guard.setenv(
+        "VQ_KB_READS_LOG", str(Path(tempfile.gettempdir()) / f"vq-kb-reads-{os.getpid()}.jsonl")
+    )
     for name in _BOARD_ENV_REMOVED:
         guard.delenv(name, raising=False)
     yield
@@ -114,7 +116,12 @@ class BoardServer:
             env["BOARD_PROFILE"] = profile
         return subprocess.run(
             [str(_AGENTS_DIR / "bin" / "vb"), *args],
-            input=stdin, env=env, capture_output=True, text=True, timeout=60, check=False,
+            input=stdin,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
         )
 
 
@@ -164,7 +171,9 @@ def reap_leaked_boards() -> None:
             continue
         if _pid_alive(owner):
             continue  # another session's live board
-        cmd = subprocess.run(["ps", "-p", str(server), "-o", "command="], capture_output=True, text=True, check=False).stdout
+        cmd = subprocess.run(
+            ["ps", "-p", str(server), "-o", "command="], capture_output=True, text=True, check=False
+        ).stdout
         if " serve " in f" {cmd} " and data in cmd:
             with contextlib.suppress(ProcessLookupError, PermissionError):
                 os.killpg(server, signal.SIGKILL)  # its own session (boardctl starts it so)
@@ -189,7 +198,11 @@ def board_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[BoardServ
     data = root / "data"
     up = subprocess.run(
         [*ctl, "up", "--dir", str(data), "--port", str(port), "--no-inspect"],
-        env=env, capture_output=True, text=True, timeout=600, check=False,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=600,
+        check=False,
     )
     if up.returncode != 0:
         pytest.fail(f"board_server: boardctl up failed ({up.returncode}): {up.stdout}{up.stderr}")
@@ -199,7 +212,14 @@ def board_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[BoardServ
     entry.write_text(json.dumps({"server": pid, "owner": os.getpid(), "dir": str(data)}))
 
     def stop() -> None:
-        subprocess.run([*ctl, "down", "--dir", str(data)], env=env, capture_output=True, text=True, timeout=60, check=False)
+        subprocess.run(
+            [*ctl, "down", "--dir", str(data)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
         entry.unlink(missing_ok=True)
 
     atexit.register(stop)

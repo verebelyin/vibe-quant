@@ -74,12 +74,14 @@ def _good_dsl() -> dict:
 
 
 def test_golden_positive_parses() -> None:
-    raw = _claude_envelope({
-        "extracted": True,
-        "confidence": 0.87,
-        "rationale": "Author proposes RSI<30 entry RSI>70 exit on 1h",
-        "dsl": _good_dsl(),
-    })
+    raw = _claude_envelope(
+        {
+            "extracted": True,
+            "confidence": 0.87,
+            "rationale": "Author proposes RSI<30 entry RSI>70 exit on 1h",
+            "dsl": _good_dsl(),
+        }
+    )
     ext = ClaudePExtractor()
     with patch.object(ext, "_run_claude", return_value=raw):
         result = ext.extract(_item())
@@ -95,12 +97,14 @@ def test_golden_positive_parses() -> None:
 
 
 def test_golden_negative_skips() -> None:
-    raw = _claude_envelope({
-        "extracted": False,
-        "confidence": 0.1,
-        "rationale": "Question, not a strategy",
-        "dsl": None,
-    })
+    raw = _claude_envelope(
+        {
+            "extracted": False,
+            "confidence": 0.1,
+            "rationale": "Question, not a strategy",
+            "dsl": None,
+        }
+    )
     ext = ClaudePExtractor()
     with patch.object(ext, "_run_claude", return_value=raw):
         result = ext.extract(_item(title="Which broker?", body="What broker do you use?"))
@@ -112,14 +116,16 @@ def test_golden_negative_skips() -> None:
 
 @pytest.mark.parametrize("extracted", [True, False])
 def test_credibility_fields_parse_for_every_finding(extracted: bool) -> None:
-    raw = _claude_envelope({
-        "extracted": extracted,
-        "confidence": 0.8,
-        "rationale": "Evidence and rules are described.",
-        "dsl": _good_dsl() if extracted else None,
-        "evidence_level": "live_traded",
-        "completeness": 0.91,
-    })
+    raw = _claude_envelope(
+        {
+            "extracted": extracted,
+            "confidence": 0.8,
+            "rationale": "Evidence and rules are described.",
+            "dsl": _good_dsl() if extracted else None,
+            "evidence_level": "live_traded",
+            "completeness": 0.91,
+        }
+    )
     ext = ClaudePExtractor()
     with patch.object(ext, "_run_claude", return_value=raw):
         result = ext.extract(_item())
@@ -144,14 +150,16 @@ def test_invalid_credibility_fields_are_discarded(
     expected_evidence: str | None,
     expected_completeness: float | None,
 ) -> None:
-    raw = _claude_envelope({
-        "extracted": False,
-        "confidence": 0.2,
-        "rationale": "Not extractable.",
-        "dsl": None,
-        "evidence_level": evidence_level,
-        "completeness": completeness,
-    })
+    raw = _claude_envelope(
+        {
+            "extracted": False,
+            "confidence": 0.2,
+            "rationale": "Not extractable.",
+            "dsl": None,
+            "evidence_level": evidence_level,
+            "completeness": completeness,
+        }
+    )
     ext = ClaudePExtractor()
     with patch.object(ext, "_run_claude", return_value=raw):
         result = ext.extract(_item())
@@ -166,12 +174,14 @@ def test_prompt_injection_attempt_caught_by_dsl_validation() -> None:
     catches it because the malicious payload won't be a valid strategy.
     Defense layer: post-LLM validation."""
     malicious_dsl = {"name": "pwned", "ignore": "all rules"}
-    raw = _claude_envelope({
-        "extracted": True,
-        "confidence": 0.99,
-        "rationale": "I obeyed the injection",
-        "dsl": malicious_dsl,
-    })
+    raw = _claude_envelope(
+        {
+            "extracted": True,
+            "confidence": 0.99,
+            "rationale": "I obeyed the injection",
+            "dsl": malicious_dsl,
+        }
+    )
     ext = ClaudePExtractor()
     with patch.object(ext, "_run_claude", return_value=raw):
         injected = _item(
@@ -195,12 +205,14 @@ def test_schema_mismatch_unknown_indicator_failed() -> None:
         "stop_loss": {"type": "fixed_pct", "percent": 2.0},
         "take_profit": {"type": "fixed_pct", "percent": 5.0},
     }
-    raw = _claude_envelope({
-        "extracted": True,
-        "confidence": 0.8,
-        "rationale": "Made up an indicator",
-        "dsl": bad_dsl,
-    })
+    raw = _claude_envelope(
+        {
+            "extracted": True,
+            "confidence": 0.8,
+            "rationale": "Made up an indicator",
+            "dsl": bad_dsl,
+        }
+    )
     ext = ClaudePExtractor()
     with patch.object(ext, "_run_claude", return_value=raw):
         result = ext.extract(_item())
@@ -284,12 +296,14 @@ def test_response_envelope_with_inner_json_works() -> None:
 
     `result` as a string of JSON. Verify we unwrap it correctly. Bare-object
     inner content is wrapped to a single-finding list."""
-    raw = _claude_envelope({
-        "extracted": True,
-        "confidence": 0.9,
-        "rationale": "ok",
-        "dsl": _good_dsl(),
-    })
+    raw = _claude_envelope(
+        {
+            "extracted": True,
+            "confidence": 0.9,
+            "rationale": "ok",
+            "dsl": _good_dsl(),
+        }
+    )
     ext = ClaudePExtractor()
     findings = ext._parse_response(raw)
     assert isinstance(findings, list) and len(findings) == 1
@@ -303,9 +317,17 @@ def test_response_envelope_strips_markdown_code_fence() -> None:
     The envelope's `result` string then starts with backticks, not `[`, and
     json.loads fails. Parser must strip the fence so logs stay parseable
     across models."""
-    inner = json.dumps([
-        {"extracted": True, "confidence": 0.9, "rationale": "x", "dsl": _good_dsl(), "source": "post"},
-    ])
+    inner = json.dumps(
+        [
+            {
+                "extracted": True,
+                "confidence": 0.9,
+                "rationale": "x",
+                "dsl": _good_dsl(),
+                "source": "post",
+            },
+        ]
+    )
     fenced = f"```json\n{inner}\n```"
     raw = json.dumps({"result": fenced, "session_id": "x"})
     ext = ClaudePExtractor()
@@ -339,11 +361,31 @@ def test_callable_signature_matches_pipeline_extract_fn() -> None:
 
 def test_extract_all_returns_one_result_per_finding() -> None:
     """Top-level array of findings yields one ExtractionResult per entry."""
-    raw = _claude_envelope([
-        {"extracted": True, "confidence": 0.8, "rationale": "post body strategy", "dsl": _good_dsl(), "source": "post"},
-        {"extracted": True, "confidence": 0.7, "rationale": "commenter strategy", "dsl": _good_dsl(), "source": "comment:u/quant"},
-        {"extracted": False, "confidence": 0.2, "rationale": "second comment is just a question", "dsl": None, "source": "comment:u/asker"},
-    ])
+    raw = _claude_envelope(
+        [
+            {
+                "extracted": True,
+                "confidence": 0.8,
+                "rationale": "post body strategy",
+                "dsl": _good_dsl(),
+                "source": "post",
+            },
+            {
+                "extracted": True,
+                "confidence": 0.7,
+                "rationale": "commenter strategy",
+                "dsl": _good_dsl(),
+                "source": "comment:u/quant",
+            },
+            {
+                "extracted": False,
+                "confidence": 0.2,
+                "rationale": "second comment is just a question",
+                "dsl": None,
+                "source": "comment:u/asker",
+            },
+        ]
+    )
     ext = ClaudePExtractor()
     with patch.object(ext, "_run_claude", return_value=raw):
         batch = ext.extract_all(_item())
@@ -373,11 +415,31 @@ def test_extract_all_empty_array_yields_one_skipped_sentinel() -> None:
 
 def test_extract_back_compat_returns_best_finding() -> None:
     """Single-result entry point returns the highest-priority finding (parsed wins)."""
-    raw = _claude_envelope([
-        {"extracted": False, "confidence": 0.0, "rationale": "skip 1", "dsl": None, "source": "post"},
-        {"extracted": True, "confidence": 0.7, "rationale": "the strategy", "dsl": _good_dsl(), "source": "comment:u/winner"},
-        {"extracted": False, "confidence": 0.0, "rationale": "skip 2", "dsl": None, "source": "comment:u/x"},
-    ])
+    raw = _claude_envelope(
+        [
+            {
+                "extracted": False,
+                "confidence": 0.0,
+                "rationale": "skip 1",
+                "dsl": None,
+                "source": "post",
+            },
+            {
+                "extracted": True,
+                "confidence": 0.7,
+                "rationale": "the strategy",
+                "dsl": _good_dsl(),
+                "source": "comment:u/winner",
+            },
+            {
+                "extracted": False,
+                "confidence": 0.0,
+                "rationale": "skip 2",
+                "dsl": None,
+                "source": "comment:u/x",
+            },
+        ]
+    )
     ext = ClaudePExtractor()
     with patch.object(ext, "_run_claude", return_value=raw):
         result = ext.extract(_item())
@@ -400,13 +462,15 @@ def test_proposed_indicators_threaded_for_skipped_and_parsed() -> None:
         "source_quote": "uses an adaptive period that shrinks in fast markets",
     }
     ext = ClaudePExtractor()
-    skipped_raw = _claude_envelope({
-        "extracted": False,
-        "confidence": 0.4,
-        "rationale": "Strategy depends on a custom indicator we don't have.",
-        "dsl": None,
-        "proposed_indicators": [proposal],
-    })
+    skipped_raw = _claude_envelope(
+        {
+            "extracted": False,
+            "confidence": 0.4,
+            "rationale": "Strategy depends on a custom indicator we don't have.",
+            "dsl": None,
+            "proposed_indicators": [proposal],
+        }
+    )
     with patch.object(ext, "_run_claude", return_value=skipped_raw):
         skipped = ext.extract(_item())
     assert skipped.status == "skipped"
@@ -416,15 +480,17 @@ def test_proposed_indicators_threaded_for_skipped_and_parsed() -> None:
     assert parsed[0]["name"] == "adaptive_chop_index"
     assert parsed[0]["formula"].startswith("100 * log10")
 
-    parsed_raw = _claude_envelope({
-        "extracted": True,
-        "confidence": 0.7,
-        "rationale": "Substituted ROC for the post's bespoke 'velocity' indicator.",
-        "dsl": _good_dsl(),
-        "proposed_indicators": [
-            {"name": "velocity_index", "description": "Smoothed second derivative of price."},
-        ],
-    })
+    parsed_raw = _claude_envelope(
+        {
+            "extracted": True,
+            "confidence": 0.7,
+            "rationale": "Substituted ROC for the post's bespoke 'velocity' indicator.",
+            "dsl": _good_dsl(),
+            "proposed_indicators": [
+                {"name": "velocity_index", "description": "Smoothed second derivative of price."},
+            ],
+        }
+    )
     with patch.object(ext, "_run_claude", return_value=parsed_raw):
         result = ext.extract(_item())
     assert result.status == "parsed"
@@ -438,18 +504,20 @@ def test_proposed_indicators_drops_invalid_entries() -> None:
     field stays None rather than emitting an empty array. Defensive against
     a malformed model response, not a hard validator.
     """
-    raw = _claude_envelope({
-        "extracted": False,
-        "confidence": 0.0,
-        "rationale": "garbage proposals",
-        "dsl": None,
-        "proposed_indicators": [
-            {"description": "no name"},
-            "string instead of dict",
-            {"name": ""},
-            {"name": "   "},
-        ],
-    })
+    raw = _claude_envelope(
+        {
+            "extracted": False,
+            "confidence": 0.0,
+            "rationale": "garbage proposals",
+            "dsl": None,
+            "proposed_indicators": [
+                {"description": "no name"},
+                "string instead of dict",
+                {"name": ""},
+                {"name": "   "},
+            ],
+        }
+    )
     ext = ClaudePExtractor()
     with patch.object(ext, "_run_claude", return_value=raw):
         result = ext.extract(_item())
@@ -460,21 +528,23 @@ def test_proposed_indicators_drops_invalid_entries() -> None:
 def test_risk_management_and_notable_parameters_captured_for_both_outcomes() -> None:
     """Channels 2-4 survive even when no strategy is extractable."""
     ext = ClaudePExtractor()
-    skipped_raw = _claude_envelope({
-        "extracted": False,
-        "confidence": 0.3,
-        "rationale": "No entry rules, but sizing and settings revealed",
-        "dsl": None,
-        "risk_management": {
-            "position_sizing": "risk 1% of equity per trade",
-            "leverage": "3x isolated",
-            "source_quote": "I risk 1% at 3x",
-        },
-        "notable_parameters": [
-            {"name": "RSI period", "value": "9", "claim": "works best"},
-            {"name": "timeframe", "value": "15m", "claim": None},
-        ],
-    })
+    skipped_raw = _claude_envelope(
+        {
+            "extracted": False,
+            "confidence": 0.3,
+            "rationale": "No entry rules, but sizing and settings revealed",
+            "dsl": None,
+            "risk_management": {
+                "position_sizing": "risk 1% of equity per trade",
+                "leverage": "3x isolated",
+                "source_quote": "I risk 1% at 3x",
+            },
+            "notable_parameters": [
+                {"name": "RSI period", "value": "9", "claim": "works best"},
+                {"name": "timeframe", "value": "15m", "claim": None},
+            ],
+        }
+    )
     with patch.object(ext, "_run_claude", return_value=skipped_raw):
         skipped = ext.extract(_item())
 
@@ -488,13 +558,15 @@ def test_risk_management_and_notable_parameters_captured_for_both_outcomes() -> 
         "timeframe",
     ]
 
-    parsed_raw = _claude_envelope({
-        "extracted": True,
-        "confidence": 0.8,
-        "rationale": "ok",
-        "dsl": _good_dsl(),
-        "risk_management": {"position_sizing": "half-Kelly", "leverage": None},
-    })
+    parsed_raw = _claude_envelope(
+        {
+            "extracted": True,
+            "confidence": 0.8,
+            "rationale": "ok",
+            "dsl": _good_dsl(),
+            "risk_management": {"position_sizing": "half-Kelly", "leverage": None},
+        }
+    )
     with patch.object(ext, "_run_claude", return_value=parsed_raw):
         parsed = ext.extract(_item())
     assert parsed.status == "parsed"
@@ -504,13 +576,15 @@ def test_risk_management_and_notable_parameters_captured_for_both_outcomes() -> 
 
 def test_risk_management_all_null_or_wrong_shape_dropped() -> None:
     for rm in ({"position_sizing": None, "leverage": None}, {}, "1% risk", 42, ["x"]):
-        raw = _claude_envelope({
-            "extracted": False,
-            "confidence": 0.1,
-            "rationale": "nothing",
-            "dsl": None,
-            "risk_management": rm,
-        })
+        raw = _claude_envelope(
+            {
+                "extracted": False,
+                "confidence": 0.1,
+                "rationale": "nothing",
+                "dsl": None,
+                "risk_management": rm,
+            }
+        )
         ext = ClaudePExtractor()
         with patch.object(ext, "_run_claude", return_value=raw):
             result = ext.extract(_item())
@@ -518,18 +592,20 @@ def test_risk_management_all_null_or_wrong_shape_dropped() -> None:
 
 
 def test_notable_parameters_entries_without_name_filtered() -> None:
-    raw = _claude_envelope({
-        "extracted": False,
-        "confidence": 0.1,
-        "rationale": "nothing",
-        "dsl": None,
-        "notable_parameters": [
-            {"value": "9"},          # no name -> dropped
-            {"name": "  "},           # blank name -> dropped
-            "just a string",           # wrong shape -> dropped
-            {"name": "ATR multiple", "value": "2.45"},
-        ],
-    })
+    raw = _claude_envelope(
+        {
+            "extracted": False,
+            "confidence": 0.1,
+            "rationale": "nothing",
+            "dsl": None,
+            "notable_parameters": [
+                {"value": "9"},  # no name -> dropped
+                {"name": "  "},  # blank name -> dropped
+                "just a string",  # wrong shape -> dropped
+                {"name": "ATR multiple", "value": "2.45"},
+            ],
+        }
+    )
     ext = ClaudePExtractor()
     with patch.object(ext, "_run_claude", return_value=raw):
         result = ext.extract(_item())
@@ -568,7 +644,9 @@ def test_worked_example_in_prompt_is_valid() -> None:
 
 def _capture_argv() -> tuple[list[list[str]], Callable[..., subprocess.CompletedProcess[str]]]:
     calls: list[list[str]] = []
-    envelope = _claude_envelope({"extracted": False, "confidence": 0.0, "rationale": "x", "dsl": None})
+    envelope = _claude_envelope(
+        {"extracted": False, "confidence": 0.0, "rationale": "x", "dsl": None}
+    )
 
     def fake_run(argv: list[str], **_kw: object) -> subprocess.CompletedProcess[str]:
         calls.append(argv)
@@ -612,7 +690,11 @@ def test_argv_includes_read_tool_only_with_images() -> None:
     # No-image argv is unchanged: no Read grant, prompt is the final element.
     assert "--allowedTools" not in without_images
     assert without_images == [
-        "/usr/local/bin/claude", "-p", "--output-format", "json", without_images[-1]
+        "/usr/local/bin/claude",
+        "-p",
+        "--output-format",
+        "json",
+        without_images[-1],
     ]
 
 
@@ -640,7 +722,9 @@ def test_image_only_post_not_short_circuited_as_empty() -> None:
 def test_subprocess_nonzero_exit_treated_as_failure() -> None:
     """If claude exits non-zero, extractor surfaces it as a failed result."""
     ext = ClaudePExtractor()
-    completed = subprocess.CompletedProcess(args=["claude"], returncode=1, stdout="", stderr="auth error")
+    completed = subprocess.CompletedProcess(
+        args=["claude"], returncode=1, stdout="", stderr="auth error"
+    )
     with (
         patch("vibe_quant.research.extractor.shutil.which", return_value="/usr/local/bin/claude"),
         patch("vibe_quant.research.extractor.subprocess.run", return_value=completed),

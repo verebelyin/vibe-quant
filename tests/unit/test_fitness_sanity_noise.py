@@ -125,7 +125,9 @@ def _real_symbol(sharpe: float, ret: float, trades: int) -> dict[str, Any]:
 
 
 class TestWorstSymbolAggregateSkipsSynthetic:
-    def test_aggregate_with_early_exit_symbol_does_not_warn(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_aggregate_with_early_exit_symbol_does_not_warn(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         agg = NTBacktestFn._aggregate_symbols(
             [
                 {
@@ -144,7 +146,9 @@ class TestWorstSymbolAggregateSkipsSynthetic:
         _evaluate(agg, caplog)
         assert _sanity_warnings(caplog) == []
 
-    def test_aggregate_with_error_symbol_does_not_warn(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_aggregate_with_error_symbol_does_not_warn(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         agg = NTBacktestFn._aggregate_symbols(
             [
                 {
@@ -162,7 +166,9 @@ class TestWorstSymbolAggregateSkipsSynthetic:
         _evaluate(agg, caplog)
         assert _sanity_warnings(caplog) == []
 
-    def test_aggregate_of_real_inconsistent_symbols_still_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_aggregate_of_real_inconsistent_symbols_still_warns(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         bad = {
             "sharpe_ratio": 1.5,
             "max_drawdown": 0.2,

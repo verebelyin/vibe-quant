@@ -218,9 +218,15 @@ def test_duplicate_key_folds_number_spellings_but_not_bools(sm: StateManager) ->
         _row(name="int", dsl_sha256=sha, parameters={"max_position_pct": 1, "risk_per_trade": 0.5})
     )
     float_row = sm.insert_shadow_strategy(
-        _row(name="float", dsl_sha256=sha, parameters={"max_position_pct": 2.0, "risk_per_trade": 0.5})
+        _row(
+            name="float",
+            dsl_sha256=sha,
+            parameters={"max_position_pct": 2.0, "risk_per_trade": 0.5},
+        )
     )
-    bool_row = sm.insert_shadow_strategy(_row(name="bool", dsl_sha256=sha, parameters={"pct": True}))
+    bool_row = sm.insert_shadow_strategy(
+        _row(name="bool", dsl_sha256=sha, parameters={"pct": True})
+    )
     edge_row = sm.insert_shadow_strategy(
         _row(name="edge", dsl_sha256=sha, parameters={"max_position_pct": 1.5})
     )

@@ -159,9 +159,7 @@ def _section_c(db_copy: Path) -> dict[str, object]:
                 "index": index,
                 "passed_dsr": candidate.passed_dsr,
                 "dsr_fail_reason": candidate.dsr_fail_reason,
-                "p_value": (
-                    None if candidate.dsr_result is None else candidate.dsr_result.p_value
-                ),
+                "p_value": (None if candidate.dsr_result is None else candidate.dsr_result.p_value),
             }
             for index, candidate in enumerate(result.candidates)
         ]
@@ -183,8 +181,7 @@ def _section_d(db_copy: Path) -> dict[str, object]:
     state = StateManager(db_copy)
     try:
         rows = state.conn.execute(
-            "select id from backtest_runs"
-            " where run_mode='discovery' and timeframe='1m' order by id"
+            "select id from backtest_runs where run_mode='discovery' and timeframe='1m' order by id"
         ).fetchall()
         outcomes: dict[str, object] = {}
         started = time.monotonic()
@@ -217,9 +214,10 @@ def build(db_path: Path | None = None) -> dict[str, object]:
     sections: dict[str, object] = {"a0": digest(run_plain_mock())}
 
     single = run_single()
-    if stage_counts(single) != EXPECTED_A_STAGES or [
-        tag(chromosome) for chromosome, _ in single.top_strategies
-    ] != EXPECTED_A_TAGS:
+    if (
+        stage_counts(single) != EXPECTED_A_STAGES
+        or [tag(chromosome) for chromosome, _ in single.top_strategies] != EXPECTED_A_TAGS
+    ):
         msg = (
             "section (a) lost its gate coverage: "
             f"stages={stage_counts(single)} tags="
@@ -248,16 +246,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Golden digest of every champion gate stage.")
     parser.add_argument("--out", type=Path, default=None, help="write the digest JSON here")
     parser.add_argument(
-        "--against", nargs="?", const="", default=None,
+        "--against",
+        nargs="?",
+        const="",
+        default=None,
         help=f"compare a digest with this one (default: {GOLDEN_NAME} in the main checkout's "
-             "data/swarm/_goldens)",
+        "data/swarm/_goldens)",
     )
     parser.add_argument("--db", type=Path, default=None, help="state DB (default: main checkout's)")
     args = parser.parse_args(argv)
 
     against = (
-        None if args.against is None
-        else Path(args.against) if args.against else default_golden()
+        None if args.against is None else Path(args.against) if args.against else default_golden()
     )
     # Before build(): a missing golden is bad input, and building costs ~1.6 s.
     if against is not None and not against.is_file():

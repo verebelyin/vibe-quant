@@ -218,7 +218,7 @@ class TestScriptConsumers:
                 "tests/unit/test_alpha_new.py": "def test_tool_exists(): pass\n",
                 "tests/unit/test_dotted.py": "from scripts.agents.alpha_new import X\n",
                 "tests/unit/test_from.py": "from scripts.agents import (\n    bus,\n    alpha_new,\n)\n",
-                "tests/unit/test_syspath.py": 'sys.path.insert(0, str(AGENTS))\nimport alpha_new\n',
+                "tests/unit/test_syspath.py": "sys.path.insert(0, str(AGENTS))\nimport alpha_new\n",
                 "tests/unit/test_via_user.py": 'U = "scripts/agents/user.py"\n',
                 "tests/unit/test_namesake.py": "from scripts.agents.alpha_newer import Y\nimport alpha_newer\n",
             },
@@ -277,11 +277,14 @@ class TestFixtureReaders:
     def test_a_production_module_walking_fixtures_seeds_its_importers(self, tmp_path: Path) -> None:
         """Review rev-gate-1 B5: vibe_quant/ readers with a literal fixtures root were skipped."""
         repo = self._repo(tmp_path)
-        _mini(repo, {
-            "vibe_quant/__init__.py": "",
-            "vibe_quant/reader.py": 'def read(): return next(Path("tests/fixtures").glob("g*/a.json"))\n',
-            "tests/unit/test_reader.py": "from vibe_quant.reader import read\n",
-        })
+        _mini(
+            repo,
+            {
+                "vibe_quant/__init__.py": "",
+                "vibe_quant/reader.py": 'def read(): return next(Path("tests/fixtures").glob("g*/a.json"))\n',
+                "tests/unit/test_reader.py": "from vibe_quant.reader import read\n",
+            },
+        )
         plan = _plan(repo, ["tests/fixtures/gold/a.json"])
         assert not plan.full, plan.notes
         assert "tests/unit/test_reader.py" in plan.explicit
@@ -290,14 +293,22 @@ class TestFixtureReaders:
         """Ruling R3b: catalog.py's comment names tests/fixtures/<x>.json; an unrelated fixture
         change must not select its importers, while a change to <x> still does."""
         repo = self._repo(tmp_path)
-        _mini(repo, {
-            "vibe_quant/__init__.py": "",
-            "vibe_quant/named.py": "# fixture in tests/fixtures/exchange_info.json\n",
-            "tests/unit/test_named.py": "from vibe_quant.named import X\n",
-            "tests/fixtures/exchange_info.json": "{}",
-        })
-        assert "tests/unit/test_named.py" not in _plan(repo, ["tests/fixtures/gold/a.json"]).explicit
-        assert "tests/unit/test_named.py" in _plan(repo, ["tests/fixtures/exchange_info.json"]).explicit
+        _mini(
+            repo,
+            {
+                "vibe_quant/__init__.py": "",
+                "vibe_quant/named.py": "# fixture in tests/fixtures/exchange_info.json\n",
+                "tests/unit/test_named.py": "from vibe_quant.named import X\n",
+                "tests/fixtures/exchange_info.json": "{}",
+            },
+        )
+        assert (
+            "tests/unit/test_named.py" not in _plan(repo, ["tests/fixtures/gold/a.json"]).explicit
+        )
+        assert (
+            "tests/unit/test_named.py"
+            in _plan(repo, ["tests/fixtures/exchange_info.json"]).explicit
+        )
 
     @pytest.mark.parametrize("path", ["vibe_quant/read.sh", "scripts/agents/read.sh"])
     def test_a_non_python_production_file_naming_fixtures_runs_everything(
@@ -336,6 +347,7 @@ class TestReviewProbes:
         )
         plan = _plan(repo, ["vibe_quant/plugins/alpha.py"])
         assert "tests/unit/test_alpha_contract.py" in plan.explicit
+
 
 class TestRound2Probes:
     """Review rev-gate-speed-2 F1-F3: what the gate does not model goes to the full suite."""
@@ -444,12 +456,23 @@ class TestFullMode:
         plan = _plan(_ROOT, ["docs/orchestration/README.md"], full=True)
         assert plan.full
         policy = [str(p) for p in swarm_check.POLICY_TESTS]
-        assert [c[0] for c in plan.commands] == [
-            [*policy, "-m", "not timing"],  # fail fast: the policy files first
-            ["tests/unit", *(f"--ignore={p}" for p in policy),
-             "-n", "auto", "--dist", "worksteal", "-m", "not timing"],
-            [*plan.commands[2][0][:-2], "-m", "timing"],
-        ]
+        assert (
+            [c[0] for c in plan.commands]
+            == [
+                [*policy, "-m", "not timing"],  # fail fast: the policy files first
+                [
+                    "tests/unit",
+                    *(f"--ignore={p}" for p in policy),
+                    "-n",
+                    "auto",
+                    "--dist",
+                    "worksteal",
+                    "-m",
+                    "not timing",
+                ],
+                [*plan.commands[2][0][:-2], "-m", "timing"],
+            ]
+        )
         timing = plan.commands[2][0][:-2]  # the files, not a 12k-test collection of tests/unit
         assert timing and all(f.startswith("tests/unit/") and f.endswith(".py") for f in timing)
         assert plan.fail_fast == 1
@@ -467,7 +490,10 @@ class TestFullMode:
         )
         plan = _plan(repo, ["docs/a.md"], full=True)
         assert plan.commands[-1][0] == [
-            "tests/unit/api/test_named.py", "tests/unit/test_slowcheck.py", "-m", "timing",
+            "tests/unit/api/test_named.py",
+            "tests/unit/test_slowcheck.py",
+            "-m",
+            "timing",
         ]
         (repo / "tests/unit/test_slowcheck.py").write_text("def test_a(): ...\n")
         (repo / "tests/unit/api/test_named.py").write_text("def test_c(): ...\n")
@@ -490,32 +516,48 @@ class TestFullMode:
         ("conftest", "collects"),
         [
             # review rev-gate-1 B8: a computed mark name added at collection
-            ('def pytest_collection_modifyitems(items):\n    for i in items:\n'
-             '        i.add_marker(getattr(mark, "tim" + "ing"))\n', True),
+            (
+                "def pytest_collection_modifyitems(items):\n    for i in items:\n"
+                '        i.add_marker(getattr(mark, "tim" + "ing"))\n',
+                True,
+            ),
             ("def hook(items):\n    for i in items:\n        i.add_marker(NAME)\n", True),
             # the repo's NT preflight: a bound skip mark is not a timing mark
-            ('def pytest_collection_modifyitems(items):\n    marker = pytest.mark.skip(reason="nt")\n'
-             '    for i in items:\n        i.add_marker(marker)\n', False),
+            (
+                'def pytest_collection_modifyitems(items):\n    marker = pytest.mark.skip(reason="nt")\n'
+                "    for i in items:\n        i.add_marker(marker)\n",
+                False,
+            ),
             ("def f(i):\n    i.add_marker(pytest.mark.slow)\n", False),
         ],
     )
     def test_a_conftest_adding_marks_dynamically_keeps_the_collection(
         self, tmp_path: Path, conftest: str, collects: bool
     ) -> None:
-        repo = _mini(tmp_path, {
-            "tests/conftest.py": conftest,
-            "tests/unit/test_slowcheck.py": "@pytest.mark.timing\ndef test_a(): ...\n",
-        })
+        repo = _mini(
+            tmp_path,
+            {
+                "tests/conftest.py": conftest,
+                "tests/unit/test_slowcheck.py": "@pytest.mark.timing\ndef test_a(): ...\n",
+            },
+        )
         expected = ["tests/unit"] if collects else ["tests/unit/test_slowcheck.py"]
         assert _plan(repo, ["docs/a.md"], full=True).commands[-1][0] == [*expected, "-m", "timing"]
 
     def test_a_suffix_named_test_file_keeps_the_collection(self, tmp_path: Path) -> None:
         """B8: pytest also collects `*_test.py`, which the test_*.py scan never reads."""
-        repo = _mini(tmp_path, {
-            "tests/unit/checks_test.py": "@pytest.mark.timing\ndef test_red(): ...\n",
-            "tests/unit/test_plain.py": "def test_b(): ...\n",
-        })
-        assert _plan(repo, ["docs/a.md"], full=True).commands[-1][0] == ["tests/unit", "-m", "timing"]
+        repo = _mini(
+            tmp_path,
+            {
+                "tests/unit/checks_test.py": "@pytest.mark.timing\ndef test_red(): ...\n",
+                "tests/unit/test_plain.py": "def test_b(): ...\n",
+            },
+        )
+        assert _plan(repo, ["docs/a.md"], full=True).commands[-1][0] == [
+            "tests/unit",
+            "-m",
+            "timing",
+        ]
 
     def test_full_is_part_of_the_cache_key(self, tmp_path: Path) -> None:
         round_cfg = swarm_check.Config(worktree=tmp_path, main_root=tmp_path)

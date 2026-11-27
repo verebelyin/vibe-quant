@@ -149,7 +149,9 @@ def test_mtm_sparse_asynchronous_instruments_carry_forward_without_lookahead() -
     mtm = mark_to_market_daily_returns(1000.0, [x, y], D0 * DAY_NS, (D0 + 5) * DAY_NS)
     assert mtm is not None
     equity = [1000.0, 1010.0, 1060.0, 1030.0, 980.0]
-    expected = [equity[0] / 1000.0 - 1.0] + [b / a - 1.0 for a, b in zip(equity, equity[1:], strict=False)]
+    expected = [equity[0] / 1000.0 - 1.0] + [
+        b / a - 1.0 for a, b in zip(equity, equity[1:], strict=False)
+    ]
     assert mtm.first_day == D0
     assert list(mtm.values) == pytest.approx(expected, abs=1e-12)
     assert mtm.values[0] == 0.0  # before either instrument's first bar
@@ -182,7 +184,10 @@ def test_mtm_equity_turning_negative_on_a_later_day_fails_closed() -> None:
     """Healthy day 0 then wiped out on day 1 -> the whole series is None, not truncated."""
     ts = np.array([D0 * DAY_NS + 12 * HOUR_NS, (D0 + 1) * DAY_NS + 12 * HOUR_NS], dtype=np.int64)
     pnl = np.array([50.0, -150.0])
-    assert mark_to_market_daily_returns(100.0, [(ts, pnl, pnl)], D0 * DAY_NS, (D0 + 2) * DAY_NS) is None
+    assert (
+        mark_to_market_daily_returns(100.0, [(ts, pnl, pnl)], D0 * DAY_NS, (D0 + 2) * DAY_NS)
+        is None
+    )
 
 
 # --- runner output reset ----------------------------------------------------

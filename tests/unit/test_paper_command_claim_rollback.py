@@ -128,7 +128,11 @@ def test_a_failed_commit_rolls_the_claim_back(tmp_path: Path, claim: str) -> Non
     finally:
         queue.close()
 
-    assert _rows(db) == [("halt", "pending", None), ("kill", "pending", None), ("halt", "pending", None)]
+    assert _rows(db) == [
+        ("halt", "pending", None),
+        ("kill", "pending", None),
+        ("halt", "pending", None),
+    ]
 
 
 @pytest.mark.parametrize("claim", ["claim_pending", "claim_startup_halts"])
@@ -158,4 +162,8 @@ def test_a_failure_mid_claim_rolls_every_row_back(
     finally:
         queue.close()
 
-    assert _rows(db) == [("halt", "pending", None), ("kill", "pending", None), ("halt", "pending", None)]
+    assert _rows(db) == [
+        ("halt", "pending", None),
+        ("kill", "pending", None),
+        ("halt", "pending", None),
+    ]

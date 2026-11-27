@@ -273,7 +273,10 @@ def test_liquidated_run_counts_funding(tmp_path: Path) -> None:
         commission_list=[0.0, 0.0],
     )
     m = extract(
-        make_runner(tmp_path, "isolated", catalog=catalog), [pos_a(), survivor], CRASH, n_positions=2
+        make_runner(tmp_path, "isolated", catalog=catalog),
+        [pos_a(), survivor],
+        CRASH,
+        n_positions=2,
     )
     assert m.liquidation_count == 1
     assert m.total_trades == 2
@@ -575,8 +578,8 @@ def two_open_longs_with_btc_last_only() -> tuple[list[Pos], SimpleNamespace]:
     positions = [open_long("BTC", 420), open_long("ETH", 420, "ETHUSDT-PERP.BINANCE")]
     engine = engine_for(positions, CALM)
     btc_bars = engine.kernel.cache.bars
-    engine.kernel.cache.bars = lambda bar_type: [] if str(bar_type).startswith("ETH") else btc_bars(
-        bar_type
+    engine.kernel.cache.bars = lambda bar_type: (
+        [] if str(bar_type).startswith("ETH") else btc_bars(bar_type)
     )  # MARK coverage is valid for ETH, but there are no ETH LAST execution bars
     return positions, engine
 
@@ -624,9 +627,7 @@ DIP = flat_bars({510: (40000.0, 40000.0, 36140.0, 40000.0)})  # 08:30 day 0: mar
 
 def flat_bt(n_positions: int) -> SimpleNamespace:
     """NT stats of a run that realized nothing (PnL% 0): the return is the modeled cash."""
-    return fake_bt_result(
-        n_positions, stats_pnls={"USDT": {"PnL% (total)": 0.0}}, stats_returns={}
-    )
+    return fake_bt_result(n_positions, stats_pnls={"USDT": {"PnL% (total)": 0.0}}, stats_returns={})
 
 
 def receiving_runner(tmp_path: Path, mode: str, catalog: Path | None) -> NTScreeningRunner:
@@ -998,9 +999,7 @@ def test_notional_beyond_the_last_tier_cap_fails_closed(
     for fill in big.events:
         fill.last_qty = TIER_BREAK_QTY
     runner = make_runner(tmp_path, "cross", catalog=catalog, starting_balance=1_000_000_000)
-    wire_runner(
-        monkeypatch, runner, engine_for([big], CALM), 1, balance=1_000_000_000.0
-    )
+    wire_runner(monkeypatch, runner, engine_for([big], CALM), 1, balance=1_000_000_000.0)
     with pytest.raises(
         LiquidationIntegrityError,
         match=r"liquidation_mode='cross': TierTableExceeded: BTCUSDT: notional "

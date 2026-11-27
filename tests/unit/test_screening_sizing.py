@@ -212,7 +212,9 @@ def test_dotted_sizing_alias_rejected_everywhere(
         ("max.position.pct", "max_position_pct"),
         ("risk.per.trade", "risk_per_trade"),
     ):
-        expected = f"{norm} is a run-level sizing setting (parameters.{norm}), not a sweep parameter"
+        expected = (
+            f"{norm} is a run-level sizing setting (parameters.{norm}), not a sweep parameter"
+        )
         with pytest.raises(UnknownStrategyParamError) as excinfo:
             resolve_strategy_params({alias: 1.0}, fields)
         assert str(excinfo.value) == expected
@@ -272,9 +274,7 @@ def test_screening_logs_refused_entry_count(
         kernel=SimpleNamespace(
             get_log_guard=lambda: None,
             cache=SimpleNamespace(),
-            portfolio=SimpleNamespace(
-                analyzer=SimpleNamespace(register_statistic=lambda _s: None)
-            ),
+            portfolio=SimpleNamespace(analyzer=SimpleNamespace(register_statistic=lambda _s: None)),
         ),
         reset=lambda: None,
     )
@@ -299,9 +299,7 @@ def test_screening_logs_refused_entry_count(
             pass
 
     monkeypatch.setattr(nt_node, "BacktestNode", _Node)
-    monkeypatch.setattr(
-        "vibe_quant.data.catalog.cleanup_epoch_parquet", lambda *_a, **_k: None
-    )
+    monkeypatch.setattr("vibe_quant.data.catalog.cleanup_epoch_parquet", lambda *_a, **_k: None)
     for sizing, expected in (
         (SizingSettings(max_margin_pct=0.5), True),
         (SizingSettings(), False),
@@ -311,8 +309,13 @@ def test_screening_logs_refused_entry_count(
         spec = _engine_spec(tmp_path)
         monkeypatch.setattr(runner, "_build_engine_spec", lambda _p, _spec=spec: (_spec, []))
         monkeypatch.setattr(
-            runner, "_extract_metrics", lambda params, *_a, **_k: SimpleNamespace(
-                sharpe_ratio=0.0, total_trades=0, total_return=0.0, max_drawdown=0.0,
+            runner,
+            "_extract_metrics",
+            lambda params, *_a, **_k: SimpleNamespace(
+                sharpe_ratio=0.0,
+                total_trades=0,
+                total_return=0.0,
+                max_drawdown=0.0,
                 execution_time_seconds=0.0,
             ),
         )
@@ -326,9 +329,7 @@ def test_screening_logs_refused_entry_count(
 # ------------------------------------------------- S19: the default config is untouched
 
 
-def test_default_config_dict_unchanged(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_default_config_dict_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """S19: an all-default sizing adds no key -- the config dict is what it was before."""
     plain = _strategy_config(tmp_path, monkeypatch)
     default = _strategy_config(tmp_path, monkeypatch, sizing=SizingSettings())
@@ -341,14 +342,10 @@ def test_non_default_sizing_reaches_the_strategy_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """S19/S20: only the keys the run moved off the default are merged into the config."""
-    cfg = _strategy_config(
-        tmp_path, monkeypatch, sizing=SizingSettings(max_position_pct=1.0)
-    )
+    cfg = _strategy_config(tmp_path, monkeypatch, sizing=SizingSettings(max_position_pct=1.0))
     assert cfg["max_position_pct"] == 1.0
     assert "risk_per_trade" not in cfg
-    risk_only = _strategy_config(
-        tmp_path, monkeypatch, sizing=SizingSettings(risk_per_trade=0.01)
-    )
+    risk_only = _strategy_config(tmp_path, monkeypatch, sizing=SizingSettings(risk_per_trade=0.01))
     assert risk_only["risk_per_trade"] == 0.01
     assert "max_position_pct" not in risk_only
     both = _strategy_config(
@@ -363,11 +360,14 @@ def test_atr_sizing_reaches_the_strategy_config(
 ) -> None:
     """ATR mode puts its three fields on the config NT decodes."""
     cfg = _strategy_config(
-        tmp_path, monkeypatch,
+        tmp_path,
+        monkeypatch,
         sizing=SizingSettings(sizing_mode="atr", sizing_atr_period=30, risk_per_trade=0.005),
     )
     assert (cfg["sizing_mode"], cfg["sizing_atr_period"], cfg["sizing_atr_multiplier"]) == (
-        "atr", 30, 2.0
+        "atr",
+        30,
+        2.0,
     )
     assert cfg["risk_per_trade"] == 0.005
     plain = _strategy_config(tmp_path, monkeypatch)
@@ -408,13 +408,11 @@ def test_pipeline_and_overfitting_runners_get_sizing(
         parameters={"max_position_pct": 1.0, "risk_per_trade": 0.01},
     )
     db, run_id = _seed(tmp_path, "overfit_sizing", parameters={"max_position_pct": 2.0})
-    NTWFARunner(run_id=run_id, db_path=db).backtest(
-        "x", date(2024, 2, 1), date(2024, 3, 1), {}
-    )
+    NTWFARunner(run_id=run_id, db_path=db).backtest("x", date(2024, 2, 1), date(2024, 3, 1), {})
     monkeypatch.setattr(NTPurgedKFoldRunner, "_load_bar_timestamps", lambda _self: None)
-    NTPurgedKFoldRunner(
-        run_id=run_id, db_path=db, catalog_path=tmp_path / "catalog"
-    )._backtest("2024-02-01", "2024-03-01")  # noqa: SLF001
+    NTPurgedKFoldRunner(run_id=run_id, db_path=db, catalog_path=tmp_path / "catalog")._backtest(
+        "2024-02-01", "2024-03-01"
+    )  # noqa: SLF001
 
     assert [kwargs["launch"].sizing for kwargs in captured] == [
         SizingSettings(max_position_pct=1.0, risk_per_trade=0.01),
@@ -433,8 +431,9 @@ def test_runner_rejects_a_cap_above_its_leverage(tmp_path: Path) -> None:
     assert str(excinfo.value) == "max_position_pct (20.0) must not exceed leverage (3.0)"
     # equality is allowed: a cap exactly at the leverage is fully marginable (S13)
     assert (
-        _runner(tmp_path, leverage=3, sizing=SizingSettings(max_position_pct=3))
-        ._sizing.max_position_pct
+        _runner(
+            tmp_path, leverage=3, sizing=SizingSettings(max_position_pct=3)
+        )._sizing.max_position_pct
         == 3.0
     )
 
@@ -444,12 +443,18 @@ def test_pipeline_rejects_stored_garbage_before_any_engine(tmp_path: Path) -> No
     dsl = validate_strategy_dict(_dsl_dict())
     with pytest.raises(SizingConfigError) as excinfo:
         create_screening_pipeline(
-            dsl, symbols=["BTCUSDT"], catalog_path=str(tmp_path), parameters={"max_position_pct": -1}
+            dsl,
+            symbols=["BTCUSDT"],
+            catalog_path=str(tmp_path),
+            parameters={"max_position_pct": -1},
         )
     assert str(excinfo.value) == "max_position_pct must be a number in (0, 125], got -1"
     with pytest.raises(SizingConfigError) as excinfo:
         create_screening_pipeline(
-            dsl, symbols=["BTCUSDT"], catalog_path=str(tmp_path), parameters={"max_position_pct": 20}
+            dsl,
+            symbols=["BTCUSDT"],
+            catalog_path=str(tmp_path),
+            parameters={"max_position_pct": 20},
         )
     assert str(excinfo.value) == "max_position_pct (20.0) must not exceed leverage (10.0)"
 
@@ -467,9 +472,7 @@ def test_factory_rejects_a_cap_above_leverage_even_with_mock(tmp_path: Path) -> 
     assert str(excinfo.value) == "max_position_pct (20.0) must not exceed leverage (10.0)"
 
 
-def test_stored_garbage_fails_run(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_stored_garbage_fails_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """S15: a stored cap of -1 fails the RUN through ``__main__`` with the class prefix."""
     from vibe_quant.screening.__main__ import cmd_run
 
@@ -544,9 +547,7 @@ def test_main_prints_the_screening_sizing(
         state.close()
 
     assert cmd_run(argparse.Namespace(run_id=run_id, db=str(db))) == 0
-    assert (
-        "Screening sizing: max_position_pct=1 risk_per_trade=0.02" in capsys.readouterr().out
-    )
+    assert "Screening sizing: max_position_pct=1 risk_per_trade=0.02" in capsys.readouterr().out
 
 
 def test_overfitting_runner_constructor_raises(

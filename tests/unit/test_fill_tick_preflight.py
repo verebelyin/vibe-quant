@@ -84,7 +84,9 @@ def _metrics() -> dict[str, float | int]:
 
 class _Fn(NTBacktestFn):
     def __init__(self, start: str, end: str, **kw: Any) -> None:
-        super().__init__(kw.pop("symbols", ["BTCUSDT"]), kw.pop("timeframe", "4h"), start, end, **kw)
+        super().__init__(
+            kw.pop("symbols", ["BTCUSDT"]), kw.pop("timeframe", "4h"), start, end, **kw
+        )
         self.calls = 0
 
     def __call__(self, chromosome: Any) -> dict[str, float | int]:
@@ -94,11 +96,21 @@ class _Fn(NTBacktestFn):
 
 def _cfg(**over: Any) -> DiscoveryConfig:
     d: dict[str, Any] = {
-        "population_size": 4, "max_generations": 2, "elite_count": 1, "tournament_size": 2,
-        "convergence_generations": 1, "top_k": 1, "min_trades": 1, "max_workers": 1,
-        "symbols": ["BTCUSDT"], "timeframe": "4h",
-        "start_date": _TRAIN[0], "end_date": _TRAIN[1], "train_test_split": 0.5,
-        "holdout_start_date": _HOLDOUT[0], "holdout_end_date": _HOLDOUT[1],
+        "population_size": 4,
+        "max_generations": 2,
+        "elite_count": 1,
+        "tournament_size": 2,
+        "convergence_generations": 1,
+        "top_k": 1,
+        "min_trades": 1,
+        "max_workers": 1,
+        "symbols": ["BTCUSDT"],
+        "timeframe": "4h",
+        "start_date": _TRAIN[0],
+        "end_date": _TRAIN[1],
+        "train_test_split": 0.5,
+        "holdout_start_date": _HOLDOUT[0],
+        "holdout_end_date": _HOLDOUT[1],
         "require_dsr": False,
     }
     d.update(over)
@@ -114,9 +126,7 @@ def _no_aux(monkeypatch: pytest.MonkeyPatch) -> None:
 def bars_ok(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
     """Bar checks pass; returns the windows they were asked about."""
     seen: list[tuple[str, str]] = []
-    monkeypatch.setattr(
-        nt_runner, "require_bars_in_window", lambda c, b, s, e: seen.append((s, e))
-    )
+    monkeypatch.setattr(nt_runner, "require_bars_in_window", lambda c, b, s, e: seen.append((s, e)))
     return seen
 
 
@@ -129,8 +139,12 @@ def test_discovery_preflight_resolves_once_over_union_of_all_windows(
     fn = _Fn(*_TRAIN, windows=windows, symbols=["BTCUSDT", "ETHUSDT"])
     holdout_fn = _Fn(*_HOLDOUT, symbols=["BTCUSDT", "ETHUSDT"])
     pipe = DiscoveryPipeline(
-        _cfg(symbols=["BTCUSDT", "ETHUSDT"], cross_window_months=[1], wfa_oos_step_days=30,
-             eval_windows=3),
+        _cfg(
+            symbols=["BTCUSDT", "ETHUSDT"],
+            cross_window_months=[1],
+            wfa_oos_step_days=30,
+            eval_windows=3,
+        ),
         fn,
         holdout_backtest_fn=holdout_fn,
         backtest_fn_factory=lambda s, e: _Fn(s, e, symbols=["BTCUSDT", "ETHUSDT"]),
@@ -172,7 +186,9 @@ def test_set_reaches_every_fn_and_factory_fn(
 ) -> None:
     fn, holdout_fn = _Fn(*_TRAIN), _Fn(*_HOLDOUT)
     pipe = DiscoveryPipeline(
-        _cfg(cross_window_months=[1]), fn, holdout_backtest_fn=holdout_fn,
+        _cfg(cross_window_months=[1]),
+        fn,
+        holdout_backtest_fn=holdout_fn,
         backtest_fn_factory=lambda s, e: _Fn(s, e),
     )
     pipe.run()
@@ -216,6 +232,7 @@ def test_fn_pickles_with_set_and_worker_never_resolves(
 
 def test_runner_with_supplied_set_does_not_resolve(monkeypatch: pytest.MonkeyPatch) -> None:
     """Real runner: a supplied matching set short-circuits the in-process resolve."""
+
     def _boom(*a: Any, **k: Any) -> None:
         raise AssertionError("resolved in worker")
 
@@ -227,11 +244,11 @@ def test_runner_with_supplied_set_does_not_resolve(monkeypatch: pytest.MonkeyPat
     assert got.paths == {"BTCUSDT": "/ticks/4h/BTCUSDT"}
 
 
-def test_1m_strategy_resolves_nothing(
-    resolver: _Resolver, bars_ok: list[tuple[str, str]]
-) -> None:
+def test_1m_strategy_resolves_nothing(resolver: _Resolver, bars_ok: list[tuple[str, str]]) -> None:
     fn = _Fn(*_TRAIN, timeframe="1m")
-    pipe = DiscoveryPipeline(_cfg(timeframe="1m"), fn, holdout_backtest_fn=_Fn(*_HOLDOUT, timeframe="1m"))
+    pipe = DiscoveryPipeline(
+        _cfg(timeframe="1m"), fn, holdout_backtest_fn=_Fn(*_HOLDOUT, timeframe="1m")
+    )
     pipe.run()
     assert resolver.calls == []
     assert fn.fill_ticks is None
@@ -242,7 +259,10 @@ def test_loaded_1h_indicator_tf_picks_1h_ticks(resolver: _Resolver) -> None:
 
     raw = yaml.safe_load((_TEMPLATES / "donchian_breakout.yaml").read_text())
     raw["additional_timeframes"] = ["1h"]
-    raw["indicators"] = {**raw["indicators"], "ema_1h": {"type": "EMA", "period": 20, "timeframe": "1h"}}
+    raw["indicators"] = {
+        **raw["indicators"],
+        "ema_1h": {"type": "EMA", "period": 20, "timeframe": "1h"},
+    }
     dsl_dict = validate_strategy_dict(raw).model_dump()
     assert dsl_dict["timeframe"] == "4h"
     ticks = resolve_parent_fill_ticks(dsl_dict, ["BTCUSDT"], *_TRAIN)
@@ -353,9 +373,13 @@ def test_screening_sweep_missing_data_aborts_at_creation(monkeypatch: pytest.Mon
     monkeypatch.setattr(
         "vibe_quant.data.fill_ticks.resolve_fill_ticks", _Resolver(MissingBarDataError("no 1m"))
     )
-    dsl = validate_strategy_dict(yaml.safe_load((_TEMPLATES / "donchian_breakout.yaml").read_text()))
+    dsl = validate_strategy_dict(
+        yaml.safe_load((_TEMPLATES / "donchian_breakout.yaml").read_text())
+    )
     with pytest.raises(MissingBarDataError):
-        create_screening_pipeline(dsl, symbols=["BTCUSDT"], start_date=_TRAIN[0], end_date=_TRAIN[1])
+        create_screening_pipeline(
+            dsl, symbols=["BTCUSDT"], start_date=_TRAIN[0], end_date=_TRAIN[1]
+        )
 
 
 def _db(tmp_path: Path, dsl: dict[str, Any]) -> Path:

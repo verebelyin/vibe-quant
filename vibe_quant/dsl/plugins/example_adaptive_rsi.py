@@ -65,9 +65,7 @@ def _efficiency_ratio(close: np.ndarray, period: int) -> np.ndarray:
     return er
 
 
-def compute_adaptive_rsi(
-    df: pd.DataFrame, params: dict[str, object]
-) -> pd.Series:
+def compute_adaptive_rsi(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
     """Compute Adaptive RSI from OHLCV DataFrame.
 
     Args:

@@ -176,8 +176,11 @@ def test_symbol_mtm_stats_helper_shape_and_fail_closed() -> None:
     assert out["B"] is None and out["C"] is None  # missing/empty -> None, floor fails closed
     sr, skew, kurt = daily_sharpe_inputs(a.values)
     assert out["A"] == {
-        "sharpe": sr, "skewness": skew, "kurtosis": kurt,
-        "observations": len(a), "mean": sum(a.values) / len(a),
+        "sharpe": sr,
+        "skewness": skew,
+        "kurtosis": kurt,
+        "observations": len(a),
+        "mean": sum(a.values) / len(a),
     }
     assert symbol_mtm_stats(None) is None  # portfolio mode: no per-symbol floor
 
@@ -275,7 +278,9 @@ def test_worst_mode_symbol_floor_rejects_weak_mtm_symbol(n_symbols: int) -> None
 def test_missing_symbol_series_fails_closed() -> None:
     stats: dict[str, dict[str, float] | None] = {"A": _sym_stats(2.0), "B": None}
     _, record, reasons = apply_discovery_dsr_returns(_series(2.5).values, 79, symbol_daily=stats)
-    assert record["missing"] is True and reasons == ["DSR input missing: no daily return series for B"]
+    assert record["missing"] is True and reasons == [
+        "DSR input missing: no daily return series for B"
+    ]
 
 
 def test_single_symbol_has_no_extra_floor() -> None:
@@ -293,7 +298,9 @@ def test_single_symbol_has_no_extra_floor() -> None:
 def test_dsr_clamps_skew_and_kurtosis() -> None:
     rng = np.random.default_rng(3)
     # Positively skewed series (rare big up days): its raw moments would LOWER the bar.
-    x = np.where(rng.random(1264) < 0.05, rng.exponential(0.05, 1264), rng.normal(-0.0005, 0.004, 1264))
+    x = np.where(
+        rng.random(1264) < 0.05, rng.exponential(0.05, 1264), rng.normal(-0.0005, 0.004, 1264)
+    )
     sr, skew, kurt = daily_sharpe_inputs(x)
     assert skew > 1.0
     result, record, _ = apply_discovery_dsr_returns(list(x), 79)
@@ -481,10 +488,15 @@ def test_series_kept_only_for_gate_passing_genomes() -> None:
              "symbol_results": {"A": dict(ok_sym), "B": dict(ok_sym)}}  # fmt: skip
     kept = _evaluate_single(_chrom(), _const(worst), min_trades=50)
     assert kept.mtm_daily_returns is d and kept.symbol_mtm_daily == {"A": d, "B": d}
-    one_loser = {**worst, "symbol_results": {"A": dict(ok_sym), "B": {**ok_sym, "total_return": -0.1}}}
+    one_loser = {
+        **worst,
+        "symbol_results": {"A": dict(ok_sym), "B": {**ok_sym, "total_return": -0.1}},
+    }
     dropped = _evaluate_single(_chrom(), _const(one_loser), min_trades=50)
     assert dropped.adjusted_score > 0  # still ranks (soft score) ...
-    assert dropped.mtm_daily_returns is None and dropped.symbol_mtm_daily is None  # ... keeps no series
+    assert (
+        dropped.mtm_daily_returns is None and dropped.symbol_mtm_daily is None
+    )  # ... keeps no series
 
 
 # ---------------------------------------------------------------------------
@@ -542,9 +554,11 @@ def test_dsr_gate_uses_effective_n() -> None:
     rec = pipe.gates.dsr_records[chrom.uid]
     assert rec["trials"] == 948 and rec["p_value"] == expected.p_value
     assert [c.uid for c, _ in kept] == [chrom.uid]
-    n_eff_p = DeflatedSharpeRatio().calculate(
-        sr, int(neff_eig), 1264, min(skew, 0.0), max(kurt, 3.0)
-    ).p_value
+    n_eff_p = (
+        DeflatedSharpeRatio()
+        .calculate(sr, int(neff_eig), 1264, min(skew, 0.0), max(kurt, 3.0))
+        .p_value
+    )
     assert rec["p_value"] != n_eff_p  # N_eff is recorded, never used
 
     # A candidate the gate rejects prints the SAME effective N in its reason.
@@ -580,13 +594,25 @@ def test_prior_trials_sum_earlier_real_discovery_runs() -> None:
     conn.execute("CREATE TABLE backtest_results (run_id INTEGER, notes TEXT)")
     runs = [
         # new-rule run: charged at its recorded run_n_eff (79)
-        (1, "discovery", "4h", "2024-01-01", "2024-06-01",
-         {"evaluated": 79, "dsr_trials": {"n_rule": N_RULE_EFFECTIVE, "run_n_eff": 79}}),
+        (
+            1,
+            "discovery",
+            "4h",
+            "2024-01-01",
+            "2024-06-01",
+            {"evaluated": 79, "dsr_trials": {"n_rule": N_RULE_EFFECTIVE, "run_n_eff": 79}},
+        ),
         (2, "discovery", "4h", "2024-01-01", "2024-06-01", {"evaluated": 500, "mock": True}),
         (3, "screening", "4h", "2024-01-01", "2024-06-01", {"evaluated": 40}),
         # new-rule run: charged at run_n_eff 21 though evaluated is 40
-        (4, "discovery", "4h", "2024-02-01", "2024-04-01",
-         {"evaluated": 40, "dsr_trials": {"n_rule": N_RULE_EFFECTIVE, "run_n_eff": 21}}),
+        (
+            4,
+            "discovery",
+            "4h",
+            "2024-02-01",
+            "2024-04-01",
+            {"evaluated": 40, "dsr_trials": {"n_rule": N_RULE_EFFECTIVE, "run_n_eff": 21}},
+        ),
         # this run and later: excluded by b.id < run_id
         (5, "discovery", "4h", "2024-01-01", "2024-06-01", {"evaluated": 1000}),
     ]
@@ -668,7 +694,9 @@ def test_gate_pool_all_pooled_recheck_never_promotes_a_capped_genome(
     pooled = [r for r in merged.guardrail_rejections if r["stage"] == "pooled_guardrails"]
     assert [r["uid"] for r in pooled] == [c.uid for c in picks]
     assert all(
-        str(x).startswith("Multi-seed pooled N=900: DSR") for r in pooled for x in r["reasons"]  # type: ignore[attr-defined]
+        str(x).startswith("Multi-seed pooled N=900: DSR")
+        for r in pooled
+        for x in r["reasons"]  # type: ignore[attr-defined]
     )
     _rows, counts = record.rejection_ledger(merged.guardrail_rejections, "all")
     assert counts == {

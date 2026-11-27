@@ -262,7 +262,9 @@ def test_queued_entry_without_later_datum_is_never_sent() -> None:
 
 
 def test_mode_off_sends_immediately_and_subscribes_no_ticks() -> None:
-    data: list[Any] = _strategy_bars(_BTC, [100.0, 100.0, 100.0]) + [_tick(_BTC, _T_SIGNAL + _S, 105.0)]
+    data: list[Any] = _strategy_bars(_BTC, [100.0, 100.0, 100.0]) + [
+        _tick(_BTC, _T_SIGNAL + _S, 105.0)
+    ]
     engine, strats = _run(mode="", data=data)
     entries = [o for o in engine.cache.orders() if not o.is_reduce_only]
     assert [o.ts_init for o in entries] == [_T_SIGNAL]  # submitted on the signal bar
@@ -391,7 +393,13 @@ def _method_of(lines: list[str], idx: int) -> str:
 
 @pytest.mark.parametrize(
     "source",
-    ["generated", "generated_reverse", "generated_signal_level", "generated_reverse_signal_level", "templates"],
+    [
+        "generated",
+        "generated_reverse",
+        "generated_signal_level",
+        "generated_reverse_signal_level",
+        "templates",
+    ],
 )
 def test_venue_calls_only_through_outbox_helper(source: str) -> None:
     if source.startswith("generated"):
@@ -456,7 +464,10 @@ def test_venue_calls_only_through_outbox_helper(source: str) -> None:
     # outbox helper (or compared against queued commands), never called inline.
     for i, ln in enumerate(lines):
         if "self._place_entry_intent" in ln:
-            assert "self._send_command(self._place_entry_intent" in ln or "== self._place_entry_intent" in ln, (
+            assert (
+                "self._send_command(self._place_entry_intent" in ln
+                or "== self._place_entry_intent" in ln
+            ), (
                 _method_of(lines, i),
                 ln,
             )
@@ -464,7 +475,9 @@ def test_venue_calls_only_through_outbox_helper(source: str) -> None:
     assert sends >= 11, sends  # 7 submit + 2 cancel + 2 cancel_all call sites
     if "reverse" in source and source != "templates":
         # the one inline reversal entry is reached from on_event(PositionClosed) only
-        callers = {_method_of(lines, i) for i, ln in enumerate(lines) if "self._reverse_on_closed(" in ln}
+        callers = {
+            _method_of(lines, i) for i, ln in enumerate(lines) if "self._reverse_on_closed(" in ln
+        }
         assert callers == {"on_event"}, callers
 
 
@@ -505,14 +518,38 @@ def test_bar_mode_feeds_every_1m_bar_to_pandas_indicator() -> None:
 @pytest.mark.parametrize(
     ("overrides", "match"),
     [
-        ({"command_release": "bar", "command_release_bar_type": f"{_ETH}-1-MINUTE-LAST-EXTERNAL"}, "is not for"),
-        ({"command_release": "bar", "command_release_bar_type": ""}, "needs command_release_bar_type"),
+        (
+            {
+                "command_release": "bar",
+                "command_release_bar_type": f"{_ETH}-1-MINUTE-LAST-EXTERNAL",
+            },
+            "is not for",
+        ),
+        (
+            {"command_release": "bar", "command_release_bar_type": ""},
+            "needs command_release_bar_type",
+        ),
         ({"command_release": "trade_ticks"}, "Unknown command_release"),
-        ({"command_release": "trade_tick", "execution_delay_probability": 1.0}, "execution_delay_probability"),
-        ({"command_release": "bar", "command_release_bar_type": f"{_BTC}-1-MINUTE-LAST-EXTERNAL",
-          "execution_delay_probability": 0.3}, "execution_delay_probability"),
+        (
+            {"command_release": "trade_tick", "execution_delay_probability": 1.0},
+            "execution_delay_probability",
+        ),
+        (
+            {
+                "command_release": "bar",
+                "command_release_bar_type": f"{_BTC}-1-MINUTE-LAST-EXTERNAL",
+                "execution_delay_probability": 0.3,
+            },
+            "execution_delay_probability",
+        ),
     ],
-    ids=["wrong_instrument_bar_type", "empty_bar_type", "unknown_mode", "delay_with_tick", "delay_with_bar"],
+    ids=[
+        "wrong_instrument_bar_type",
+        "empty_bar_type",
+        "unknown_mode",
+        "delay_with_tick",
+        "delay_with_bar",
+    ],
 )
 def test_misconfigured_outbox_raises_at_start(overrides: dict[str, Any], match: str) -> None:
     strategy_cls, config_cls = _compiled(_dsl("outbox_guard"))
@@ -528,8 +565,13 @@ def test_misconfigured_outbox_raises_at_start(overrides: dict[str, Any], match: 
 def test_valid_outbox_config_starts() -> None:
     strategy_cls, config_cls = _compiled(_dsl("outbox_guard_ok"))
     engine = _engine()
-    strat = strategy_cls(config_cls(instrument_id=_BTC, command_release="bar",
-                                    command_release_bar_type=f"{_BTC}-1-MINUTE-LAST-EXTERNAL"))
+    strat = strategy_cls(
+        config_cls(
+            instrument_id=_BTC,
+            command_release="bar",
+            command_release_bar_type=f"{_BTC}-1-MINUTE-LAST-EXTERNAL",
+        )
+    )
     engine.add_strategy(strat)
     strat.on_start()
     assert str(strat._command_release_bar_type) == f"{_BTC}-1-MINUTE-LAST-EXTERNAL"

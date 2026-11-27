@@ -35,14 +35,22 @@ def _fills(positions: list[Any]) -> list[tuple[Any, ...]]:
     for pos in sorted(positions, key=lambda p: int(p.ts_opened)):
         for f in pos.events:
             out.append(
-                (int(f.ts_event), f.order_side.name, f.order_type.name, str(f.last_qty),
-                 str(f.last_px), str(f.commission))
+                (
+                    int(f.ts_event),
+                    f.order_side.name,
+                    f.order_type.name,
+                    str(f.last_qty),
+                    str(f.last_px),
+                    str(f.commission),
+                )
             )
     return out
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--symbol", default="BTCUSDT")
     ap.add_argument("--start", required=True)
     ap.add_argument("--end", required=True)
@@ -52,9 +60,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--liq", choices=("off", "isolated", "cross"), default="off")
     ap.add_argument("--leverage", type=int, default=10)
     ap.add_argument("--only", type=int, default=-1, help="run only genome index N")
-    ap.add_argument(
-        "--strict", action="store_true", help="exit 1 when any genome is unsupported"
-    )
+    ap.add_argument("--strict", action="store_true", help="exit 1 when any genome is unsupported")
     args = ap.parse_args(argv)
 
     tmp = Path(tempfile.mkdtemp(prefix="fast-parity-", dir="/tmp"))
@@ -75,7 +81,11 @@ def main(argv: list[str] | None = None) -> int:
     allowed = (
         {s.strip() for s in args.pool.split(",") if s.strip()}
         if args.pool
-        else {n for n in operators.INDICATOR_POOL if not getattr(indicator_registry.get(n), "needs_context", False)}
+        else {
+            n
+            for n in operators.INDICATOR_POOL
+            if not getattr(indicator_registry.get(n), "needs_context", False)
+        }
     )
     for name in [k for k in operators.INDICATOR_POOL if k not in allowed]:
         del operators.INDICATOR_POOL[name]
@@ -108,7 +118,9 @@ def main(argv: list[str] | None = None) -> int:
     for idx, ch in enumerate(genomes):
         if args.only >= 0 and idx != args.only:
             continue
-        label = f"#{idx} {ch.direction.name} " + "+".join(sorted({g.indicator_type for g in ch.entry_genes + ch.exit_genes}))
+        label = f"#{idx} {ch.direction.name} " + "+".join(
+            sorted({g.indicator_type for g in ch.entry_genes + ch.exit_genes})
+        )
         t = time.perf_counter()
         try:
             fast = fast_fn._run_single(ch, args.start, args.end)
@@ -124,13 +136,17 @@ def main(argv: list[str] | None = None) -> int:
         t_nt += time.perf_counter() - t
         nt_fills = _fills(captured.get("positions", []))
         diffs = [m for m in METRICS if nt[m] != fast[m]]
-        first = next((i for i, (a, b) in enumerate(zip(nt_fills, fast_fills, strict=False)) if a != b), None)
+        first = next(
+            (i for i, (a, b) in enumerate(zip(nt_fills, fast_fills, strict=False)) if a != b), None
+        )
         if not diffs and nt_fills == fast_fills:
             ok += 1
             print(f"{label}: MATCH trades={nt['total_trades']} return={nt['total_return']}")
             continue
         bad += 1
-        print(f"{label}: MISMATCH fills nt={len(nt_fills)} fast={len(fast_fills)} first_diff={first}")
+        print(
+            f"{label}: MISMATCH fills nt={len(nt_fills)} fast={len(fast_fills)} first_diff={first}"
+        )
         for m in diffs:
             print(f"    {m}: nt={nt[m]!r} fast={fast[m]!r}")
         if first is not None:
@@ -139,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"    fill {j}: fa={fast_fills[j] if j < len(fast_fills) else None}")
         elif len(nt_fills) != len(fast_fills):
             j = min(len(nt_fills), len(fast_fills))
-            print(f"    extra: nt={nt_fills[j:j + 2]} fast={fast_fills[j:j + 2]}")
+            print(f"    extra: nt={nt_fills[j : j + 2]} fast={fast_fills[j : j + 2]}")
     print(
         f"SUMMARY match={ok} mismatch={bad} unsupported={unsupported} "
         f"nt_s={t_nt:.1f} fast_s={t_fast:.1f}"

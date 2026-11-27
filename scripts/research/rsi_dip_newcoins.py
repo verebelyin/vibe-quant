@@ -49,11 +49,38 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-COINS = ("XRPUSDT", "DOGEUSDT", "1000PEPEUSDT", "RIVERUSDT", "ADAUSDT", "LABUSDT", "WLDUSDT",
-         "TAOUSDT", "ENAUSDT", "LINKUSDT", "RAVEUSDT", "AVAXUSDT", "BCHUSDT",
-         "UNIUSDT", "SIRENUSDT", "PUMPUSDT", "TRUMPUSDT", "FILUSDT", "PIPPINUSDT",
-         "AAVEUSDT", "LTCUSDT", "ASTERUSDT", "DASHUSDT", "XLMUSDT", "DOTUSDT",
-         "AKEUSDT", "BEATUSDT", "ONDOUSDT", "BANKUSDT", "ARBUSDT")
+COINS = (
+    "XRPUSDT",
+    "DOGEUSDT",
+    "1000PEPEUSDT",
+    "RIVERUSDT",
+    "ADAUSDT",
+    "LABUSDT",
+    "WLDUSDT",
+    "TAOUSDT",
+    "ENAUSDT",
+    "LINKUSDT",
+    "RAVEUSDT",
+    "AVAXUSDT",
+    "BCHUSDT",
+    "UNIUSDT",
+    "SIRENUSDT",
+    "PUMPUSDT",
+    "TRUMPUSDT",
+    "FILUSDT",
+    "PIPPINUSDT",
+    "AAVEUSDT",
+    "LTCUSDT",
+    "ASTERUSDT",
+    "DASHUSDT",
+    "XLMUSDT",
+    "DOTUSDT",
+    "AKEUSDT",
+    "BEATUSDT",
+    "ONDOUSDT",
+    "BANKUSDT",
+    "ARBUSDT",
+)
 NEW_START = int(pd.Timestamp("2026-01-01").value // 1_000_000)
 NEW_END = int(pd.Timestamp("2026-10-01").value // 1_000_000)
 EXITS = (50, 30, 40, 60, 70)
@@ -103,8 +130,14 @@ def rsi(close: np.ndarray, n: int = 14) -> np.ndarray:
 def to_1h(df: pd.DataFrame) -> pd.DataFrame:
     h = df.index // 3_600_000 * 3_600_000
     g = df.groupby(h)
-    out = pd.DataFrame({"open": g["open"].first(), "low": g["low"].min(),
-                        "close": g["close"].last(), "n": g.size()})
+    out = pd.DataFrame(
+        {
+            "open": g["open"].first(),
+            "low": g["low"].min(),
+            "close": g["close"].last(),
+            "n": g.size(),
+        }
+    )
     return out[out["n"] == 4].drop(columns="n")
 
 
@@ -143,11 +176,16 @@ def summarize(per: dict[str, list[tuple[int, float]]], lo_t: int, hi_t: int) -> 
             accts[sym] = float(np.prod(1 + m) - 1)
             allm.append(m)
     a = np.concatenate(allm) if allm else np.array([])
-    return {"n": len(a), "mean": float(a.mean()) if len(a) else None,
-            "win": float((a > 0).mean()) if len(a) else None, "liqs": int((a == -1).sum()),
-            "coins": len(accts), "coins_up": sum(v > 0 for v in accts.values()),
-            "split_account": float(np.mean(list(accts.values()))) if accts else None,
-            "accounts": accts}
+    return {
+        "n": len(a),
+        "mean": float(a.mean()) if len(a) else None,
+        "win": float((a > 0).mean()) if len(a) else None,
+        "liqs": int((a == -1).sum()),
+        "coins": len(accts),
+        "coins_up": sum(v > 0 for v in accts.values()),
+        "split_account": float(np.mean(list(accts.values()))) if accts else None,
+        "accounts": accts,
+    }
 
 
 def cluster_p(per: dict[str, list[tuple[int, float]]]) -> float:
@@ -186,10 +224,12 @@ def main(raw: str, out_path: str) -> None:
             cell: dict[str, object] = {"old": old, "new": new, "p_cluster": cluster_p(per)}
             if tf == "15m" and x == 50:
                 cell["pass"] = bool(
-                    (old["mean"] or 0) > 0 and (new["mean"] or 0) > 0  # type: ignore[operator]
+                    (old["mean"] or 0) > 0
+                    and (new["mean"] or 0) > 0  # type: ignore[operator]
                     and cell["p_cluster"] < 0.05  # type: ignore[operator]
                     and new["coins_up"] >= 0.6 * new["coins"]  # type: ignore[operator]
-                    and (new["split_account"] or 0) > 0)  # type: ignore[operator]
+                    and (new["split_account"] or 0) > 0
+                )  # type: ignore[operator]
             res[f"{tf}_exit{x}"] = cell
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     Path(out_path).write_text(json.dumps(res, indent=1))

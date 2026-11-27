@@ -63,15 +63,25 @@ SYMBOL = "BTCUSDT"
 
 #: Rung -> (population, generations). The ascending budget ladder.
 LADDER: dict[str, tuple[int, int]] = {
-    "B1": (16, 6), "B2": (24, 10), "B3": (36, 14), "B4": (50, 20),
+    "B1": (16, 6),
+    "B2": (24, 10),
+    "B3": (36, 14),
+    "B4": (50, 20),
 }
 LADDER_KEYS: tuple[str, ...] = ("B1", "B2", "B3", "B4")
 SEEDS: tuple[int, ...] = (1, 2, 3)
 
 #: Variant -> planted TRAIN-Sharpe target (0.0 = the s0 control, no plant).
 VARIANTS: dict[str, float] = {
-    "4h-s0": 0.0, "4h-s2": 2.0, "4h-s3": 3.0, "4h-s4": 4.0, "4h-s5": 5.0,
-    "1d-s0": 0.0, "1d-s3": 3.0, "1d-s4": 4.0, "1d-s5": 5.0,
+    "4h-s0": 0.0,
+    "4h-s2": 2.0,
+    "4h-s3": 3.0,
+    "4h-s4": 4.0,
+    "4h-s5": 5.0,
+    "1d-s0": 0.0,
+    "1d-s3": 3.0,
+    "1d-s4": 4.0,
+    "1d-s5": 5.0,
 }
 
 ACCEPT_TOL = 0.1  # R1: TRAIN S within [0.9S, 1.1S]
@@ -156,10 +166,14 @@ def rule_chromosome(rule: dict[str, Any]) -> StrategyChromosome:
     period = float(rule["period"])
     return StrategyChromosome(
         entry_genes=[
-            StrategyGene("RSI", {"period": period}, ConditionType.CROSSES_BELOW, float(rule["xb"]), None)
+            StrategyGene(
+                "RSI", {"period": period}, ConditionType.CROSSES_BELOW, float(rule["xb"]), None
+            )
         ],
         exit_genes=[
-            StrategyGene("RSI", {"period": period}, ConditionType.CROSSES_ABOVE, float(rule["xa"]), None)
+            StrategyGene(
+                "RSI", {"period": period}, ConditionType.CROSSES_ABOVE, float(rule["xa"]), None
+            )
         ],
         stop_loss_pct=float(rule["sl"]),
         take_profit_pct=float(rule["tp"]),
@@ -197,7 +211,11 @@ def p1d_from_rule(rule: dict[str, Any]) -> layer2.Profile:
     return replace(
         layer2.P1D,
         chromosome=rule_chromosome(rule),
-        plant_kw={**layer2.P1D.plant_kw, "rsi_period": int(rule["period"]), "rsi_level": float(rule["xb"])},
+        plant_kw={
+            **layer2.P1D.plant_kw,
+            "rsi_period": int(rule["period"]),
+            "rsi_level": float(rule["xb"]),
+        },
     )
 
 
@@ -265,7 +283,9 @@ def score_candidates(
     """M1 = any candidate clears ``C_K`` and ``0.5 * planted``; M2 = a CHAMPION does (primary)."""
 
     def hit(cand: dict[str, Any]) -> bool:
-        return layer2.found_criterion(cand.get("corr"), cand.get("train_S"), planted_s, corr_min=c_k)
+        return layer2.found_criterion(
+            cand.get("corr"), cand.get("train_S"), planted_s, corr_min=c_k
+        )
 
     m1 = any(hit(c) for c in candidates)
     m2 = any(hit(c) for c in candidates if c.get("source") == "champion")
@@ -297,7 +317,9 @@ def s0_max_signed_corr(state: dict[str, Any], tf: str, pop: int, gens: int) -> f
             if cand.get("corr") is not None:
                 corrs.append(float(cand["corr"]))
     if not corrs:
-        msg = f"no harvested s0 run of {tf} at budget {pop}x{gens} for C_K; run s0 at that rung first"
+        msg = (
+            f"no harvested s0 run of {tf} at budget {pop}x{gens} for C_K; run s0 at that rung first"
+        )
         raise layer2.Layer2Error(msg)
     return max(corrs)
 
@@ -321,7 +343,9 @@ def tf_seeds(state: dict[str, Any], tf: str) -> int:
     return int((state.get("seeds") or {}).get(tf, len(SEEDS)))
 
 
-def get_run(state: dict[str, Any], variant: str, rung: str, seed: int, probe: bool = False) -> dict[str, Any] | None:
+def get_run(
+    state: dict[str, Any], variant: str, rung: str, seed: int, probe: bool = False
+) -> dict[str, Any] | None:
     return (state.get("runs") or {}).get(run_key(variant, rung, seed, probe))
 
 
@@ -339,7 +363,9 @@ def _given_up(state: dict[str, Any], variant: str, rung: str, seed: int) -> bool
     )
 
 
-def _pending(state: dict[str, Any], variant: str, rung: str, seed: int, probe: bool = False) -> bool:
+def _pending(
+    state: dict[str, Any], variant: str, rung: str, seed: int, probe: bool = False
+) -> bool:
     run = get_run(state, variant, rung, seed, probe)
     if run is None:
         return True
@@ -372,7 +398,10 @@ def _b_star(state: dict[str, Any], variant: str) -> str | None:
     """The first rung where EVERY seed completed and M2 held in at least MIN_M2 of them."""
     seeds = range(1, tf_seeds(state, tf_of(variant)) + 1)
     for k in LADDER_KEYS:
-        if all(_completed(state, variant, k, s) for s in seeds) and m2_count(state, variant, k) >= MIN_M2:
+        if (
+            all(_completed(state, variant, k, s) for s in seeds)
+            and m2_count(state, variant, k) >= MIN_M2
+        ):
             return k
     return None
 
@@ -394,8 +423,7 @@ def gate_leak(state: dict[str, Any], tf: str) -> bool:
     no false-positive rate (rate claims use seeded synthetic zero-edge controls, R-c17-2).
     """
     return any(
-        r.get("status") == "completed"
-        and int((r.get("harvest") or {}).get("champions", 0)) > 0
+        r.get("status") == "completed" and int((r.get("harvest") or {}).get("champions", 0)) > 0
         for r in all_runs(state)
         if r.get("variant") == s0_variant(tf) and not is_probe_run(r)
     )
@@ -713,9 +741,12 @@ def cmd_build(ctx: layer2.Ctx, args: argparse.Namespace) -> int:
             for b in builds:
                 shutil.rmtree(b["root"], ignore_errors=True)
             update_state(
-                ctx.out, lambda s: s.setdefault("variants", {}).setdefault(variant, {}).__setitem__(
-                    "status", "failed_price_ratio"
-                )
+                ctx.out,
+                lambda s: (
+                    s.setdefault("variants", {})
+                    .setdefault(variant, {})
+                    .__setitem__("status", "failed_price_ratio")
+                ),
             )
             print(f"{variant}: FAILED closed, price ratio {rec['price_ratio']:.2f} > 3x")
             return 2
@@ -724,9 +755,12 @@ def cmd_build(ctx: layer2.Ctx, args: argparse.Namespace) -> int:
             break
     if accepted is None:
         update_state(
-            ctx.out, lambda s: s.setdefault("variants", {}).setdefault(variant, {}).__setitem__(
-                "status", "not_calibrated"
-            )
+            ctx.out,
+            lambda s: (
+                s.setdefault("variants", {})
+                .setdefault(variant, {})
+                .__setitem__("status", "not_calibrated")
+            ),
         )
         print(f"{variant}: NOT calibrated after {len(builds)} builds")
         return 2
@@ -738,7 +772,10 @@ def cmd_build(ctx: layer2.Ctx, args: argparse.Namespace) -> int:
 
 
 def _rebuild_accepted(
-    ctx: layer2.Ctx, variant: str, vrec: dict[str, Any], profile: layer2.Profile,
+    ctx: layer2.Ctx,
+    variant: str,
+    vrec: dict[str, Any],
+    profile: layer2.Profile,
     rule_name: str | None,
 ) -> int:
     """The accepted copy is gone: ``layer2.guarded_rebuild`` of its RECORDED delta on TRAIN S
@@ -750,8 +787,14 @@ def _rebuild_accepted(
 
     def _build(stage: Path) -> dict[str, Any]:
         return layer2.build_one(
-            variant, int(acc["k"]), float(acc["delta"]), klines, ctx.archive, stage,
-            ctx.scratch_db, profile,
+            variant,
+            int(acc["k"]),
+            float(acc["delta"]),
+            klines,
+            ctx.archive,
+            stage,
+            ctx.scratch_db,
+            profile,
         )
 
     def _publish(s: dict[str, Any], rec: dict[str, Any]) -> None:
@@ -783,7 +826,13 @@ def cmd_pick_rule(ctx: layer2.Ctx, args: argparse.Namespace) -> int:
     root = ctx.accepted_root(state, s0_variant(tf))
     start, end = layer2.train_window(profile)
     jobs = [
-        {"tag": r["name"], "dsl": rule_dsl(r, profile), "start": start, "end": end, "collect": False}
+        {
+            "tag": r["name"],
+            "dsl": rule_dsl(r, profile),
+            "start": start,
+            "end": end,
+            "collect": False,
+        }
         for r in PICK_RULES
     ]
     shots = {r["tag"]: r for r in layer2.run_worker("screen", root, {"jobs": jobs}, ctx.scratch_db)}
@@ -837,8 +886,11 @@ def cmd_check_btc0(ctx: layer2.Ctx, args: argparse.Namespace) -> int:
     diffs = layer2.compare_exact(scratch, want)
     passed = not diffs
     rec = {
-        "passed": passed, "diffs": diffs, "got": {k: scratch[k] for k in CONF_FIELDS},
-        "real": want, "checked_at": layer2._now(),
+        "passed": passed,
+        "diffs": diffs,
+        "got": {k: scratch[k] for k in CONF_FIELDS},
+        "real": want,
+        "checked_at": layer2._now(),
     }
     update_state(ctx.out, lambda s: s.setdefault("check_btc0", {}).__setitem__(tf, rec))
     print(f"R3 {tf} btc0 fidelity: {'IDENTICAL' if passed else 'DRIFT'}")
@@ -860,8 +912,11 @@ def cmd_direct_chain(ctx: layer2.Ctx, args: argparse.Namespace) -> int:
     result = json.loads(json.dumps(out["result"], default=layer2._json_default))
     failures = layer2.positive_control_failures(result, layer2.POSITIVE_CONTROL_NS)
     rec = {
-        "fitness": out["fitness"], "holdout": out["holdout"], "result": result,
-        "failures": failures, "checked_at": layer2._now(),
+        "fitness": out["fitness"],
+        "holdout": out["holdout"],
+        "result": result,
+        "failures": failures,
+        "checked_at": layer2._now(),
     }
     update_state(ctx.out, lambda s: s.setdefault("direct_chain", {}).__setitem__(variant, rec))
     print(f"{variant} direct chain: failures={failures}")
@@ -890,10 +945,17 @@ def cmd_null_corr(ctx: layer2.Ctx, args: argparse.Namespace) -> int:
 
     def shard(i: int, count: int) -> list[dict[str, Any]]:
         return layer2.run_worker(
-            "null", root,
-            {"count": count, "seed_base": int(args.seed), "offset": i * chunk,
-             "pool": list(layer2.NULL_INDICATOR_POOL), "profile": profile.to_dict()},
-            ctx.scratch_db, timeout_s=args.timeout,
+            "null",
+            root,
+            {
+                "count": count,
+                "seed_base": int(args.seed),
+                "offset": i * chunk,
+                "pool": list(layer2.NULL_INDICATOR_POOL),
+                "profile": profile.to_dict(),
+            },
+            ctx.scratch_db,
+            timeout_s=args.timeout,
         )
 
     jobs = [(i, max(0, min(chunk, m - i * chunk))) for i in range(shards)]
@@ -908,8 +970,14 @@ def cmd_null_corr(ctx: layer2.Ctx, args: argparse.Namespace) -> int:
     pool_path.parent.mkdir(parents=True, exist_ok=True)
     pool_path.write_text(json.dumps(pool, default=layer2._json_default) + "\n")
     rec = {
-        "status": "completed", "m": len(pool), "reps": int(args.reps), "seed": int(args.seed),
-        "shards": shards, "root": str(root), "pool_path": str(pool_path), "tf": tf,
+        "status": "completed",
+        "m": len(pool),
+        "reps": int(args.reps),
+        "seed": int(args.seed),
+        "shards": shards,
+        "root": str(root),
+        "pool_path": str(pool_path),
+        "tf": tf,
         "recorded_at": layer2._now(),
     }
     update_state(ctx.out, lambda s: s.setdefault("null", {}).__setitem__(tf, rec))
@@ -960,13 +1028,23 @@ def cmd_discover(ctx: layer2.Ctx, args: argparse.Namespace) -> int:
         root, run_dir, seed, timeout_s=timeout, command_fn=command, profile=profile
     )
     rec.update(
-        variant=variant, rung=rung, seed=seed, pop=pop, gens=gens, probe=probe,
-        profile=profile.to_dict(), sha=git_sha(), reruns=reruns, evaluated=None,
+        variant=variant,
+        rung=rung,
+        seed=seed,
+        pop=pop,
+        gens=gens,
+        probe=probe,
+        profile=profile.to_dict(),
+        sha=git_sha(),
+        reruns=reruns,
+        evaluated=None,
         build_id=(state.get("variants") or {}).get(variant, {}).get("build_id"),
         dsr_rule=args.dsr_rule,
     )
     update_state(ctx.out, lambda s: s.setdefault("runs", {}).__setitem__(key, rec))
-    print(f"{where}: {rec['status']} run_id={rec['run_id']} {rec['wall_s']}s {rec.get('error', '')}".rstrip())
+    print(
+        f"{where}: {rec['status']} run_id={rec['run_id']} {rec['wall_s']}s {rec.get('error', '')}".rstrip()
+    )
     if rec["status"] != "completed":
         # the wave runner keys off exit codes: never let a killed run look like success
         print(f"{where}: RUN NOT COMPLETED ({rec['status']}); rerun with --force")
@@ -976,7 +1054,9 @@ def cmd_discover(ctx: layer2.Ctx, args: argparse.Namespace) -> int:
 
 def harvest_tf(ctx: layer2.Ctx, state: dict[str, Any], tf: str) -> int:
     """Harvest every completed run of a tf, score the non-s0/non-probe ones, refresh the cells."""
-    runs = [r for r in all_runs(state) if tf_of(r["variant"]) == tf and r.get("status") == "completed"]
+    runs = [
+        r for r in all_runs(state) if tf_of(r["variant"]) == tf and r.get("status") == "completed"
+    ]
     for run in runs:
         h = layer2.harvest_run(Path(run["db"]), int(run["run_id"]))
         current = ((state.get("variants") or {}).get(run["variant"]) or {}).get("build_id")
@@ -1046,7 +1126,10 @@ def harvest_tf(ctx: layer2.Ctx, state: dict[str, Any], tf: str) -> int:
         planted_s = ((run.get("harvest") or {}).get("found") or {}).get("planted_train_S")
         run["score"] = {
             **score_candidates(run["harvest"]["candidates"], planted_s, c_k),
-            "K": k, "c95": c95_cache[k], "s0_max": s0_max, "C_K": c_k,
+            "K": k,
+            "c95": c95_cache[k],
+            "s0_max": s0_max,
+            "C_K": c_k,
         }
 
     keys = [run_key(r["variant"], r["rung"], r["seed"], is_probe_run(r)) for r in runs]
@@ -1073,9 +1156,7 @@ def cmd_harvest(ctx: layer2.Ctx, args: argparse.Namespace) -> int:
 def cmd_next_wave(ctx: layer2.Ctx, args: argparse.Namespace) -> int:
     tf = args.tf
     if args.seeds is not None:
-        update_state(
-            ctx.out, lambda s: s.setdefault("seeds", {}).__setitem__(tf, int(args.seeds))
-        )
+        update_state(ctx.out, lambda s: s.setdefault("seeds", {}).__setitem__(tf, int(args.seeds)))
     state = load_state(ctx.out)
     for line in next_wave_commands(state, tf, ctx):
         print(line)
@@ -1102,7 +1183,9 @@ def cmd_verify_untouched(ctx: layer2.Ctx, _args: argparse.Namespace) -> int:
             continue
         count = layer2.funding_count(scratch_arch)
         if count != snap["funding_source_count"]:
-            problems.append(f"{variant}: scratch funding rows {count} != source {snap['funding_source_count']}")
+            problems.append(
+                f"{variant}: scratch funding rows {count} != source {snap['funding_source_count']}"
+            )
     rec = {"ok": not problems, "problems": problems, "checked_at": layer2._now()}
     update_state(ctx.out, lambda s: s.__setitem__("verify", rec))
     print("R26 shared data untouched" if not problems else "R26 shared data CHANGED")
@@ -1134,18 +1217,28 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--variant", choices=sorted(VARIANTS), required=True)
     p = sub.add_parser("null-corr", help="the calibrated null pool of one timeframe")
     p.add_argument("--tf", choices=tfs, required=True)
-    p.add_argument("--m", type=int, default=layer2.NULL_DEFAULT_M, help="draws in the null pool (>= K)")
+    p.add_argument(
+        "--m", type=int, default=layer2.NULL_DEFAULT_M, help="draws in the null pool (>= K)"
+    )
     p.add_argument("--reps", type=int, default=layer2.NULL_DEFAULT_REPS, help="subsamples for C95")
-    p.add_argument("--shards", type=int, default=layer2.NULL_DEFAULT_SHARDS, help="parallel worker count")
+    p.add_argument(
+        "--shards", type=int, default=layer2.NULL_DEFAULT_SHARDS, help="parallel worker count"
+    )
     p.add_argument("--seed", type=int, default=0, help="first chromosome seed")
     p.add_argument("--timeout", type=float, default=7200.0, help="per-shard worker timeout (s)")
     p = sub.add_parser("discover", help="one isolated discovery run")
     p.add_argument("--variant", choices=sorted(VARIANTS), required=True)
     p.add_argument("--rung", choices=list(LADDER), required=True)
     p.add_argument("--seed", type=int, required=True)
-    p.add_argument("--probe", choices=[PROBE_FULL_POOL], default=None, help="Q1: full indicator pool")
-    p.add_argument("--dsr-rule", choices=["emax", "q95"], default=None,
-                   help="design-dsr-q95: opt-in DSR critical value (absent = legacy argv)")
+    p.add_argument(
+        "--probe", choices=[PROBE_FULL_POOL], default=None, help="Q1: full indicator pool"
+    )
+    p.add_argument(
+        "--dsr-rule",
+        choices=["emax", "q95"],
+        default=None,
+        help="design-dsr-q95: opt-in DSR critical value (absent = legacy argv)",
+    )
     p.add_argument("--timeout", type=float, default=None)
     p = sub.add_parser("harvest", help="R5/R6: isolation, LONG, M1/M2 under C_K, cells")
     p.add_argument("--tf", choices=tfs, default=None)

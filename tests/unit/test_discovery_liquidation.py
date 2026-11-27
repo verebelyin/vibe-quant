@@ -146,9 +146,7 @@ def _run_cli(
 
         monkeypatch.setattr(NTBacktestFn, "__init__", recording_init)
     monkeypatch.setattr(DiscoveryPipeline, "run", lambda self: run_fn(self))
-    monkeypatch.setattr(
-        "sys.argv", ["prog", "--run-id", str(run_id), "--db", str(db), *args]
-    )
+    monkeypatch.setattr("sys.argv", ["prog", "--run-id", str(run_id), "--db", str(db), *args])
     rc = cli.main()
 
     state = StateManager(db)
@@ -224,9 +222,7 @@ def test_every_construction_passes_liquidation() -> None:
     assert missing == []
 
 
-def test_settings_reach_every_built_fn(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_settings_reach_every_built_fn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Train GA, holdout, cross-window/WFA factory, full-range and train_metrics
     fns the CLI builds all carry the run's LiquidationSettings (V1/C0)."""
     db = tmp_path / "reach.db"
@@ -242,24 +238,40 @@ def test_settings_reach_every_built_fn(
         assert self._backtest_fn_factory is not None
         self._backtest_fn_factory("2024-02-01", "2024-03-01")
         return _result(
-            top=[(chrom, fit)], holdout_results=[holdout],
+            top=[(chrom, fit)],
+            holdout_results=[holdout],
             train_dates=("2024-01-01", "2024-11-01"),
             holdout_dates=("2024-11-01", "2025-01-01"),
         )
 
     built: list[NTBacktestFn] = []
     rc, _, notes = _run_cli(
-        db, run_id,
+        db,
+        run_id,
         [
-            "--start-date", "2024-01-01", "--end-date", "2025-01-01",
-            "--liquidation-mode", "isolated", "--liquidation-leverage", "20",
-            "--eval-windows", "2", "--cross-window-months", "1",
-            "--train-test-split", "0.8",
+            "--start-date",
+            "2024-01-01",
+            "--end-date",
+            "2025-01-01",
+            "--liquidation-mode",
+            "isolated",
+            "--liquidation-leverage",
+            "20",
+            "--eval-windows",
+            "2",
+            "--cross-window-months",
+            "1",
+            "--train-test-split",
+            "0.8",
         ],
-        monkeypatch, run_fn,
+        monkeypatch,
+        run_fn,
         nt_call=lambda self, chrom: {
-            "sharpe_ratio": 1.0, "total_return": 0.05, "max_drawdown": 0.05,
-            "profit_factor": 1.5, "total_trades": 100,
+            "sharpe_ratio": 1.0,
+            "total_return": 0.05,
+            "max_drawdown": 0.05,
+            "profit_factor": 1.5,
+            "total_trades": 100,
         },  # fmt: skip
         record_built=built,
     )
@@ -333,9 +345,7 @@ def test_zero_champion_run_records_liquidation(
 # ---------------------------------------------------------------------------
 
 
-def test_mode_off_keeps_rows_clean(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_mode_off_keeps_rows_clean(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Mode off: no liquidation* keys on champion/holdout/full-range or a rejection (R4)."""
     db = tmp_path / "off.db"
     run_id = _create_run(db)
@@ -352,7 +362,8 @@ def test_mode_off_keeps_rows_clean(
             _chrom(), fit, "guardrails", ["nope"], timeframe=self.config.timeframe
         )
         return _result(
-            top=[(chrom, fit)], holdout_results=[holdout],
+            top=[(chrom, fit)],
+            holdout_results=[holdout],
             train_dates=("2024-01-01", "2024-11-01"),
             holdout_dates=("2024-11-01", "2025-01-01"),
             guardrail_rejections=[rejection],
@@ -377,9 +388,7 @@ def test_mode_off_keeps_rows_clean(
     assert "liquidation_forfeited" not in rejection
 
 
-def test_mode_on_entries_carry_counts(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_mode_on_entries_carry_counts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Champion + holdout + full-range rows carry the counts; off rows do not (R1/R5)."""
     db = tmp_path / "on.db"
     run_id = _create_run(db)
@@ -392,7 +401,8 @@ def test_mode_on_entries_carry_counts(
 
     def run_fn(self: Any) -> DiscoveryResult:
         return _result(
-            top=[(chrom, fit)], holdout_results=[holdout],
+            top=[(chrom, fit)],
+            holdout_results=[holdout],
             train_dates=("2024-01-01", "2024-11-01"),
             holdout_dates=("2024-11-01", "2025-01-01"),
         )
@@ -480,9 +490,7 @@ def test_sequential_train_eval_integrity_error_propagates(
         raise _integrity()
 
     monkeypatch.setattr(NTBacktestFn, "__call__", boom)
-    with pytest.raises(
-        DataUnavailableError, match="liquidation_mode='isolated': MarkDataMissing:"
-    ):
+    with pytest.raises(DataUnavailableError, match="liquidation_mode='isolated': MarkDataMissing:"):
         evaluate_population([_chrom()], fn, max_workers=None)
 
 
@@ -503,8 +511,9 @@ def test_parallel_train_eval_integrity_error_propagates(
 
     monkeypatch.setattr(NTBacktestFn, "_eval_symbols", boom)
     monkeypatch.setattr(fitness_mod, "_parallel_broken", False)
-    with ThreadPoolExecutor(max_workers=2) as ex, pytest.raises(
-        DataUnavailableError, match="liquidation_mode='isolated': MarkDataMissing:"
+    with (
+        ThreadPoolExecutor(max_workers=2) as ex,
+        pytest.raises(DataUnavailableError, match="liquidation_mode='isolated': MarkDataMissing:"),
     ):
         evaluate_population([_chrom(), _chrom()], fn, max_workers=2, executor=ex)
 
@@ -519,9 +528,7 @@ def _assert_failed_run(run: dict[str, Any]) -> None:
     assert "liquidation_mode='isolated': MarkDataMissing:" in run["error_message"]
 
 
-def test_holdout_integrity_error_fails_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_holdout_integrity_error_fails_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db = tmp_path / "holdout.db"
     run_id = _create_run(db)
 
@@ -578,9 +585,7 @@ def test_cross_window_integrity_error_fails_run(
     _assert_failed_run(run)
 
 
-def test_wfa_integrity_error_fails_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_wfa_integrity_error_fails_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db = tmp_path / "wfa.db"
     run_id = _create_run(db)
 
@@ -648,7 +653,8 @@ def test_train_metrics_integrity_error_fails_run(
 
     def run_fn(self: Any) -> DiscoveryResult:
         return _result(
-            top=[(chrom, fit)], holdout_results=[holdout],
+            top=[(chrom, fit)],
+            holdout_results=[holdout],
             train_dates=("2024-01-01", "2024-11-01"),
             holdout_dates=("2024-11-01", "2025-01-01"),
         )
@@ -730,4 +736,7 @@ def test_pooled_series_pools_truncated_ledgers() -> None:
     assert "error" not in bt
     assert bt["liquidation_count"] == liquidations
     series = bt["mtm_daily_returns"]
-    assert (series.first_day, list(series.values)) == (pooled.first_day + 1, list(pooled.values[1:]))
+    assert (series.first_day, list(series.values)) == (
+        pooled.first_day + 1,
+        list(pooled.values[1:]),
+    )

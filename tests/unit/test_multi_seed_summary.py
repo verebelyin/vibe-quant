@@ -70,9 +70,7 @@ def test_nan_seed_sharpe_does_not_abort_and_stats_use_finite_only(
     assert "Non-finite seed Sharpes: 1/2" in text
 
 
-def test_all_nan_seed_sharpes_log_na(
-    monkeypatch: MonkeyPatch, caplog: LogCaptureFixture
-) -> None:
+def test_all_nan_seed_sharpes_log_na(monkeypatch: MonkeyPatch, caplog: LogCaptureFixture) -> None:
     """Every seed non-finite: still completes and logs ``n/a`` for the Sharpe block."""
     res, text = _run_summary(
         monkeypatch,
@@ -98,9 +96,7 @@ def test_best_sharpe_ignores_non_finite_in_any_position(
     )
     assert isinstance(res, DiscoveryResult)
     # finite bests are 2.0 and 3.0 regardless of where the NaN sits -> mean 2.50 stored
-    assert (
-        "Best Sharpe365 (ann √365): mean=3.01 median=3.01 min=2.41 max=3.61" in text
-    )
+    assert "Best Sharpe365 (ann √365): mean=3.01 median=3.01 min=2.41 max=3.61" in text
     # every seed HAS a finite best (a non-finite one was ignored), so no warning
     assert "Non-finite seed Sharpes" not in text
 
@@ -122,9 +118,7 @@ def test_inf_champion_ignored_inside_a_seed(
         ],
     )
     assert isinstance(res, DiscoveryResult)
-    assert (
-        "Best Sharpe365 (ann √365): mean=3.01 median=3.01 min=2.41 max=3.61" in text
-    )
+    assert "Best Sharpe365 (ann √365): mean=3.01 median=3.01 min=2.41 max=3.61" in text
     assert "Non-finite seed Sharpes" not in text
 
 
@@ -146,9 +140,7 @@ def test_inf_seed_sharpe_is_non_finite_and_stats_use_finite_only(
     assert "Non-finite seed Sharpes: 2/3" in text
 
 
-def test_all_inf_seed_sharpes_log_na(
-    monkeypatch: MonkeyPatch, caplog: LogCaptureFixture
-) -> None:
+def test_all_inf_seed_sharpes_log_na(monkeypatch: MonkeyPatch, caplog: LogCaptureFixture) -> None:
     """Every seed non-finite (mixed +inf/-inf): completes and logs ``n/a``."""
     res, text = _run_summary(
         monkeypatch,

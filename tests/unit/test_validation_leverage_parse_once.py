@@ -138,8 +138,13 @@ def _launch(tmp_path: Path, parameters: dict[str, object]) -> int:
     state = StateManager(tmp_path / "s.db")
     sid = state.create_strategy(name="parse_once_probe", dsl_config=dsl)
     run_id = state.create_backtest_run(
-        strategy_id=sid, run_mode="validation", symbols=["BTCUSDT"], timeframe="4h",
-        start_date="2025-01-01", end_date="2025-02-01", parameters=parameters,
+        strategy_id=sid,
+        run_mode="validation",
+        symbols=["BTCUSDT"],
+        timeframe="4h",
+        start_date="2025-01-01",
+        end_date="2025-02-01",
+        parameters=parameters,
     )
     state.close()
     return run_id

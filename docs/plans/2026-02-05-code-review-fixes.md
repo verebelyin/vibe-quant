@@ -140,29 +140,27 @@ In `vibe_quant/db/schema.py`, add `error_message TEXT` to background_jobs after 
 In `vibe_quant/db/state_manager.py:605-635`, replace with:
 
 ```python
-    def update_job_status(
-        self, run_id: int, status: str, error: str | None = None
-    ) -> None:
-        """Update job status.
+def update_job_status(self, run_id: int, status: str, error: str | None = None) -> None:
+    """Update job status.
 
-        Args:
-            run_id: Run ID.
-            status: New status (running, completed, failed, killed).
-            error: Optional error message.
-        """
-        if status in ("completed", "failed", "killed"):
-            self.conn.execute(
-                """UPDATE background_jobs
-                   SET status = ?, completed_at = datetime('now'), error_message = ?
-                   WHERE run_id = ?""",
-                (status, error, run_id),
-            )
-        else:
-            self.conn.execute(
-                "UPDATE background_jobs SET status = ? WHERE run_id = ?",
-                (status, run_id),
-            )
-        self.conn.commit()
+    Args:
+        run_id: Run ID.
+        status: New status (running, completed, failed, killed).
+        error: Optional error message.
+    """
+    if status in ("completed", "failed", "killed"):
+        self.conn.execute(
+            """UPDATE background_jobs
+               SET status = ?, completed_at = datetime('now'), error_message = ?
+               WHERE run_id = ?""",
+            (status, error, run_id),
+        )
+    else:
+        self.conn.execute(
+            "UPDATE background_jobs SET status = ? WHERE run_id = ?",
+            (status, run_id),
+        )
+    self.conn.commit()
 ```
 
 **Step 4: Run test to verify it passes**
@@ -193,6 +191,7 @@ git commit -m "fix(db): persist error text in update_job_status (vibe-quant-5hn)
 def test_default_db_path_matches_canonical() -> None:
     """Default DB path should match connection.DEFAULT_DB_PATH."""
     from vibe_quant.db.connection import DEFAULT_DB_PATH
+
     checker = ConsistencyChecker()
     assert checker._db_path == DEFAULT_DB_PATH
     checker.close()
@@ -204,6 +203,7 @@ def test_default_db_path_matches_canonical() -> None:
     """Default DB path should match connection.DEFAULT_DB_PATH."""
     from vibe_quant.db.connection import DEFAULT_DB_PATH
     from vibe_quant.overfitting.pipeline import OverfittingPipeline
+
     pipeline = OverfittingPipeline()
     assert pipeline._db_path == DEFAULT_DB_PATH
     pipeline.close()
@@ -260,7 +260,9 @@ git commit -m "fix(db): use canonical DEFAULT_DB_PATH in consistency/overfitting
 
 ```python
 # tests/unit/test_validation_runner.py - add:
-def test_run_failure_sets_failed_status(temp_db: Path, temp_logs: Path, sample_dsl_config: dict) -> None:
+def test_run_failure_sets_failed_status(
+    temp_db: Path, temp_logs: Path, sample_dsl_config: dict
+) -> None:
     """If run() raises, status should be 'failed', not stuck in 'running'."""
     mgr = StateManager(temp_db)
     strategy_id = mgr.create_strategy("fail_test", sample_dsl_config)
@@ -305,43 +307,41 @@ Expected: FAIL (status remains "running", no error handling)
 In `vibe_quant/validation/runner.py`, wrap the body of `run()` (lines 233-263) with error handling:
 
 ```python
-    def run(
-        self,
-        run_id: int,
-        latency_preset: LatencyPreset | str | None = None,
-    ) -> ValidationResult:
-        # ... existing setup code (lines 205-231) stays the same ...
+def run(
+    self,
+    run_id: int,
+    latency_preset: LatencyPreset | str | None = None,
+) -> ValidationResult:
+    # ... existing setup code (lines 205-231) stays the same ...
 
-        # Update run status to running
-        self._state.update_backtest_run_status(run_id, "running")
+    # Update run status to running
+    self._state.update_backtest_run_status(run_id, "running")
 
-        try:
-            # Create event writer
-            with EventWriter(run_id=str(run_id), base_path=self._logs_path) as writer:
-                self._write_start_event(writer, run_id, strategy_name, venue_config)
+    try:
+        # Create event writer
+        with EventWriter(run_id=str(run_id), base_path=self._logs_path) as writer:
+            self._write_start_event(writer, run_id, strategy_name, venue_config)
 
-                result = self._run_backtest_mock(
-                    run_id=run_id,
-                    strategy_name=strategy_name,
-                    dsl=dsl,
-                    venue_config=venue_config,
-                    run_config=run_config,
-                    writer=writer,
-                )
-
-                self._write_completion_event(writer, run_id, strategy_name, result)
-
-            result.execution_time_seconds = time.monotonic() - start_time
-            self._store_results(run_id, result)
-            self._state.update_backtest_run_status(run_id, "completed")
-
-            return result
-        except Exception as exc:
-            error_msg = f"{type(exc).__name__}: {exc}"
-            self._state.update_backtest_run_status(
-                run_id, "failed", error_message=error_msg
+            result = self._run_backtest_mock(
+                run_id=run_id,
+                strategy_name=strategy_name,
+                dsl=dsl,
+                venue_config=venue_config,
+                run_config=run_config,
+                writer=writer,
             )
-            raise ValidationRunnerError(error_msg) from exc
+
+            self._write_completion_event(writer, run_id, strategy_name, result)
+
+        result.execution_time_seconds = time.monotonic() - start_time
+        self._store_results(run_id, result)
+        self._state.update_backtest_run_status(run_id, "completed")
+
+        return result
+    except Exception as exc:
+        error_msg = f"{type(exc).__name__}: {exc}"
+        self._state.update_backtest_run_status(run_id, "failed", error_message=error_msg)
+        raise ValidationRunnerError(error_msg) from exc
 ```
 
 **Step 4: Run test to verify it passes**
@@ -417,14 +417,15 @@ In `vibe_quant/dsl/compiler.py`:
 
 1. Change `_generate_condition_check_method` (line 885): signature includes `bar`:
    ```python
-   f"def {method_name}(self, bar: Bar) -> bool:",
+   (f"def {method_name}(self, bar: Bar) -> bool:",)
    ```
 
 2. Change `_generate_on_bar_method` call sites (lines 568, 571, 581, 588): pass `bar`:
    ```python
-   "        if self._check_long_entry(bar):"     # was _check_long_entry()
-   "        elif self._check_short_entry(bar):"   # was _check_short_entry()
-   "            if self._check_long_exit(bar):"   # was _check_long_exit()
+   "if self._check_long_entry(bar):"  # was _check_long_entry()
+
+   "        elif self._check_short_entry(bar):"  # was _check_short_entry()
+   "            if self._check_long_exit(bar):"  # was _check_long_exit()
    "            if self._check_short_exit(bar):"  # was _check_short_exit()
    ```
 
@@ -465,6 +466,7 @@ Fixes: vibe-quant-uqj, vibe-quant-cff, vibe-quant-nej, vibe-quant-hld
 def test_screening_main_importable() -> None:
     """vibe_quant.screening.__main__ should be importable."""
     import importlib
+
     mod = importlib.import_module("vibe_quant.screening.__main__")
     assert hasattr(mod, "main")
 
@@ -472,6 +474,7 @@ def test_screening_main_importable() -> None:
 def test_validation_main_importable() -> None:
     """vibe_quant.validation.__main__ should be importable."""
     import importlib
+
     mod = importlib.import_module("vibe_quant.validation.__main__")
     assert hasattr(mod, "main")
 ```
@@ -525,7 +528,9 @@ def main() -> int:
         dsl = parse_strategy(strategy["dsl_config"])
         pipeline = create_screening_pipeline(dsl)
         result = pipeline.run(run_id=args.run_id, db_path=db_path)
-        print(f"Screening complete: {result.total_combinations} combos, {len(result.pareto_optimal_indices)} Pareto-optimal")
+        print(
+            f"Screening complete: {result.total_combinations} combos, {len(result.pareto_optimal_indices)} Pareto-optimal"
+        )
         return 0
     except Exception as exc:
         print(f"Screening failed: {exc}")
@@ -564,7 +569,9 @@ def main() -> int:
     runner = ValidationRunner(db_path=db_path)
     try:
         result = runner.run(args.run_id)
-        print(f"Validation complete: Sharpe={result.sharpe_ratio:.2f}, Return={result.total_return:.2f}%")
+        print(
+            f"Validation complete: Sharpe={result.sharpe_ratio:.2f}, Return={result.total_return:.2f}%"
+        )
         return 0
     except Exception as exc:
         print(f"Validation failed: {exc}")
@@ -604,9 +611,12 @@ git commit -m "fix(cli): add screening/validation __main__.py entrypoints (vibe-
 def test_main_data_command_not_placeholder() -> None:
     """Top-level 'data' command should not print placeholder text."""
     import subprocess
+
     result = subprocess.run(
         [sys.executable, "-m", "vibe_quant", "data", "--help"],
-        capture_output=True, text=True, timeout=10,
+        capture_output=True,
+        text=True,
+        timeout=10,
     )
     assert "not yet implemented" not in result.stdout.lower()
 ```
@@ -625,6 +635,7 @@ def cmd_data(args: argparse.Namespace) -> int:
     """Forward to data module CLI."""
     import sys
     from vibe_quant.data.ingest import main as data_main
+
     # Re-inject subcommand args
     sys.argv = ["vibe_quant.data"] + args.remaining
     return data_main()
@@ -634,6 +645,7 @@ def cmd_screening(args: argparse.Namespace) -> int:
     """Forward to screening module CLI."""
     import sys
     from vibe_quant.screening.__main__ import main as screening_main
+
     sys.argv = ["vibe_quant.screening"] + args.remaining
     return screening_main()
 ```
@@ -641,8 +653,12 @@ def cmd_screening(args: argparse.Namespace) -> int:
 And update the argparse setup for data/screening subparsers to use `parse_known_args` or `nargs=argparse.REMAINDER`:
 
 ```python
-data_parser.add_argument("remaining", nargs=argparse.REMAINDER, help="Arguments forwarded to data CLI")
-screening_parser.add_argument("remaining", nargs=argparse.REMAINDER, help="Arguments forwarded to screening CLI")
+data_parser.add_argument(
+    "remaining", nargs=argparse.REMAINDER, help="Arguments forwarded to data CLI"
+)
+screening_parser.add_argument(
+    "remaining", nargs=argparse.REMAINDER, help="Arguments forwarded to screening CLI"
+)
 ```
 
 **Step 4: Run test**
@@ -672,12 +688,14 @@ git commit -m "fix(cli): forward top-level data/screening to real module CLIs (v
 def test_latency_options_include_custom() -> None:
     """Latency selector should include 'custom' option."""
     from vibe_quant.validation.latency import LatencyPreset
+
     preset_values = [p.value for p in LatencyPreset]
     # The render function should offer custom; verify LatencyPreset or the UI list includes it
     assert "custom" in preset_values or True  # We check the render function logic below
 
     # Verify the function creates custom option
     from vibe_quant.dashboard.pages.backtest_launch import LATENCY_OPTIONS
+
     assert "Custom" in LATENCY_OPTIONS or "custom" in [o.lower() for o in LATENCY_OPTIONS]
 ```
 
@@ -694,8 +712,12 @@ In the function, after the selectbox, add conditional custom inputs:
 ```python
 if selected == "custom":
     with col2:
-        base_ns = st.number_input("Base latency (ns)", min_value=0, value=50_000_000, step=1_000_000)
-        insert_ns = st.number_input("Insert latency (ns)", min_value=0, value=25_000_000, step=1_000_000)
+        base_ns = st.number_input(
+            "Base latency (ns)", min_value=0, value=50_000_000, step=1_000_000
+        )
+        insert_ns = st.number_input(
+            "Insert latency (ns)", min_value=0, value=25_000_000, step=1_000_000
+        )
     st.session_state["custom_latency"] = {
         "base_latency_nanos": base_ns,
         "insert_latency_nanos": insert_ns,
@@ -752,6 +774,7 @@ def test_validated_strategies_without_overfitting_metrics(tmp_path: Path) -> Non
     conn.commit()
 
     from vibe_quant.dashboard.pages.paper_trading import _get_validated_strategies
+
     strategies = _get_validated_strategies(db_file)
     assert len(strategies) == 1
     conn.close()
@@ -816,8 +839,12 @@ def db_path(tmp_path: Path) -> Path:
 
     # Create strategies
     conn.execute("INSERT INTO strategies (id, name, dsl_config) VALUES (1, 'test_strategy', '{}')")
-    conn.execute("INSERT INTO strategies (id, name, dsl_config) VALUES (2, 'improved_strategy', '{}')")
-    conn.execute("INSERT INTO strategies (id, name, dsl_config) VALUES (3, 'sensitive_strategy', '{}')")
+    conn.execute(
+        "INSERT INTO strategies (id, name, dsl_config) VALUES (2, 'improved_strategy', '{}')"
+    )
+    conn.execute(
+        "INSERT INTO strategies (id, name, dsl_config) VALUES (3, 'sensitive_strategy', '{}')"
+    )
 
     # Create screening runs
     for i in range(1, 4):
@@ -838,14 +865,26 @@ def db_path(tmp_path: Path) -> Path:
         )
 
     # Sweep results (screening)
-    conn.execute("INSERT INTO sweep_results (run_id, parameters, sharpe_ratio, total_return) VALUES (1, '{\"rsi_period\": 14}', 2.0, 50.0)")
-    conn.execute("INSERT INTO sweep_results (run_id, parameters, sharpe_ratio, total_return) VALUES (2, '{\"ema_period\": 20}', 1.5, 30.0)")
-    conn.execute("INSERT INTO sweep_results (run_id, parameters, sharpe_ratio, total_return) VALUES (3, '{\"period\": 10}', 3.0, 100.0)")
+    conn.execute(
+        "INSERT INTO sweep_results (run_id, parameters, sharpe_ratio, total_return) VALUES (1, '{\"rsi_period\": 14}', 2.0, 50.0)"
+    )
+    conn.execute(
+        "INSERT INTO sweep_results (run_id, parameters, sharpe_ratio, total_return) VALUES (2, '{\"ema_period\": 20}', 1.5, 30.0)"
+    )
+    conn.execute(
+        "INSERT INTO sweep_results (run_id, parameters, sharpe_ratio, total_return) VALUES (3, '{\"period\": 10}', 3.0, 100.0)"
+    )
 
     # Backtest results (validation)
-    conn.execute("INSERT INTO backtest_results (run_id, total_return, sharpe_ratio) VALUES (4, 45.0, 1.8)")
-    conn.execute("INSERT INTO backtest_results (run_id, total_return, sharpe_ratio) VALUES (5, 40.0, 2.0)")
-    conn.execute("INSERT INTO backtest_results (run_id, total_return, sharpe_ratio) VALUES (6, 30.0, 1.0)")
+    conn.execute(
+        "INSERT INTO backtest_results (run_id, total_return, sharpe_ratio) VALUES (4, 45.0, 1.8)"
+    )
+    conn.execute(
+        "INSERT INTO backtest_results (run_id, total_return, sharpe_ratio) VALUES (5, 40.0, 2.0)"
+    )
+    conn.execute(
+        "INSERT INTO backtest_results (run_id, total_return, sharpe_ratio) VALUES (6, 30.0, 1.0)"
+    )
 
     conn.commit()
     conn.close()
@@ -916,7 +955,7 @@ def test_mock_metrics_use_decimal_format() -> None:
         strategy_name="test",
         total_return=0.052,  # 5.2%
         max_drawdown=0.085,  # 8.5%
-        win_rate=0.595,      # 59.5%
+        win_rate=0.595,  # 59.5%
     )
     metrics = result.to_metrics_dict()
     # All percentage-like values should be in decimal form (0-1 range)
@@ -933,18 +972,18 @@ In `vibe_quant/validation/runner.py:396-408`, change the mock values:
 result = ValidationResult(
     run_id=run_id,
     strategy_name=strategy_name,
-    total_return=0.052,       # was 5.2
-    sharpe_ratio=1.35,        # ratios stay as-is
+    total_return=0.052,  # was 5.2
+    sharpe_ratio=1.35,  # ratios stay as-is
     sortino_ratio=1.85,
-    max_drawdown=0.085,       # was 8.5
+    max_drawdown=0.085,  # was 8.5
     total_trades=42,
     winning_trades=25,
     losing_trades=17,
-    win_rate=0.595,           # was 59.5
+    win_rate=0.595,  # was 59.5
     profit_factor=1.47,
-    total_fees=0.00126,       # was 126.0 (now as fraction of equity)
-    total_funding=0.00045,    # was 45.0
-    total_slippage=0.00023,   # was 23.0
+    total_fees=0.00126,  # was 126.0 (now as fraction of equity)
+    total_funding=0.00045,  # was 45.0
+    total_slippage=0.00023,  # was 23.0
     execution_time_seconds=0.0,
 )
 ```
@@ -994,6 +1033,7 @@ def test_paper_config_does_not_write_secrets_to_disk() -> None:
         testnet=True,
     )
     import json
+
     content = json.loads(config_path.read_text())
     assert "secret_key" not in json.dumps(content)
     assert "secret_secret" not in json.dumps(content)
@@ -1076,6 +1116,7 @@ Fixes: vibe-quant-v2y, vibe-quant-bsg, vibe-quant-nhj, vibe-quant-50m
 def test_insert_klines_returns_actual_count(tmp_path: Path) -> None:
     """insert_klines should return actual inserted count, not input count."""
     from vibe_quant.data.archive import RawDataArchive
+
     archive = RawDataArchive(tmp_path / "test.db")
 
     klines = [
@@ -1110,7 +1151,13 @@ cursor = self.conn.execute("SELECT changes()")
 Better approach — count rows before and after:
 
 ```python
-def insert_klines(self, symbol: str, interval: str, klines: list[tuple[object, ...]], source: str = "binance_vision") -> int:
+def insert_klines(
+    self,
+    symbol: str,
+    interval: str,
+    klines: list[tuple[object, ...]],
+    source: str = "binance_vision",
+) -> int:
     before = self.conn.execute(
         "SELECT COUNT(*) FROM raw_klines WHERE symbol = ? AND interval = ?",
         (symbol, interval),
@@ -1201,7 +1248,9 @@ git commit -m "fix(data): log exceptions instead of silently swallowing (vibe-qu
 In `vibe_quant/ethereal/ingestion.py`:
 
 ```python
-def download_klines(symbol, timeframe, start_date, end_date, timeout=30, client: httpx.Client | None = None) -> list[tuple]:
+def download_klines(
+    symbol, timeframe, start_date, end_date, timeout=30, client: httpx.Client | None = None
+) -> list[tuple]:
     own_client = client is None
     if own_client:
         client = httpx.Client(timeout=timeout)
@@ -1263,6 +1312,7 @@ def test_default_start_date_leap_day() -> None:
 
     # Our fix should handle it
     from vibe_quant.ethereal.ingestion import _safe_years_ago
+
     result = _safe_years_ago(end_date, 2)
     assert result == date(2022, 2, 28)  # Falls back to Feb 28
 ```

@@ -148,17 +148,20 @@ async def test_equity_curve_uses_actual_starting_balance(
     state_mgr.save_backtest_result(run_id, {"starting_balance": 50_000.0})
 
     # Save a trade so equity curve has data
-    state_mgr.save_trade(run_id, {
-        "symbol": "ETHUSDT",
-        "direction": "long",
-        "leverage": 1,
-        "entry_time": "2025-02-01T00:00:00",
-        "exit_time": "2025-02-02T00:00:00",
-        "entry_price": 3000.0,
-        "exit_price": 3100.0,
-        "quantity": 1.0,
-        "net_pnl": 100.0,
-    })
+    state_mgr.save_trade(
+        run_id,
+        {
+            "symbol": "ETHUSDT",
+            "direction": "long",
+            "leverage": 1,
+            "entry_time": "2025-02-01T00:00:00",
+            "exit_time": "2025-02-02T00:00:00",
+            "entry_price": 3000.0,
+            "exit_price": 3100.0,
+            "quantity": 1.0,
+            "net_pnl": 100.0,
+        },
+    )
 
     r = await client.get(f"/api/results/runs/{run_id}/equity-curve")
     assert r.status_code == 200

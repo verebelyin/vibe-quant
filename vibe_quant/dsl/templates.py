@@ -125,37 +125,37 @@ ON_RESET_LINES: tuple[str, ...] = _lines(
 
 # Built after the strategy's own indicators by ``_build_indicators`` (vibe-quant-9sost).
 BUILD_SIZING_ATR_LINES: tuple[str, ...] = _lines(
-    '''
+    """
     # Sizing ATR: built only when sizing_mode="atr" (a risk run reads nothing new)
     self._sizing_atr = None
     if getattr(self.config, 'sizing_mode', 'risk') == 'atr':
         from vibe_quant.dsl.nt_indicators import WilderAverageTrueRange as _SizingATR
         self._sizing_atr = _SizingATR(self.config.sizing_atr_period)
-    '''
+    """
 )
 
 # on_start registers the sizing ATR LAST, after the strategy's own indicators (cold mode only).
 ON_START_REGISTER_SIZING_ATR_LINES: tuple[str, ...] = _lines(
-    '''
+    """
     if self._sizing_atr is not None:
         self.register_indicator_for_bars(self.primary_bar_type, self._sizing_atr)
-    '''
+    """
 )
 
 # Appended to the generated on_start (after indicator registration).
 ON_START_RECOVERY_LINES: tuple[str, ...] = _lines(
-    '''
+    """
     # Restart recovery: adopt an already-open position (reconciled into the
     # cache) and make sure it carries SL/TP; ATR-based levels wait for warmup.
     self._sync_position_state()
     if self._position_open and not self._ensure_protection():
         self._rearm_protection = True
-    '''
+    """
 )
 
 # Inserted in the generated on_start right after the bar subscriptions.
 ON_START_OUTBOX_LINES: tuple[str, ...] = _lines(
-    '''
+    """
     # Command outbox: queued commands are released by this instrument's OWN
     # next trade tick / detail bar, never by another symbol's data event.
     _release = getattr(self.config, 'command_release', '')
@@ -184,7 +184,7 @@ ON_START_OUTBOX_LINES: tuple[str, ...] = _lines(
         raise ValueError("maker_offset_ticks must be >= 1")
     if self._post_only and self.config.maker_entry_timeout_bars < 1:
         raise ValueError("maker_entry_timeout_bars must be >= 1")
-    '''
+    """
 )
 
 ON_TRADE_TICK_LINES: tuple[str, ...] = _lines(
@@ -202,7 +202,7 @@ ON_TRADE_TICK_LINES: tuple[str, ...] = _lines(
 
 # ``__init__`` state, indented into the generated ``__init__``.
 WARM_INIT_LINES: tuple[str, ...] = _lines(
-    '''
+    """
     # Paper warm seam: {bar type: last fed ts_event}; None = off (backtests, cold paper)
     self._warm_wm: dict | None = None
     self._warm_inds: dict = {}
@@ -220,7 +220,7 @@ WARM_INIT_LINES: tuple[str, ...] = _lines(
     self._warm_late_gap_bars = 0
     # Node seam: fn(bar_type, wm, ts) schedules an off-loop REST fetch of the bars in (wm, ts)
     self._warm_request_topup = None
-    '''
+    """
 )
 
 WARM_METHODS_LINES: tuple[str, ...] = _lines(
@@ -1200,27 +1200,27 @@ REVERSAL_INTENT_LINES: tuple[str, ...] = _lines(
 )
 
 REVERSE_INIT_LINES: tuple[str, ...] = _lines(
-    '''
+    """
     # position_mode "reverse": the pending reversal and how many were abandoned
     self._intent: ReversalIntent | None = None
     self._reverse_dropped = 0
-    '''
+    """
 )
 
 ON_START_REVERSE_LINES: tuple[str, ...] = _lines(
-    '''
+    """
     if self._post_only:
         # the reversal entry is a market order sent on the exit fill; a resting maker entry
         # has no such instant
         raise ValueError("position_mode='reverse' needs entry_order='market', not 'post_only'")
-    '''
+    """
 )
 
 REVERSE_BAR_LINES: tuple[str, ...] = _lines(
-    '''
+    """
     # position_mode "reverse": a reversal whose exit has not filled by this bar is abandoned
     self._expire_reversal(bar)
-    '''
+    """
 )
 
 REVERSE_METHODS_LINES: tuple[str, ...] = _lines(
@@ -1368,7 +1368,7 @@ ON_RESET_REVERSE_LINES: tuple[str, ...] = (*ON_RESET_LINES, "    self._intent = 
 # ---------------------------------------------------------------------------
 
 SIGNAL_LEVEL_INIT_LINES: tuple[str, ...] = _lines(
-    '''
+    """
     # signal_level stop/target: the level snapshot of the entry being sized (pending) and of the open
     # position (owned from PositionOpened until PositionClosed); refreshes rejected for invalid levels
     self._signal_levels_on = True
@@ -1376,15 +1376,15 @@ SIGNAL_LEVEL_INIT_LINES: tuple[str, ...] = _lines(
     self._levels: tuple[float | None, float | None] | None = None
     self._refresh_invalid = 0
     self._sizing_now = False
-    '''
+    """
 )
 
 ON_START_SIGNAL_LEVEL_LINES: tuple[str, ...] = _lines(
-    '''
+    """
     if self._post_only:
         # the levels belong to the market entry that fills the position they protect
         raise ValueError("signal_level stops/targets need entry_order='market', not 'post_only'")
-    '''
+    """
 )
 
 SIGNAL_LEVEL_METHODS_LINES: tuple[str, ...] = _lines(
@@ -1545,6 +1545,7 @@ REVERSAL_INTENT_SIGNAL_LEVEL_LINES: tuple[str, ...] = _swap_once(
     f"    created_ts: int\n    levels: {_LEVELS_TYPE}  # signal_level snapshot taken on the reversal's submit bar",
 )
 
+
 def _drop_method(lines: tuple[str, ...], name: str) -> tuple[str, ...]:
     """Remove the method ``name`` (which must occur exactly once, at column 0)."""
     text = "\n".join(lines)
@@ -1630,4 +1631,7 @@ ON_EVENT_REVERSE_SIGNAL_LEVEL_LINES: tuple[str, ...] = _signal_level_event(ON_EV
 
 _RESET_SIGNAL_LEVEL = ("    self._levels = None", "    self._pending_levels = None")
 ON_RESET_SIGNAL_LEVEL_LINES: tuple[str, ...] = (*ON_RESET_LINES, *_RESET_SIGNAL_LEVEL)
-ON_RESET_REVERSE_SIGNAL_LEVEL_LINES: tuple[str, ...] = (*ON_RESET_REVERSE_LINES, *_RESET_SIGNAL_LEVEL)
+ON_RESET_REVERSE_SIGNAL_LEVEL_LINES: tuple[str, ...] = (
+    *ON_RESET_REVERSE_LINES,
+    *_RESET_SIGNAL_LEVEL,
+)

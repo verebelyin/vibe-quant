@@ -457,10 +457,13 @@ class TestExpectedMaxExactFormula:
     def test_emax_n2_matches_paper(self, dsr: DeflatedSharpeRatio) -> None:
         """For N=2, exact E[max(Z)] ≈ 0.5198 (Gumbel gives 0.6052 = 16% error)."""
         from statistics import NormalDist
+
         gamma = EULER_MASCHERONI
         _norm = NormalDist(0, 1)
         N = 2
-        expected = (1 - gamma) * _norm.inv_cdf(1 - 1/N) + gamma * _norm.inv_cdf(1 - 1/(N * math.e))
+        expected = (1 - gamma) * _norm.inv_cdf(1 - 1 / N) + gamma * _norm.inv_cdf(
+            1 - 1 / (N * math.e)
+        )
 
         # Access the static method directly
         result = DeflatedSharpeRatio._expected_max_sharpe(N)
@@ -471,10 +474,13 @@ class TestExpectedMaxExactFormula:
     def test_emax_n100_matches_paper(self, dsr: DeflatedSharpeRatio) -> None:
         """For N=100, exact E[max(Z)] ≈ 2.5306 (Gumbel gives 2.6783 = 6% error)."""
         from statistics import NormalDist
+
         gamma = EULER_MASCHERONI
         _norm = NormalDist(0, 1)
         N = 100
-        expected = (1 - gamma) * _norm.inv_cdf(1 - 1/N) + gamma * _norm.inv_cdf(1 - 1/(N * math.e))
+        expected = (1 - gamma) * _norm.inv_cdf(1 - 1 / N) + gamma * _norm.inv_cdf(
+            1 - 1 / (N * math.e)
+        )
 
         result = DeflatedSharpeRatio._expected_max_sharpe(N)
         assert abs(result - expected) < 0.01, (
@@ -484,10 +490,13 @@ class TestExpectedMaxExactFormula:
     def test_emax_n1000_within_1pct(self, dsr: DeflatedSharpeRatio) -> None:
         """For N=1000, result within 1% of paper's exact formula."""
         from statistics import NormalDist
+
         gamma = EULER_MASCHERONI
         _norm = NormalDist(0, 1)
         N = 1000
-        expected = (1 - gamma) * _norm.inv_cdf(1 - 1/N) + gamma * _norm.inv_cdf(1 - 1/(N * math.e))
+        expected = (1 - gamma) * _norm.inv_cdf(1 - 1 / N) + gamma * _norm.inv_cdf(
+            1 - 1 / (N * math.e)
+        )
 
         result = DeflatedSharpeRatio._expected_max_sharpe(N)
         pct_err = abs(result - expected) / expected * 100
@@ -512,11 +521,15 @@ class TestTrialsSharpeVariance:
 
         # Without trial variance (theoretical 1/(T-1))
         result_default = dsr.calculate(
-            observed_sharpe=1.0, num_trials=N, num_observations=T,
+            observed_sharpe=1.0,
+            num_trials=N,
+            num_observations=T,
         )
         # With 3x theoretical variance
         result_high = dsr.calculate(
-            observed_sharpe=1.0, num_trials=N, num_observations=T,
+            observed_sharpe=1.0,
+            num_trials=N,
+            num_observations=T,
             trials_sharpe_variance=3.0 / (T - 1),
         )
         assert result_high.expected_max_sharpe > result_default.expected_max_sharpe, (
@@ -527,6 +540,7 @@ class TestTrialsSharpeVariance:
     def test_trial_variance_matches_paper_formula(self, dsr: DeflatedSharpeRatio) -> None:
         """SR₀ = sqrt(V_emp) × maxZ(N) when mean_sr=0."""
         from statistics import NormalDist
+
         gamma = EULER_MASCHERONI
         _norm = NormalDist(0, 1)
 
@@ -535,11 +549,13 @@ class TestTrialsSharpeVariance:
         V_emp = 0.02  # Empirical variance of trial Sharpes
 
         result = dsr.calculate(
-            observed_sharpe=1.0, num_trials=N, num_observations=T,
+            observed_sharpe=1.0,
+            num_trials=N,
+            num_observations=T,
             trials_sharpe_variance=V_emp,
         )
 
-        maxZ = (1 - gamma) * _norm.inv_cdf(1 - 1/N) + gamma * _norm.inv_cdf(1 - 1/(N * math.e))
+        maxZ = (1 - gamma) * _norm.inv_cdf(1 - 1 / N) + gamma * _norm.inv_cdf(1 - 1 / (N * math.e))
         expected_sr0 = math.sqrt(V_emp) * maxZ
 
         assert abs(result.expected_max_sharpe - expected_sr0) < 1e-6, (
@@ -552,11 +568,15 @@ class TestTrialsSharpeVariance:
         N = 50
 
         result_none = dsr.calculate(
-            observed_sharpe=1.0, num_trials=N, num_observations=T,
+            observed_sharpe=1.0,
+            num_trials=N,
+            num_observations=T,
             trials_sharpe_variance=None,
         )
         result_theoretical = dsr.calculate(
-            observed_sharpe=1.0, num_trials=N, num_observations=T,
+            observed_sharpe=1.0,
+            num_trials=N,
+            num_observations=T,
             trials_sharpe_variance=1.0 / (T - 1),
         )
         assert abs(result_none.expected_max_sharpe - result_theoretical.expected_max_sharpe) < 1e-10
@@ -570,11 +590,15 @@ class TestTrialsSharpeVariance:
 
         # With theoretical variance: should pass
         result_thin = dsr.calculate(
-            observed_sharpe=sr, num_trials=N, num_observations=T,
+            observed_sharpe=sr,
+            num_trials=N,
+            num_observations=T,
         )
         # With 5x empirical variance (fat-tailed crypto): should be harder
         result_fat = dsr.calculate(
-            observed_sharpe=sr, num_trials=N, num_observations=T,
+            observed_sharpe=sr,
+            num_trials=N,
+            num_observations=T,
             trials_sharpe_variance=5.0 / (T - 1),
         )
         # Fat-tail version should have higher p-value (less significant)

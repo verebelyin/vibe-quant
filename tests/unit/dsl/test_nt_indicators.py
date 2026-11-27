@@ -39,8 +39,14 @@ def _ohlc(n: int = _N, seed: int = 7) -> pd.DataFrame:
 
 def _bar(h: float, low: float, c: float, i: int) -> Bar:
     return Bar(
-        bar_type=_BT, open=Price(c, 2), high=Price(h, 2), low=Price(low, 2), close=Price(c, 2),
-        volume=Quantity.from_str("1"), ts_event=i, ts_init=i,
+        bar_type=_BT,
+        open=Price(c, 2),
+        high=Price(h, 2),
+        low=Price(low, 2),
+        close=Price(c, 2),
+        volume=Quantity.from_str("1"),
+        ts_event=i,
+        ts_init=i,
     )
 
 
@@ -215,8 +221,12 @@ def test_compiled_source_imports_the_standard_classes() -> None:
     from vibe_quant.dsl.parser import validate_strategy_dict
 
     dsl: dict[str, Any] = {
-        "name": "std_defs", "timeframe": "1h",
-        "indicators": {"rsi": {"type": "RSI", "period": 14}, "bb": {"type": "BBANDS", "period": 20}},
+        "name": "std_defs",
+        "timeframe": "1h",
+        "indicators": {
+            "rsi": {"type": "RSI", "period": 14},
+            "bb": {"type": "BBANDS", "period": 20},
+        },
         "entry_conditions": {"long": ["rsi < 30"]},
         "stop_loss": {"type": "fixed_pct", "percent": 2.0},
         "take_profit": {"type": "fixed_pct", "percent": 4.0},
@@ -252,7 +262,8 @@ class _AtrRecorder:
 
 def test_sizing_atr_is_dsl_atr() -> None:
     dsl: dict[str, Any] = {
-        "name": "sizing_is_dsl_atr", "timeframe": "1h",
+        "name": "sizing_is_dsl_atr",
+        "timeframe": "1h",
         "indicators": {"atr": {"type": "ATR", "period": 14}},
         "entry_conditions": {"long": ["atr > 1000000"]},
         "stop_loss": {"type": "fixed_pct", "percent": 2.0},

@@ -68,9 +68,7 @@ def _ema(x: np.ndarray, n: int) -> np.ndarray:
 
 def _true_range(high: np.ndarray, low: np.ndarray, close: np.ndarray) -> np.ndarray:
     prev_close = np.concatenate([[math.nan], close[:-1]])
-    return np.maximum(
-        np.maximum(high - low, np.abs(high - prev_close)), np.abs(low - prev_close)
-    )
+    return np.maximum(np.maximum(high - low, np.abs(high - prev_close)), np.abs(low - prev_close))
 
 
 def _cross_up(left: np.ndarray, right: np.ndarray) -> np.ndarray:

@@ -39,7 +39,7 @@ def test_strip_header_removes_auto_generated_docstring() -> None:
         '"""AUTO-GENERATED FROM EXTRACTION 42 ON 2026-01-01T00:00:00+00:00 — review.\n'
         "\n"
         "RANGES: period=llm\n"
-        'Display: My Ind\n'
+        "Display: My Ind\n"
         '"""\n'
         "\n"
         "from __future__ import annotations\n"
@@ -108,9 +108,7 @@ def test_write_promoted_plugin_refuses_collision(
     assert (plugins / "proposed_x.py").exists()
 
 
-def test_write_promoted_plugin_not_found(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_write_promoted_plugin_not_found(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _seed_plugins(tmp_path, monkeypatch)
     with pytest.raises(PromoteError) as excinfo:
         write_promoted_plugin(name="GHOST")
@@ -145,9 +143,7 @@ def test_bd_remember_missing_binary_returns_false(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(indicator_scaffold.shutil, "which", lambda _b: None)
-    ok, msg = bd_remember_indicator(
-        name="X", extraction_id=1, source_url="http://x"
-    )
+    ok, msg = bd_remember_indicator(name="X", extraction_id=1, source_url="http://x")
     assert ok is False
     assert "not on PATH" in msg
 
@@ -215,9 +211,7 @@ def test_bd_remember_returns_false_on_nonzero_exit(
         stderr = "bd error: nope"
 
     monkeypatch.setattr(indicator_scaffold.shutil, "which", lambda _b: "/usr/bin/bd")
-    monkeypatch.setattr(
-        indicator_scaffold.subprocess, "run", lambda *_a, **_kw: FakeProc()
-    )
+    monkeypatch.setattr(indicator_scaffold.subprocess, "run", lambda *_a, **_kw: FakeProc())
     ok, msg = bd_remember_indicator(name="X", extraction_id=1, source_url=None)
     assert ok is False
     assert "nope" in msg
@@ -234,9 +228,7 @@ def _init_repo(tmp_path: Path) -> Path:
     sp.run(["git", "-C", str(tmp_path), "config", "user.name", "t"], check=True)
     (tmp_path / "README").write_text("seed\n")
     sp.run(["git", "-C", str(tmp_path), "add", "README"], check=True)
-    sp.run(
-        ["git", "-C", str(tmp_path), "commit", "-q", "-m", "seed"], check=True
-    )
+    sp.run(["git", "-C", str(tmp_path), "commit", "-q", "-m", "seed"], check=True)
     return tmp_path
 
 
@@ -318,9 +310,7 @@ def test_git_commit_promotion_reverts_staging_on_commit_failure(
 # ---------- promote_indicator orchestrator ----------
 
 
-def test_promote_indicator_happy_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_promote_indicator_happy_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     plugins = _seed_plugins(tmp_path, monkeypatch)
     (plugins / "proposed_demo.py").write_text(
         '"""AUTO-GENERATED FROM EXTRACTION 7 ON x — review."""\nFOO=1\n'

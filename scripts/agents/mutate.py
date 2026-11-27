@@ -167,7 +167,10 @@ _METHOD_SWAPS: tuple[tuple[re.Pattern[str], Mapping[str, str]], ...] = (
     (re.compile(r"\.(idxmin|idxmax)\("), {"idxmin": "idxmax", "idxmax": "idxmin"}),
     (re.compile(r"\b(floor|ceil)\b"), {"floor": "ceil", "ceil": "floor"}),
     (re.compile(r"\b(any|all)\("), {"any": "all", "all": "any"}),
-    (re.compile(r"\b(startswith|endswith)\("), {"startswith": "endswith", "endswith": "startswith"}),
+    (
+        re.compile(r"\b(startswith|endswith)\("),
+        {"startswith": "endswith", "endswith": "startswith"},
+    ),
     (re.compile(r"\.(head|tail)\("), {"head": "tail", "tail": "head"}),
 )
 # A call keyword starts right after `(` or `,`; its VALUE is found by bracket counting below
@@ -416,7 +419,9 @@ def normalize_command(cmd: Sequence[str]) -> tuple[list[str], dict[str, str]]:
         key, _, value = out.pop(0).partition("=")
         if key != "PYTHONPATH":
             env[key] = value
-    if out and (out[0] in PYTEST_NAMES or (out[0].endswith(".py") and Path(out[0]).name.startswith("test_"))):
+    if out and (
+        out[0] in PYTEST_NAMES or (out[0].endswith(".py") and Path(out[0]).name.startswith("test_"))
+    ):
         out = [".venv/bin/python", "-m", "pytest", *(out[1:] if out[0] in PYTEST_NAMES else out)]
     return out, env
 
@@ -521,7 +526,9 @@ def kill_kind(message: str) -> str:
 
 
 # pytest's final line: counts then the wall time ("1 skipped in 0.01s" has no "passed")
-_SUMMARY_LINE = re.compile(r"(?:\b\d+ (?:passed|failed|skipped|deselected|errors?)\b|no tests ran).* in [\d.]+s\b")
+_SUMMARY_LINE = re.compile(
+    r"(?:\b\d+ (?:passed|failed|skipped|deselected|errors?)\b|no tests ran).* in [\d.]+s\b"
+)
 _SUMMARY_COUNTS = (
     ("ran", re.compile(r"(\d+) passed\b")),
     ("skipped", re.compile(r"(\d+) skipped\b")),
@@ -708,11 +715,20 @@ def template_code_lines(source: str) -> dict[int, set[int]]:
         return {}
     found: dict[int, set[int]] = {}
     for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_lines"):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_lines"
+        ):
             continue
         for arg in node.args:
             end = getattr(arg, "end_lineno", None)
-            if not (isinstance(arg, ast.Constant) and isinstance(arg.value, str) and end and end > arg.lineno):
+            if not (
+                isinstance(arg, ast.Constant)
+                and isinstance(arg.value, str)
+                and end
+                and end > arg.lineno
+            ):
                 continue
             # the body's line n (1-based) is source line arg.lineno + n - 1; a body that does not
             # parse as Python counts as all code
@@ -733,7 +749,12 @@ def string_lines(source: str, *, templates: bool = True) -> set[int]:
     lines: set[int] = set()
     for node in ast.walk(tree):
         end = getattr(node, "end_lineno", None)
-        if isinstance(node, ast.Constant) and isinstance(node.value, str) and end and end > node.lineno:
+        if (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and end
+            and end > node.lineno
+        ):
             lines.update(range(node.lineno, end + 1))
     if templates:
         for code in template_code_lines(source).values():
@@ -938,9 +959,7 @@ _FSTRING_ESCAPES = {
 }  # fmt: skip
 
 
-def _fstring_text(
-    segment: str, base: int, raw: bool
-) -> list[tuple[str, int, int]] | None:
+def _fstring_text(segment: str, base: int, raw: bool) -> list[tuple[str, int, int]] | None:
     """(char, source index, source width) for one f-string constant slice of a literal body:
     `{{`/`}}` decode to one brace and a backslash escape to the char it names. None on an
     escape this does not decode, or a backslash that ends the slice."""
@@ -1180,9 +1199,7 @@ def diff_mutants(repo: Path, base: str, glob: str, limit: int) -> list[Mutant]:
             if lineno in prose[path]:
                 continue
             indent = deletable[path].get(lineno)
-        by_file.setdefault(path, []).extend(
-            line_mutants(path, lineno, text, source, indent)
-        )
+        by_file.setdefault(path, []).extend(line_mutants(path, lineno, text, source, indent))
     return _select(by_file, limit)
 
 
@@ -1215,9 +1232,7 @@ def changed_test_files(repo: Path, base: str) -> list[str]:
         capture_output=True, text=True, check=True,
     ).stdout  # fmt: skip
     names = {line for line in (out + untracked).splitlines() if line}
-    return sorted(
-        name for name in names if _TEST_FILE_RE.match(name) and (repo / name).is_file()
-    )
+    return sorted(name for name in names if _TEST_FILE_RE.match(name) and (repo / name).is_file())
 
 
 def imported_symbols(source: str) -> list[tuple[str, str | None]]:
@@ -1351,7 +1366,9 @@ def _compare_mutants(
     not: the round's added test (or its fixture) stopped discriminating. This is maker step 8
     of a prune job - `mutate.py --compare-rev <base> -- ...` answers it in one command.
     """
-    (base_dir, base_cmd, base_env, base_pytest), (head_dir, head_cmd, head_env, head_pytest) = prepared
+    (base_dir, base_cmd, base_env, base_pytest), (head_dir, head_cmd, head_env, head_pytest) = (
+        prepared
+    )
     lost = errors = 0
     for mutant in mutants:
         states: dict[str, str] = {}
@@ -1482,9 +1499,7 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
     return code
 
 
-def _main(
-    argv: Sequence[str] | None, run: RunFn | None, on_repo: Callable[[Path], None]
-) -> int:
+def _main(argv: Sequence[str] | None, run: RunFn | None, on_repo: Callable[[Path], None]) -> int:
     parser = argparse.ArgumentParser(
         prog="mutate.py",
         description="One-command mutation check",
@@ -1508,9 +1523,10 @@ def _main(
     source.add_argument("--file", help="repo-relative file to mutate")
     source.add_argument("--spec", help="JSON list of {name, file, old, new}: inline or a file path")
     source.add_argument(
-        "--auto-diff", metavar="BASE",
+        "--auto-diff",
+        metavar="BASE",
         help="generate mutants on the lines added since BASE (branchy lines first, stride-"
-             "sampled per file; min/max, method swaps, keyword -> None, float x10)",
+        "sampled per file; min/max, method swaps, keyword -> None, float x10)",
     )
     parser.add_argument(
         "--max", type=int, default=8,
@@ -1533,7 +1549,8 @@ def _main(
     )  # fmt: skip
     parser.add_argument("--timeout", type=float, default=TOOL_TIMEOUT, help="seconds per run")
     parser.add_argument(
-        "--quiet-kills", action="store_true",
+        "--quiet-kills",
+        action="store_true",
         help="do not print each kill's first failing test and assertion/error line",
     )
     parser.add_argument("command", nargs=argparse.REMAINDER, help="test command, after `--`")
@@ -1629,15 +1646,22 @@ def _main(
                 return 2
             env = dict(os.environ)
             env["PYTHONPATH"] = str(dest)
-            env["PYTHONDONTWRITEBYTECODE"] = "1"  # else a same-second, same-size mutation reuses a stale .pyc
-            env.pop("PYTEST_ADDOPTS", None)  # the command is the spec; a gate's -q -rfE hides the summary
+            env["PYTHONDONTWRITEBYTECODE"] = (
+                "1"  # else a same-second, same-size mutation reuses a stale .pyc
+            )
+            env.pop(
+                "PYTEST_ADDOPTS", None
+            )  # the command is the spec; a gate's -q -rfE hides the summary
             env.update(extra_env)
             phase_cmd = resolve_executable(cmd, repo, dest)
             baseline = runner(phase_cmd, dest, env, args.timeout)
             if baseline.error or baseline.timed_out or baseline.exit_code != 0:
                 print("ERROR baseline: tests fail without mutation")
                 if baseline.timed_out:
-                    print(f"baseline timed out after {args.timeout:g}s (raise --timeout)", file=sys.stderr)
+                    print(
+                        f"baseline timed out after {args.timeout:g}s (raise --timeout)",
+                        file=sys.stderr,
+                    )
                 detail = (baseline.error or baseline.output).strip()
                 if detail:
                     print(detail[-2000:], file=sys.stderr)

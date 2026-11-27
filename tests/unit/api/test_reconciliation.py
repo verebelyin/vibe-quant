@@ -326,9 +326,7 @@ async def test_reconcile_reads_log_written_at_paper_node_default_path(
 ) -> None:
     """A session without ``logs_path`` reconciles the node's default-dir log."""
     ac, state, job_mgr = client
-    logs_field = next(
-        f for f in dataclasses.fields(PaperTradingConfig) if f.name == "logs_path"
-    )
+    logs_field = next(f for f in dataclasses.fields(PaperTradingConfig) if f.name == "logs_path")
     factory = logs_field.default_factory
     assert callable(factory)
     assert factory() == DEFAULT_PAPER_LOGS_PATH

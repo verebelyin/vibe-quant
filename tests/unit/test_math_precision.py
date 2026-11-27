@@ -186,11 +186,11 @@ def _reference_expected_max_sharpe(num_trials: int) -> float:
     if num_trials <= 1:
         return 0.0
     from statistics import NormalDist
+
     gamma = 0.5772156649015329  # Euler-Mascheroni
     norm = NormalDist(0, 1)
-    return (
-        (1 - gamma) * norm.inv_cdf(1 - 1 / num_trials)
-        + gamma * norm.inv_cdf(1 - 1 / (num_trials * math.e))
+    return (1 - gamma) * norm.inv_cdf(1 - 1 / num_trials) + gamma * norm.inv_cdf(
+        1 - 1 / (num_trials * math.e)
     )
 
 

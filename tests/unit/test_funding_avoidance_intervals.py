@@ -62,9 +62,7 @@ def _ms(iso: str) -> int:
 def _day_rows(day: str, step_h: int, days: int = 1, jitter_ms: int = 4) -> list[int]:
     """Archived funding times (ms, with exchange jitter) every ``step_h`` hours."""
     start = _ms(f"{day}T00:00:00")
-    return [
-        start + i * step_h * 3_600_000 + jitter_ms for i in range(days * 24 // step_h)
-    ]
+    return [start + i * step_h * 3_600_000 + jitter_ms for i in range(days * 24 // step_h)]
 
 
 def _archive(path: Path, rows: dict[str, list[tuple[int, int]]]) -> Path:
@@ -253,7 +251,9 @@ def test_gap_uses_previous_rows_interval(tmp_path: Path) -> None:
     _configure(_archive(tmp_path / "a.db", {"SOLUSDT": sol}))
     method = _method(5, 5, SOL)
 
-    assert is_funding_settlement(SOL, _ns("2022-11-13T06:00:00")) is True  # next row 8h would say False
+    assert (
+        is_funding_settlement(SOL, _ns("2022-11-13T06:00:00")) is True
+    )  # next row 8h would say False
     assert is_funding_settlement(SOL, _ns("2022-11-13T05:30:00")) is False
     assert method(_ns("2022-11-13T06:00:00")) is True
     assert method(_ns("2022-11-13T05:57:00")) is True  # 3 min before the 2h settlement
@@ -271,7 +271,9 @@ def test_gap_uses_previous_interval_when_next_is_shorter(tmp_path: Path) -> None
     _configure(_archive(tmp_path / "a.db", {"SOLUSDT": sol}))
     method = _method(5, 5, SOL)
 
-    assert is_funding_settlement(SOL, _ns("2022-11-13T02:00:00")) is False  # next row 2h would say True
+    assert (
+        is_funding_settlement(SOL, _ns("2022-11-13T02:00:00")) is False
+    )  # next row 2h would say True
     assert is_funding_settlement(SOL, _ns("2022-11-13T04:00:00")) is False
     assert is_funding_settlement(SOL, _ns("2022-11-13T08:00:00")) is True
     assert method(_ns("2022-11-13T04:00:00")) is False
@@ -320,7 +322,9 @@ def test_before_first_row_uses_8h_and_warns_once(
     assert "8h" in warnings[0].getMessage()
     caplog.clear()
     with caplog.at_level(logging.WARNING, logger=LOGGER):
-        assert is_funding_settlement(SOL, _ns("2025-06-01T12:00:00")) is True  # past last row: 4h, no warning
+        assert (
+            is_funding_settlement(SOL, _ns("2025-06-01T12:00:00")) is True
+        )  # past last row: 4h, no warning
     assert not [r for r in caplog.records if r.name == LOGGER]
 
 
@@ -356,7 +360,9 @@ def test_missing_archive_falls_back_to_8h(tmp_path: Path, caplog: pytest.LogCapt
     assert not missing.exists()
 
 
-def test_new_run_warns_again_after_configure(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_new_run_warns_again_after_configure(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     path = _hype_btc_archive(tmp_path)
     ts = _ns("2025-06-01T08:00:00")
     with caplog.at_level(logging.WARNING, logger=LOGGER):

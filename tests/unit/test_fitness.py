@@ -463,7 +463,12 @@ class TestEvaluatePopulation:
         chroms = [_make_chromosome() for _ in range(3)]
 
         def bt_fn(_: StrategyChromosome) -> dict[str, Any]:
-            return {"sharpe_ratio": 1.0, "max_drawdown": 0.1, "profit_factor": 1.5, "total_trades": 60}
+            return {
+                "sharpe_ratio": 1.0,
+                "max_drawdown": 0.1,
+                "profit_factor": 1.5,
+                "total_trades": 60,
+            }
 
         class _BrokenPool(Executor):
             def submit(self, *_args: object, **_kwargs: object) -> None:  # type: ignore[override]
@@ -564,6 +569,7 @@ class TestEdgeCases:
         # 0.35*0.2 + 0.25*1.0 + 0.20*0.0 + 0.20*0.333 = 0.07+0.25+0+0.0667 = 0.3867
         assert score == pytest.approx(0.3867, abs=1e-3)
 
+
 class TestSlTpPenalty:
     def test_no_penalty_balanced(self) -> None:
         """SL/TP ratio <= 5x → no penalty."""
@@ -602,7 +608,6 @@ class TestSlTpPenalty:
         pen = compute_sl_tp_penalty(sl_pct=0.59, tp_pct=10.55)
         assert pen == 0.0
 
-
     def test_min_trades_1m_constant(self) -> None:
         """MIN_TRADES_1M matches current policy (lowered to 50 for short windows)."""
         assert MIN_TRADES_1M >= MIN_TRADES
@@ -612,24 +617,36 @@ class TestSlTpPenalty:
         """DiscoveryConfig should auto-set min_trades=100 for 1m timeframe."""
         from vibe_quant.discovery.pipeline import DiscoveryConfig
 
-        cfg_1m = DiscoveryConfig(timeframe="1m", symbols=["BTCUSDT"], start_date="2026-01-01", end_date="2026-03-01")
+        cfg_1m = DiscoveryConfig(
+            timeframe="1m", symbols=["BTCUSDT"], start_date="2026-01-01", end_date="2026-03-01"
+        )
         assert cfg_1m.min_trades == MIN_TRADES_1M
 
-        cfg_4h = DiscoveryConfig(timeframe="4h", symbols=["BTCUSDT"], start_date="2026-01-01", end_date="2026-03-01")
+        cfg_4h = DiscoveryConfig(
+            timeframe="4h", symbols=["BTCUSDT"], start_date="2026-01-01", end_date="2026-03-01"
+        )
         assert cfg_4h.min_trades == MIN_TRADES
 
     def test_discovery_config_5m_keeps_default(self) -> None:
         """5m should NOT auto-upgrade to 100 trades (only sub-5m does)."""
         from vibe_quant.discovery.pipeline import DiscoveryConfig
 
-        cfg_5m = DiscoveryConfig(timeframe="5m", symbols=["BTCUSDT"], start_date="2026-01-01", end_date="2026-03-01")
+        cfg_5m = DiscoveryConfig(
+            timeframe="5m", symbols=["BTCUSDT"], start_date="2026-01-01", end_date="2026-03-01"
+        )
         assert cfg_5m.min_trades == MIN_TRADES  # 50, not 100
 
     def test_discovery_config_explicit_min_trades_override(self) -> None:
         """Explicit min_trades should NOT be overridden by auto-detection."""
         from vibe_quant.discovery.pipeline import DiscoveryConfig
 
-        cfg = DiscoveryConfig(timeframe="1m", min_trades=75, symbols=["BTCUSDT"], start_date="2026-01-01", end_date="2026-03-01")
+        cfg = DiscoveryConfig(
+            timeframe="1m",
+            min_trades=75,
+            symbols=["BTCUSDT"],
+            start_date="2026-01-01",
+            end_date="2026-03-01",
+        )
         assert cfg.min_trades == 75  # Should keep explicit value, not override to 100
 
     def test_fitness_result_is_frozen(self) -> None:

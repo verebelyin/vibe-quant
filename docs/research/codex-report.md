@@ -59,8 +59,10 @@ New tests:
 2. Archive an image so it lands under the archive dir, e.g. from a Python shell:
    ```python
    from vibe_quant.research.image_archive import download_images
-   paths = download_images(source="reddit", external_id="demo",
-                           image_urls=["<url-to-a-strategy-screenshot>"])
+
+   paths = download_images(
+       source="reddit", external_id="demo", image_urls=["<url-to-a-strategy-screenshot>"]
+   )
    print(paths)  # e.g. ['/…/data/archive/research_images/reddit/demo/0.png']
    ```
 3. Build a `RawItem` with `extras={"image_paths": paths, "comments": []}` (title/body
@@ -68,9 +70,18 @@ New tests:
    ```python
    from vibe_quant.research.extractor import get_default_extractor
    from vibe_quant.research.schema import RawItem
-   item = RawItem(source="reddit", external_id="demo", url="…", title="", body="",
-                  author=None, posted_at=None, score=None,
-                  extras={"image_paths": paths, "comments": []})
+
+   item = RawItem(
+       source="reddit",
+       external_id="demo",
+       url="…",
+       title="",
+       body="",
+       author=None,
+       posted_at=None,
+       score=None,
+       extras={"image_paths": paths, "comments": []},
+   )
    print(get_default_extractor().extract_all(item).results)
    ```
    The extractor argv gains `--allowedTools Read` and the prompt lists the absolute

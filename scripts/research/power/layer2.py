@@ -38,7 +38,10 @@ def _find_real_db() -> Path:
     try:
         common = subprocess.run(
             ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-            capture_output=True, text=True, check=True, cwd=here,
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=here,
         ).stdout.strip()
         return (Path(common).parent / "data" / "state" / "vibe_quant.db").resolve()
     except (OSError, subprocess.CalledProcessError):
@@ -201,9 +204,7 @@ def planted_chromosome() -> StrategyChromosome:
         entry_genes=[
             StrategyGene("RSI", {"period": 14.0}, ConditionType.CROSSES_BELOW, 30.0, None)
         ],
-        exit_genes=[
-            StrategyGene("RSI", {"period": 14.0}, ConditionType.CROSSES_ABOVE, 60.0, None)
-        ],
+        exit_genes=[StrategyGene("RSI", {"period": 14.0}, ConditionType.CROSSES_ABOVE, 60.0, None)],
         stop_loss_pct=4.0,
         take_profit_pct=8.0,
         direction=Direction.LONG,
@@ -255,24 +256,30 @@ class Profile:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "timeframe": self.timeframe, "window": self.window,
-            "plant_span": list(self.plant_span), "kline_start": self.kline_start,
+            "timeframe": self.timeframe,
+            "window": self.window,
+            "plant_span": list(self.plant_span),
+            "kline_start": self.kline_start,
             "chromosome": chromosome_to_serializable(self.chromosome),
             "chromosome_uid": self.chromosome.uid,
-            "plant_kw": dict(self.plant_kw), "direction": self.direction,
+            "plant_kw": dict(self.plant_kw),
+            "direction": self.direction,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Profile:
         start, end = data["plant_span"]
         return cls(
-            timeframe=data["timeframe"], window=data["window"], plant_span=(start, end),
+            timeframe=data["timeframe"],
+            window=data["window"],
+            plant_span=(start, end),
             kline_start=data["kline_start"],
             # the uid names the planted DSL (``genome_<uid>``): a round trip must keep it
             chromosome=replace(
                 serializable_to_chromosome(data["chromosome"]), uid=data["chromosome_uid"]
             ),
-            plant_kw=dict(data["plant_kw"]), direction=data["direction"],
+            plant_kw=dict(data["plant_kw"]),
+            direction=data["direction"],
         )
 
     @classmethod
@@ -283,20 +290,30 @@ class Profile:
 
 
 P4H = Profile(
-    timeframe=TIMEFRAME, window="W3", plant_span=(plant.PLANT_START, plant.PLANT_END),
-    kline_start=plant.PLANT_START, chromosome=planted_chromosome(),
+    timeframe=TIMEFRAME,
+    window="W3",
+    plant_span=(plant.PLANT_START, plant.PLANT_END),
+    kline_start=plant.PLANT_START,
+    chromosome=planted_chromosome(),
     plant_kw={
-        "bar_min": plant.BAR_MIN, "drift_bars": plant.DRIFT_BARS,
-        "rsi_period": plant.RSI_PERIOD, "rsi_level": plant.RSI_LEVEL,
+        "bar_min": plant.BAR_MIN,
+        "drift_bars": plant.DRIFT_BARS,
+        "rsi_period": plant.RSI_PERIOD,
+        "rsi_level": plant.RSI_LEVEL,
     },
     direction="both",
 )
 #: The 1d study: W6, LONG. ``chromosome`` is the 4h rule until the driver picks the 1d rule.
 P1D = Profile(
-    timeframe="1d", window="W6", plant_span=("2021-01-01", "2026-10-15"),
-    kline_start="2020-12-01", chromosome=planted_chromosome(),
+    timeframe="1d",
+    window="W6",
+    plant_span=("2021-01-01", "2026-10-15"),
+    kline_start="2020-12-01",
+    chromosome=planted_chromosome(),
     plant_kw={
-        "bar_min": 1440, "drift_bars": 6, "rsi_period": plant.RSI_PERIOD,
+        "bar_min": 1440,
+        "drift_bars": 6,
+        "rsi_period": plant.RSI_PERIOD,
         "rsi_level": plant.RSI_LEVEL,
     },
     direction="long",
@@ -430,7 +447,9 @@ def _sig_diff(want: dict[str, Any], got: dict[str, Any]) -> bool:
     for key in ("size", "mtime_ns"):
         if want[key] != got[key]:
             return True
-    return want["sha256"] is not None and got["sha256"] is not None and want["sha256"] != got["sha256"]
+    return (
+        want["sha256"] is not None and got["sha256"] is not None and want["sha256"] != got["sha256"]
+    )
 
 
 def compare_snapshot(
@@ -510,10 +529,22 @@ def run_worker(
         inp, out = Path(tmp) / "in.json", Path(tmp) / "out.json"
         inp.write_text(json.dumps({**payload, "root": str(root)}, default=_json_default))
         proc = subprocess.run(
-            [sys.executable, str(Path(__file__).resolve()), "_worker", kind,
-             "--in", str(inp), "--out", str(out)],
-            cwd=root, env=child_env(db, root / "logs"),
-            capture_output=True, text=True, timeout=timeout_s, check=False,
+            [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "_worker",
+                kind,
+                "--in",
+                str(inp),
+                "--out",
+                str(out),
+            ],
+            cwd=root,
+            env=child_env(db, root / "logs"),
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
         )
         if proc.returncode != 0 or not out.exists():
             tail = (proc.stderr or proc.stdout)[-1500:]
@@ -658,10 +689,22 @@ def measure_jobs(profile: Profile = P4H) -> list[dict[str, Any]]:
     train_start, train_end = train_window(profile)
     full_start, full_end = full_window(profile)
     return [
-        {"tag": "full", "dsl": planted_dsl(profile), "start": full_start, "end": full_end,
-         "collect": True, "bh": False},
-        {"tag": "train", "dsl": planted_dsl(profile), "start": train_start, "end": train_end,
-         "collect": True, "bh": True},
+        {
+            "tag": "full",
+            "dsl": planted_dsl(profile),
+            "start": full_start,
+            "end": full_end,
+            "collect": True,
+            "bh": False,
+        },
+        {
+            "tag": "train",
+            "dsl": planted_dsl(profile),
+            "start": train_start,
+            "end": train_end,
+            "collect": True,
+            "bh": True,
+        },
     ]
 
 
@@ -712,21 +755,38 @@ def build_one(
         # very threshold that marks a build non-converged below. A build that already met it
         # (btc2.0) keeps its phase-1 kappa, so old builds stay byte-identical.
         kappa, passes, l_end = plant.solve_kappa(
-            klines, delta, plant_start_ms=start_ms, plant_end_ms=end_ms, price_decimals=decimals,
-            refine_above=KAPPA_TOL, **profile.plant_kw,
+            klines,
+            delta,
+            plant_start_ms=start_ms,
+            plant_end_ms=end_ms,
+            price_decimals=decimals,
+            refine_above=KAPPA_TOL,
+            **profile.plant_kw,
         )
     result = plant.plant_drift(
-        klines, delta=delta, kappa=kappa, plant_start_ms=start_ms, plant_end_ms=end_ms,
-        price_decimals=decimals, **profile.plant_kw,
+        klines,
+        delta=delta,
+        kappa=kappa,
+        plant_start_ms=start_ms,
+        plant_end_ms=end_ms,
+        price_decimals=decimals,
+        **profile.plant_kw,
     )
     plant.write_scratch(root, result.klines, archive)
     rep = result.report
     ratio = math.exp(rep.l_max_abs)
     rec: dict[str, Any] = {
-        "k": k, "root": str(root), "delta": delta, "kappa": kappa, "kappa_passes": passes,
-        "l_end": rep.l_end, "converged": abs(rep.l_end) <= KAPPA_TOL,
-        "n_triggers": rep.n_triggers, "drift_minutes": rep.drift_minutes,
-        "l_max_abs": rep.l_max_abs, "price_ratio": ratio,
+        "k": k,
+        "root": str(root),
+        "delta": delta,
+        "kappa": kappa,
+        "kappa_passes": passes,
+        "l_end": rep.l_end,
+        "converged": abs(rep.l_end) <= KAPPA_TOL,
+        "n_triggers": rep.n_triggers,
+        "drift_minutes": rep.drift_minutes,
+        "l_max_abs": rep.l_max_abs,
+        "price_ratio": ratio,
         # plant.py has no hold_bars knob: a ratio over 3x is reported, not worked around.
         "price_ratio_gt_3": ratio > PRICE_RATIO_LIMIT,
         "built_at": _now(),
@@ -800,7 +860,9 @@ def guarded_rebuild(
             msg = f"DRIFTED rebuild of accepted build {acc['k']}: {'; '.join(drift)} (--force recalibrates)"
         elif not accept(rec):
             status, code = "not_calibrated", 2
-            msg = f"rebuild of accepted build {acc['k']} not accepted: train_S={rec.get('train_S')!r}"
+            msg = (
+                f"rebuild of accepted build {acc['k']} not accepted: train_S={rec.get('train_S')!r}"
+            )
         else:
             rec["accepted"] = True
             msg = f"rebuilt accepted build {acc['k']}: train_S={rec['train_S']} accepted=True"
@@ -892,20 +954,38 @@ def discovery_command(
     the CLI default is ``all`` (2026-11-23) and the recorded power numbers are top-K runs."""
     start, end = full_window(profile)
     cmd = [
-        sys.executable, "-m", "vibe_quant", "discovery",
-        "--run-id", str(run_id), "--db", str(db),
-        "--symbols", SYMBOL,
-        "--timeframe", profile.timeframe,
-        "--start-date", start,
-        "--end-date", end,
-        "--indicator-pool", "ROC,DONCHIAN,RSI,CCI,NATR",
-        "--population-size", str(pop),
-        "--max-generations", str(gens),
-        "--eval-windows", "2",
-        "--train-test-split", "0.8",
-        "--direction", profile.direction,
-        "--max-workers", "3",
-        "--seed", str(seed),
+        sys.executable,
+        "-m",
+        "vibe_quant",
+        "discovery",
+        "--run-id",
+        str(run_id),
+        "--db",
+        str(db),
+        "--symbols",
+        SYMBOL,
+        "--timeframe",
+        profile.timeframe,
+        "--start-date",
+        start,
+        "--end-date",
+        end,
+        "--indicator-pool",
+        "ROC,DONCHIAN,RSI,CCI,NATR",
+        "--population-size",
+        str(pop),
+        "--max-generations",
+        str(gens),
+        "--eval-windows",
+        "2",
+        "--train-test-split",
+        "0.8",
+        "--direction",
+        profile.direction,
+        "--max-workers",
+        "3",
+        "--seed",
+        str(seed),
     ]
     if seed_run is not None:
         cmd += ["--seed-from-run", str(seed_run)]
@@ -921,6 +1001,7 @@ def discover_command_fn(
 
     A value at its default is not passed, so the default 12x4 command stays a plain 3-arg call.
     """
+
     def command(run_id: int, db: Path, seed: int) -> list[str]:
         kwargs: dict[str, Any] = {}
         if pop != DEFAULT_POP:
@@ -963,8 +1044,13 @@ def create_run(db: Path, profile: Profile = P4H) -> int:
     try:
         return int(
             state.create_backtest_run(
-                strategy_id=None, run_mode="discovery", symbols=[SYMBOL],
-                timeframe=profile.timeframe, start_date=start, end_date=end, parameters={},
+                strategy_id=None,
+                run_mode="discovery",
+                symbols=[SYMBOL],
+                timeframe=profile.timeframe,
+                start_date=start,
+                end_date=end,
+                parameters={},
             )
         )
     finally:
@@ -985,24 +1071,37 @@ def create_seed_run(db: Path, profile: Profile = P4H) -> int:
     start, end = full_window(profile)
     notes = {
         "top_strategies": [
-            {"chromosome": chromosome_to_serializable(profile.chromosome),
-             "dsl": planted_dsl(profile)}
+            {
+                "chromosome": chromosome_to_serializable(profile.chromosome),
+                "dsl": planted_dsl(profile),
+            }
         ]
     }
     state = StateManager(db)
     try:
         run_id = int(
             state.create_backtest_run(
-                strategy_id=None, run_mode="discovery", symbols=[SYMBOL],
-                timeframe=profile.timeframe, start_date=start, end_date=end, parameters={},
+                strategy_id=None,
+                run_mode="discovery",
+                symbols=[SYMBOL],
+                timeframe=profile.timeframe,
+                start_date=start,
+                end_date=end,
+                parameters={},
             )
         )
         state.save_backtest_result(
             run_id,
             {
-                "total_return": 0.0, "sharpe_ratio": 0.0, "max_drawdown": 0.0,
-                "profit_factor": 0.0, "total_trades": 0, "skewness": 0.0, "kurtosis": 3.0,
-                "execution_time_seconds": 0.0, "notes": json.dumps(notes),
+                "total_return": 0.0,
+                "sharpe_ratio": 0.0,
+                "max_drawdown": 0.0,
+                "profit_factor": 0.0,
+                "total_trades": 0,
+                "skewness": 0.0,
+                "kurtosis": 3.0,
+                "execution_time_seconds": 0.0,
+                "notes": json.dumps(notes),
             },
         )
         state.update_backtest_run_status(run_id, "completed")
@@ -1034,8 +1133,12 @@ def run_discovery(
     timed_out = False
     with open(log, "w") as fh:
         proc = subprocess.Popen(
-            command_fn(run_id, db, seed), cwd=root, env=child_env(db, run_dir / "logs"),
-            stdout=fh, stderr=subprocess.STDOUT, start_new_session=True,
+            command_fn(run_id, db, seed),
+            cwd=root,
+            env=child_env(db, run_dir / "logs"),
+            stdout=fh,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
         )
         while proc.poll() is None:
             if time.monotonic() - started > timeout_s:
@@ -1054,8 +1157,13 @@ def run_discovery(
         conn.close()
     rec = classify_run(row, proc.returncode, timed_out, timeout_s)
     rec.update(
-        run_id=run_id, seed=seed, db=str(db), log=str(log), root=str(root),
-        wall_s=round(time.monotonic() - started, 1), finished_at=_now(),
+        run_id=run_id,
+        seed=seed,
+        db=str(db),
+        log=str(log),
+        root=str(root),
+        wall_s=round(time.monotonic() - started, 1),
+        finished_at=_now(),
     )
     return rec
 
@@ -1126,17 +1234,28 @@ def check_isolation(trials: dict[str, Any]) -> dict[str, Any]:
     effective-N rule (``n_rule == N_RULE_EFFECTIVE``; megq1: gate_n = run_n_eff + prior_n, with
     run_n_eff <= raw). A run with no marker, or another one, fails closed."""
     if not trials:
-        return {"ok": True, "checked": False, "note": "no dsr_trials in notes (nothing reached DSR)"}
+        return {
+            "ok": True,
+            "checked": False,
+            "note": "no dsr_trials in notes (nothing reached DSR)",
+        }
     prior_n, gate_n, raw = trials.get("prior_n"), trials.get("gate_n"), trials.get("raw")
     run_n_eff, n_rule = trials.get("run_n_eff"), trials.get("n_rule")
-    ok = (
-        prior_n == 0 and gate_n is not None and gate_n == run_n_eff and n_rule == N_RULE_EFFECTIVE
-    )
-    return {"ok": ok, "checked": True, "prior_n": prior_n, "gate_n": gate_n, "raw": raw,
-            "run_n_eff": run_n_eff, "n_rule": n_rule}
+    ok = prior_n == 0 and gate_n is not None and gate_n == run_n_eff and n_rule == N_RULE_EFFECTIVE
+    return {
+        "ok": ok,
+        "checked": True,
+        "prior_n": prior_n,
+        "gate_n": gate_n,
+        "raw": raw,
+        "run_n_eff": run_n_eff,
+        "n_rule": n_rule,
+    }
 
 
-def posthoc_p(candidates: Sequence[dict[str, Any]], ns: Sequence[int]) -> dict[str, list[float | None]]:
+def posthoc_p(
+    candidates: Sequence[dict[str, Any]], ns: Sequence[int]
+) -> dict[str, list[float | None]]:
     """R29 per candidate: the DSR p-value of its stored record re-read at each N."""
     out: dict[str, list[float | None]] = {}
     for cand in candidates:
@@ -1188,11 +1307,10 @@ def verdict_lines(state: dict[str, Any]) -> list[str]:
         if name == "btc0":
             lines.append("V5 btc0 (null, info): " + ("; ".join(parts) or "no runs"))
             continue
-        any_found = any(
-            r.get("harvest", {}).get("found", {}).get("found") for r in runs.values()
-        )
+        any_found = any(r.get("harvest", {}).get("found", {}).get("found") for r in runs.values())
         lines.append(
-            f"V5 {name}: {'FOUND' if any_found else 'not found'} | " + ("; ".join(parts) or "no runs")
+            f"V5 {name}: {'FOUND' if any_found else 'not found'} | "
+            + ("; ".join(parts) or "no runs")
         )
     return lines
 
@@ -1313,25 +1431,37 @@ def worker_screen(payload: dict[str, Any]) -> list[dict[str, Any]]:
     for job in payload["jobs"]:
         dsl = (
             _dsl_to_dict(validate_strategy_dict(job["dsl_config"]))
-            if "dsl_config" in job else job["dsl"]
+            if "dsl_config" in job
+            else job["dsl"]
         )
         runner = NTScreeningRunner(
-            dsl, [SYMBOL], job["start"], job["end"],
-            catalog_path=str(catalog), funding_archive_path=str(archive),
+            dsl,
+            [SYMBOL],
+            job["start"],
+            job["end"],
+            catalog_path=str(catalog),
+            funding_archive_path=str(archive),
             collect_daily_returns=bool(job.get("collect")),
         )
         m = runner({})
         entry: dict[str, Any] = {
-            "tag": job["tag"], "sharpe": m.sharpe_ratio, "trades": m.total_trades,
-            "return": m.total_return, "profit_factor": m.profit_factor,
-            "max_drawdown": m.max_drawdown, "mtm": None, "bh_daily_sharpe": None,
+            "tag": job["tag"],
+            "sharpe": m.sharpe_ratio,
+            "trades": m.total_trades,
+            "return": m.total_return,
+            "profit_factor": m.profit_factor,
+            "max_drawdown": m.max_drawdown,
+            "mtm": None,
+            "bh_daily_sharpe": None,
         }
         if job.get("collect"):
             entry["mtm"] = _series(runner.last_mtm_daily_returns)
         if job.get("bh") and entry["mtm"] is not None:
             vals = entry["mtm"]["values"]
             closes = load_daily_closes([SYMBOL], catalog)
-            bh, _err = buy_hold_daily(closes, [SYMBOL], entry["mtm"]["first_day"] + 1, len(vals) - 1)
+            bh, _err = buy_hold_daily(
+                closes, [SYMBOL], entry["mtm"]["first_day"] + 1, len(vals) - 1
+            )
             entry["bh_daily_sharpe"] = None if bh is None else daily_sharpe(bh)
         out.append(entry)
     return out
@@ -1352,11 +1482,20 @@ def _cell_fns(profile: Profile = P4H) -> tuple[Any, gatechain.ChainSettings]:
     settings = gatechain.settings_for(profile.window)
     plan = settings.plan
     fns = _make_cell_fns(
-        use_mock=False, symbols=[SYMBOL], timeframe=profile.timeframe, symbol_agg="portfolio",
-        fee_schedule=FeeSchedule(), entry_order="market", liquidation=LiquidationSettings(),
-        sizing=SizingSettings(), train_start=plan.train_start, train_end=plan.train_end,
-        eval_windows=plan.eval_windows, min_trades=settings.config.min_trades,
-        holdout=(str(plan.holdout_start), str(plan.holdout_end)), needs_factory=True,
+        use_mock=False,
+        symbols=[SYMBOL],
+        timeframe=profile.timeframe,
+        symbol_agg="portfolio",
+        fee_schedule=FeeSchedule(),
+        entry_order="market",
+        liquidation=LiquidationSettings(),
+        sizing=SizingSettings(),
+        train_start=plan.train_start,
+        train_end=plan.train_end,
+        eval_windows=plan.eval_windows,
+        min_trades=settings.config.min_trades,
+        holdout=(str(plan.holdout_start), str(plan.holdout_end)),
+        needs_factory=True,
     )
     fns.backtest_fn.collect_daily_returns = True  # type: ignore[attr-defined]
     return fns, settings
@@ -1381,14 +1520,21 @@ def worker_chain(payload: dict[str, Any]) -> dict[str, Any]:
     holdout_bt = fns.holdout_backtest_fn(chrom)  # type: ignore[operator]
     closes = load_daily_closes([SYMBOL], root / "data" / "catalog")
     result = gatechain.evaluate_candidate(
-        chrom, fit, holdout_bt, fns.backtest_fn_factory, closes, settings  # type: ignore[arg-type]
+        chrom,
+        fit,
+        holdout_bt,
+        fns.backtest_fn_factory,
+        closes,
+        settings,  # type: ignore[arg-type]
     )
     series = fit.mtm_daily_returns
     sharpe = daily_sharpe(list(series.values)) if series is not None else None
     return {
         "fitness": {
-            "sharpe_ratio": fit.sharpe_ratio, "total_trades": fit.total_trades,
-            "total_return": fit.total_return, "adjusted_score": fit.adjusted_score,
+            "sharpe_ratio": fit.sharpe_ratio,
+            "total_trades": fit.total_trades,
+            "total_return": fit.total_return,
+            "adjusted_score": fit.adjusted_score,
             "train_S": None if sharpe is None else sharpe * SQRT_365,
         },
         "holdout": {k: holdout_bt.get(k) for k in ("sharpe_ratio", "total_trades", "total_return")},
@@ -1416,8 +1562,7 @@ def worker_null(payload: dict[str, Any]) -> list[dict[str, Any]]:
     count = int(payload["count"])
     start, end = train_window(profile)
     jobs: list[dict[str, Any]] = [
-        {"tag": "planted", "dsl": planted_dsl(profile), "start": start, "end": end,
-         "collect": True}
+        {"tag": "planted", "dsl": planted_dsl(profile), "start": start, "end": end, "collect": True}
     ]
     entries: list[dict[str, Any]] = []
     for j in range(count):
@@ -1427,10 +1572,13 @@ def worker_null(payload: dict[str, Any]) -> list[dict[str, Any]]:
         dsl = chromosome_to_dsl(chrom)
         dsl["timeframe"] = profile.timeframe
         jobs.append({"tag": f"c{j}", "dsl": dsl, "start": start, "end": end, "collect": True})
-        entries.append({
-            "seed": seed, "score": float(fit.adjusted_score),
-            "chromosome": chromosome_to_serializable(chrom),
-        })
+        entries.append(
+            {
+                "seed": seed,
+                "score": float(fit.adjusted_score),
+                "chromosome": chromosome_to_serializable(chrom),
+            }
+        )
     shots = {r["tag"]: r for r in worker_screen({"root": str(root), "jobs": jobs})}
     planted_series = shots["planted"]["mtm"]
     for j, entry in enumerate(entries):
@@ -1457,7 +1605,8 @@ class Ctx:
         self.data_root = Path(args.data_root).resolve()
         self.real_db = Path(args.real_db).resolve()
         self.archive = (
-            Path(args.archive).resolve() if args.archive
+            Path(args.archive).resolve()
+            if args.archive
             else self.data_root / "archive" / "raw_data.db"
         )
         self.scratch = Path(args.scratch).resolve() if args.scratch else self.out.parent / "scratch"
@@ -1485,7 +1634,9 @@ def cmd_snapshot(ctx: Ctx, _args: argparse.Namespace) -> int:
     snap = take_snapshot(ctx.data_root, ctx.real_db, ctx.archive)
     update_state(ctx.out, lambda s: s.__setitem__("snapshot", snap))
     rows = snap["discovery_rows"]
-    print(f"snapshot: {len(snap['files'])} files, discovery rows {rows}, funding {snap['funding_source_count']}")
+    print(
+        f"snapshot: {len(snap['files'])} files, discovery rows {rows}, funding {snap['funding_source_count']}"
+    )
     return 0
 
 
@@ -1519,8 +1670,12 @@ def cmd_build(ctx: Ctx, args: argparse.Namespace) -> int:
     accepted: dict[str, Any] | None = None
     while len(builds) < limit:
         k = len(builds) + 1
-        delta = 0.0 if cfg["series"] is None else next_delta(
-            variant, builds, args.delta0 if args.delta0 is not None else float(cfg["delta0"])
+        delta = (
+            0.0
+            if cfg["series"] is None
+            else next_delta(
+                variant, builds, args.delta0 if args.delta0 is not None else float(cfg["delta0"])
+            )
         )
         rec = build_one(variant, k, delta, klines, ctx.archive, ctx.scratch, ctx.scratch_db)
         rec["accepted"] = accepts(variant, rec) and not rec["price_ratio_gt_3"]
@@ -1543,14 +1698,20 @@ def cmd_build(ctx: Ctx, args: argparse.Namespace) -> int:
             # W-R6: a plant that moves the price > 3x is not a valid plant; never accepted.
             for b in builds:
                 shutil.rmtree(b["root"], ignore_errors=True)
-            update_state(ctx.out, lambda s: _variant(s, variant).__setitem__("status", "failed_price_ratio"))
-            print(f"{variant}: FAILED closed, price ratio {rec['price_ratio']:.2f} > 3x (no downstream steps)")
+            update_state(
+                ctx.out, lambda s: _variant(s, variant).__setitem__("status", "failed_price_ratio")
+            )
+            print(
+                f"{variant}: FAILED closed, price ratio {rec['price_ratio']:.2f} > 3x (no downstream steps)"
+            )
             return 2
         if rec["accepted"]:
             accepted = rec
             break
     if accepted is None:
-        update_state(ctx.out, lambda s: _variant(s, variant).__setitem__("status", "not_calibrated"))
+        update_state(
+            ctx.out, lambda s: _variant(s, variant).__setitem__("status", "not_calibrated")
+        )
         print(f"{variant}: NOT calibrated after {len(builds)} builds")
         return 2
     for b in builds:  # keep only the accepted root; the JSON keeps every build's numbers
@@ -1600,8 +1761,12 @@ def cmd_check_btc0(ctx: Ctx, _args: argparse.Namespace) -> int:
         return 0
     root = ctx.accepted_root(state, "btc0")
     jobs = [
-        {"tag": "s239", "dsl_config": read_strategy_239(ctx.real_db),
-         "start": WINDOW_239[0], "end": WINDOW_239[1]},
+        {
+            "tag": "s239",
+            "dsl_config": read_strategy_239(ctx.real_db),
+            "start": WINDOW_239[0],
+            "end": WINDOW_239[1],
+        },
         {"tag": "planted_w3", "dsl": planted_dsl(), "start": W3_FULL[0], "end": W3_FULL[1]},
     ]
     res = {r["tag"]: r for r in run_worker("screen", root, {"jobs": jobs}, ctx.scratch_db)}
@@ -1611,9 +1776,13 @@ def cmd_check_btc0(ctx: Ctx, _args: argparse.Namespace) -> int:
     }
     passed = not any(diffs.values())
     rec = {
-        "passed": passed, "diffs": diffs, "checked_at": _now(),
-        "got": {t: {k: r[k] for k in ("sharpe", "trades", "return", "profit_factor", "max_drawdown")}
-                for t, r in res.items()},
+        "passed": passed,
+        "diffs": diffs,
+        "checked_at": _now(),
+        "got": {
+            t: {k: r[k] for k in ("sharpe", "trades", "return", "profit_factor", "max_drawdown")}
+            for t, r in res.items()
+        },
     }
     update_state(ctx.out, lambda s: _variant(s, "btc0").__setitem__("check_btc0", rec))
     print(f"R25 btc0 fidelity: {'IDENTICAL' if passed else 'DRIFT'}")
@@ -1635,8 +1804,12 @@ def cmd_direct_chain(ctx: Ctx, args: argparse.Namespace) -> int:
     ns = POSITIVE_CONTROL_NS
     failures = positive_control_failures(result, ns)
     rec = {
-        "fitness": out["fitness"], "holdout": out["holdout"], "result": result,
-        "failures": failures, "report_ns": list(REPORT_NS), "checked_at": _now(),
+        "fitness": out["fitness"],
+        "holdout": out["holdout"],
+        "result": result,
+        "failures": failures,
+        "report_ns": list(REPORT_NS),
+        "checked_at": _now(),
     }
     update_state(ctx.out, lambda s: _variant(s, variant).__setitem__("direct_chain", rec))
     print(f"{variant} direct chain: fitness={out['fitness']}")
@@ -1670,12 +1843,16 @@ def cmd_discover(ctx: Ctx, args: argparse.Namespace) -> int:
         if existing is not None:
             owner = existing.get("variant")
             if owner is None:
-                msg = (f"label {label!r}: the recorded follow-up run has no variant; refusing "
-                       f"to reuse it for {variant}")
+                msg = (
+                    f"label {label!r}: the recorded follow-up run has no variant; refusing "
+                    f"to reuse it for {variant}"
+                )
                 raise Layer2Error(msg)
             if owner != variant:
-                msg = (f"label {label!r} is already recorded for variant {owner!r}; refusing "
-                       f"to reuse it for {variant}")
+                msg = (
+                    f"label {label!r} is already recorded for variant {owner!r}; refusing "
+                    f"to reuse it for {variant}"
+                )
                 raise Layer2Error(msg)
     else:
         existing = state.get("variants", {}).get(variant, {}).get("runs", {}).get(str(seed))
@@ -1684,7 +1861,11 @@ def cmd_discover(ctx: Ctx, args: argparse.Namespace) -> int:
         print(f"{where}: already recorded ({existing['status']})")
         return 0
     root = ctx.accepted_root(state, variant)
-    run_dir = ctx.scratch / "runs" / (f"{variant}-{label}" if label is not None else f"{variant}-seed{seed}")
+    run_dir = (
+        ctx.scratch
+        / "runs"
+        / (f"{variant}-{label}" if label is not None else f"{variant}-seed{seed}")
+    )
     if not _under(run_dir, ctx.scratch):  # before any rmtree/mkdir/seed row/launch
         msg = f"refusing run dir {run_dir}: outside {ctx.scratch}"
         raise Layer2Error(msg)
@@ -1694,7 +1875,10 @@ def cmd_discover(ctx: Ctx, args: argparse.Namespace) -> int:
     # R42: the seed row lives in the run's OWN db, written before run_discovery adds its row.
     seed_run = create_seed_run(run_dir / "state.db") if args.warm else None
     rec = run_discovery(
-        root, run_dir, seed, timeout_s=args.timeout,
+        root,
+        run_dir,
+        seed,
+        timeout_s=args.timeout,
         command_fn=discover_command_fn(args.pop, args.gens, seed_run),
     )
     rec = {**rec, "pop": args.pop, "gens": args.gens}  # R47: the run's own GA budget
@@ -1736,10 +1920,16 @@ def cmd_null_corr(ctx: Ctx, args: argparse.Namespace) -> int:
         # ``_worker`` subprocess with its own tempdir, so the shards are independent and the
         # merged pool stays seed-deterministic (R7).
         return run_worker(
-            "null", root,
-            {"count": count, "seed_base": int(args.seed), "offset": i * chunk,
-             "pool": list(NULL_INDICATOR_POOL)},
-            ctx.scratch_db, timeout_s=args.timeout,
+            "null",
+            root,
+            {
+                "count": count,
+                "seed_base": int(args.seed),
+                "offset": i * chunk,
+                "pool": list(NULL_INDICATOR_POOL),
+            },
+            ctx.scratch_db,
+            timeout_s=args.timeout,
         )
 
     # R9: a count-0 shard draws nothing, exactly as the sequential loop skipped it.
@@ -1758,8 +1948,15 @@ def cmd_null_corr(ctx: Ctx, args: argparse.Namespace) -> int:
     pool_path.parent.mkdir(parents=True, exist_ok=True)
     pool_path.write_text(json.dumps(pool, default=_json_default) + "\n")
     rec = {
-        "status": "completed", "m": len(pool), "reps": int(args.reps), "k": [], "thresholds": {},
-        "seed": int(args.seed), "shards": shards, "root": str(root), "pool_path": str(pool_path),
+        "status": "completed",
+        "m": len(pool),
+        "reps": int(args.reps),
+        "k": [],
+        "thresholds": {},
+        "seed": int(args.seed),
+        "shards": shards,
+        "root": str(root),
+        "pool_path": str(pool_path),
         "recorded_at": _now(),
     }
     update_state(ctx.out, lambda s: s.__setitem__(NULL_RECORD_KEY, rec))
@@ -1786,8 +1983,11 @@ def rescreen_candidate(
     # the harvest record keeps no DSL (uid/source/stage/trades/train_S/corr): re-read it from the
     # run's own DB, which works for state harvested before this lookup existed
     full = next(
-        (c for c in harvest_run(Path(run["db"]), int(run["run_id"]))["candidates"]
-         if c.get("uid") == uid and c.get("dsl")),
+        (
+            c
+            for c in harvest_run(Path(run["db"]), int(run["run_id"]))["candidates"]
+            if c.get("uid") == uid and c.get("dsl")
+        ),
         None,
     )
     if full is None:
@@ -1802,13 +2002,22 @@ def rescreen_jobs(candidate_dsl: dict[str, Any], profile: Profile = P4H) -> list
     A non-default profile is a LONG study: the BOTH diagnostic is omitted (``planted_both_dsl`` is
     the fixed 4h rule and would silently score another timeframe and chromosome)."""
     start, end = train_window(profile)
-    jobs = [{"tag": "planted", "dsl": planted_dsl(profile), "start": start, "end": end,
-             "collect": True}]
+    jobs = [
+        {"tag": "planted", "dsl": planted_dsl(profile), "start": start, "end": end, "collect": True}
+    ]
     if profile == P4H:
-        jobs.append({"tag": "planted_both", "dsl": planted_both_dsl(), "start": start, "end": end,
-                     "collect": True})
-    jobs.append({"tag": "candidate", "dsl": candidate_dsl, "start": start, "end": end,
-                 "collect": True})
+        jobs.append(
+            {
+                "tag": "planted_both",
+                "dsl": planted_both_dsl(),
+                "start": start,
+                "end": end,
+                "collect": True,
+            }
+        )
+    jobs.append(
+        {"tag": "candidate", "dsl": candidate_dsl, "start": start, "end": end, "collect": True}
+    )
     return jobs
 
 
@@ -1831,8 +2040,11 @@ def cmd_rescreen(ctx: Ctx, args: argparse.Namespace) -> int:
             }
         variants[variant] = record
     rec = {
-        "uid": args.uid, "run_variant": args.run_variant, "seed": seed,
-        "variants": variants, "checked_at": _now(),
+        "uid": args.uid,
+        "run_variant": args.run_variant,
+        "seed": seed,
+        "variants": variants,
+        "checked_at": _now(),
     }
 
     def _save(s: dict[str, Any], r: dict[str, Any] = rec) -> None:
@@ -1841,8 +2053,10 @@ def cmd_rescreen(ctx: Ctx, args: argparse.Namespace) -> int:
     update_state(ctx.out, _save)
     print(f"rescreen {args.uid} ({args.run_variant} seed {seed}):")
     for variant, record in variants.items():
-        print(f"  {variant}: candidate corr={record['candidate']['corr']} "
-              f"train_S={record['candidate']['train_S']}")
+        print(
+            f"  {variant}: candidate corr={record['candidate']['corr']} "
+            f"train_S={record['candidate']['train_S']}"
+        )
     return 0
 
 
@@ -1882,8 +2096,9 @@ def _harvest_one(
     ok = bool(h["r31"]["ok"])
     cands = h.pop("candidates")
     start, end = train_window(profile)
-    jobs = [{"tag": "planted", "dsl": planted_dsl(profile), "start": start, "end": end,
-             "collect": True}]
+    jobs = [
+        {"tag": "planted", "dsl": planted_dsl(profile), "start": start, "end": end, "collect": True}
+    ]
     jobs += [
         {"tag": f"c{i}", "dsl": c["dsl"], "start": start, "end": end, "collect": True}
         for i, c in enumerate(cands)
@@ -1894,12 +2109,17 @@ def _harvest_one(
     rows = []
     for i, cand in enumerate(cands):
         shot = shots[f"c{i}"]
-        rows.append({
-            "uid": cand.get("uid"), "source": cand["source"], "stage": cand.get("stage"),
-            "trades": shot["trades"], "train_S": ann_sharpe(shot["mtm"]),
-            "corr": signed_corr(shot["mtm"], planted_series),
-            "dsr": cand.get("dsr"),
-        })
+        rows.append(
+            {
+                "uid": cand.get("uid"),
+                "source": cand["source"],
+                "stage": cand.get("stage"),
+                "trades": shot["trades"],
+                "train_S": ann_sharpe(shot["mtm"]),
+                "corr": signed_corr(shot["mtm"], planted_series),
+                "dsr": cand.get("dsr"),
+            }
+        )
     h["found"] = assess_found(rows, planted_s)
     h["candidates"] = [{k: v for k, v in r.items() if k != "dsr"} for r in rows]
     h["posthoc_p"] = {"ns": list(POSTHOC_NS), "by_candidate": posthoc_p(rows, POSTHOC_NS)}
@@ -1997,7 +2217,9 @@ def harvest_followup(ctx: Ctx, state: dict[str, Any]) -> int:
         if not ok:
             violations.append(f"{variant} run_id={run.get('run_id')}")
     if violations:  # R31: score nothing and persist nothing
-        print(f"R31 isolation VIOLATED in {', '.join(violations)}: harvest --followup scores nothing")
+        print(
+            f"R31 isolation VIOLATED in {', '.join(violations)}: harvest --followup scores nothing"
+        )
         return 3
 
     scorable = [
@@ -2018,12 +2240,18 @@ def harvest_followup(ctx: Ctx, state: dict[str, Any]) -> int:
         btc0_max = _btc0_max_corr(state, pop, gens)
         c_k = corr_threshold(c95_by_k[k], btc0_max)
         calibration = {
-            "k": k, "budget": [pop, gens], "c95": c95_by_k[k], "btc0_max_corr": btc0_max, "C_K": c_k,
+            "k": k,
+            "budget": [pop, gens],
+            "c95": c95_by_k[k],
+            "btc0_max_corr": btc0_max,
+            "C_K": c_k,
         }
         calibration.update(_found_cal(run["harvest"], c_k))
         run["harvest"]["calibration"] = calibration
-        print(f"harvest --followup {variant}: K={k} C95={c95_by_k[k]:.4f} btc0_max={btc0_max:.4f} "
-              f"C_K={c_k:.4f} found_cal={calibration['found_cal']}")
+        print(
+            f"harvest --followup {variant}: K={k} C95={c95_by_k[k]:.4f} btc0_max={btc0_max:.4f} "
+            f"C_K={c_k:.4f} found_cal={calibration['found_cal']}"
+        )
     record["k"] = sorted(c95_by_k)
     record["thresholds"] = {str(k): v for k, v in sorted(c95_by_k.items())}
     return _write_followup(ctx, state, record)
@@ -2031,6 +2259,7 @@ def harvest_followup(ctx: Ctx, state: dict[str, Any]) -> int:
 
 def _write_followup(ctx: Ctx, state: dict[str, Any], record: dict[str, Any]) -> int:
     """Write every harvested run and the updated null thresholds back under one lock."""
+
     def _save(s: dict[str, Any]) -> None:
         for variant, vrec in state.get("variants", {}).items():
             _variant(s, variant)["runs"] = vrec.get("runs", {})
@@ -2045,9 +2274,11 @@ def cmd_harvest(ctx: Ctx, args: argparse.Namespace) -> int:
     state = load_state(ctx.out)
     if args.followup:
         return harvest_followup(ctx, state)
-    names = [args.variant] if args.variant else [
-        v for v, r in state.get("variants", {}).items() if r.get("runs")
-    ]
+    names = (
+        [args.variant]
+        if args.variant
+        else [v for v, r in state.get("variants", {}).items() if r.get("runs")]
+    )
     all_ok = True
     for variant in names:
         runs, ok = harvest_variant(ctx, state, variant)
@@ -2060,7 +2291,9 @@ def cmd_harvest(ctx: Ctx, args: argparse.Namespace) -> int:
     for line in verdict_lines(load_state(ctx.out)):
         print(line)
     if not all_ok:
-        print("R31 isolation VIOLATED: a run saw prior trials, gate_n != run_n_eff or no effective-N marker")
+        print(
+            "R31 isolation VIOLATED: a run saw prior trials, gate_n != run_n_eff or no effective-N marker"
+        )
         return 3
     return 0
 
@@ -2079,7 +2312,9 @@ def cmd_verify_untouched(ctx: Ctx, _args: argparse.Namespace) -> int:
             continue
         count = funding_count(scratch_arch)
         if count != snap["funding_source_count"]:
-            problems.append(f"{variant}: scratch funding rows {count} != source {snap['funding_source_count']}")
+            problems.append(
+                f"{variant}: scratch funding rows {count} != source {snap['funding_source_count']}"
+            )
     rec = {"ok": not problems, "problems": problems, "checked_at": _now()}
     update_state(ctx.out, lambda s: s.__setitem__("verify", rec))
     print("R26 shared data untouched" if not problems else "R26 shared data CHANGED")
@@ -2101,7 +2336,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0] if __doc__ else None)
     parser.add_argument("--out", default=str(DEFAULT_OUT), help="the one JSON all steps write")
     parser.add_argument("--data-root", default=str(REPO_ROOT / "data"))
-    parser.add_argument("--real-db", default=str(REAL_DB), help="read-only (R26 rows, strategy 239)")
+    parser.add_argument(
+        "--real-db", default=str(REAL_DB), help="read-only (R26 rows, strategy 239)"
+    )
     parser.add_argument("--archive", default=None, help="source raw_data.db (default data-root)")
     parser.add_argument("--scratch", default=None, help="scratch dir (default <out dir>/scratch)")
     parser.add_argument("--force", action="store_true", help="redo a recorded step")

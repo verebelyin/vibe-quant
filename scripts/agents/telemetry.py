@@ -682,15 +682,26 @@ _POST_ID_RE = re.compile(r"\b[0-9a-f]{12,16}-\d{3,4}\b")
 _TELEMETRY_LINE_RE = re.compile(r"^TELEMETRY:\s*(.+)$", re.MULTILINE)
 _VERDICT_LINE_RE = re.compile(r"^verdict:\s*(\S+)\s*$", re.MULTILINE)
 _ROLE_TASK_PREFIX = (  # longest first: "revlite-" before "rev-"
-    ("architect-", "design:"), ("arch-", "design:"),
-    ("reviewer-", "review:"), ("revlite-", "review:"), ("rev-", "review:"),
-    ("verifier-", "verify:"), ("ver-", "verify:"),
-    ("impl-", ""), ("cmd-", ""), ("cc-", ""),
+    ("architect-", "design:"),
+    ("arch-", "design:"),
+    ("reviewer-", "review:"),
+    ("revlite-", "review:"),
+    ("rev-", "review:"),
+    ("verifier-", "verify:"),
+    ("ver-", "verify:"),
+    ("impl-", ""),
+    ("cmd-", ""),
+    ("cc-", ""),
 )
 _MODEL_SUFFIX_RE = re.compile(r"^(?P<base>.+?)-(?:opus|sonnet|haiku)(?P<n>\d*)$")
 _T3_ROUND_RE = re.compile(r"^(?P<base>cc-.+)-(?P<n>\d+)$")
 _REVIEWER_AGENT_RE = re.compile(r"^(?:rev|revlite|ver)-")
-STATUS_OUTCOME = {"completed": "done", "failed": "error", "interrupted": "stalled", "cancelled": "stalled"}
+STATUS_OUTCOME = {
+    "completed": "done",
+    "failed": "error",
+    "interrupted": "stalled",
+    "cancelled": "stalled",
+}
 
 
 def parse_comms(text: str | None) -> dict[str, int] | None:
@@ -823,7 +834,11 @@ def _cmd_session_usage(
             continue
         first_user = next((r for r in recs if (r.get("message") or {}).get("role") == "user"), None)
         content = ((first_user or {}).get("message") or {}).get("content")
-        text = " ".join(b.get("text", "") for b in content if isinstance(b, dict)) if isinstance(content, list) else str(content or "")
+        text = (
+            " ".join(b.get("text", "") for b in content if isinstance(b, dict))
+            if isinstance(content, list)
+            else str(content or "")
+        )
         if needle not in text:
             continue
         if best is None or abs(t0 - start) < abs(best[0] - start):
@@ -836,7 +851,11 @@ def _cmd_session_usage(
     tin = tout = 0
     for r in recs:
         usage = r.get("usage")
-        if (r.get("message") or {}).get("role") == "assistant" and isinstance(usage, dict) and r.get("id") not in seen:
+        if (
+            (r.get("message") or {}).get("role") == "assistant"
+            and isinstance(usage, dict)
+            and r.get("id") not in seen
+        ):
             seen.add(r.get("id"))
             tin += int(usage.get("inputTokens") or 0)
             tout += int(usage.get("outputTokens") or 0)
@@ -895,12 +914,24 @@ def _t3_runs(job: str, db: Path, cmd_dir: Path) -> list[dict[str, Any]]:
                 tokens = _cmd_session_usage(cmd_dir, start, prompt, claimed)
             if tokens is None:
                 notes.append("tokens unknown")
-            out.append(make_record(
-                job=job, task=task, agent=agent, runtime=runtime, model=payload.get("model"), round=rnd,
-                outcome=outcome, tokens_in=tokens[0] if tokens else None, tokens_out=tokens[1] if tokens else None,
-                wall_s=active_seconds(stamps) if turn else _span(stamps), span_s=_span(stamps),
-                note="; ".join(notes) or None, source=f"t3:{cid}", comms=parse_comms(result),
-            ))
+            out.append(
+                make_record(
+                    job=job,
+                    task=task,
+                    agent=agent,
+                    runtime=runtime,
+                    model=payload.get("model"),
+                    round=rnd,
+                    outcome=outcome,
+                    tokens_in=tokens[0] if tokens else None,
+                    tokens_out=tokens[1] if tokens else None,
+                    wall_s=active_seconds(stamps) if turn else _span(stamps),
+                    span_s=_span(stamps),
+                    note="; ".join(notes) or None,
+                    source=f"t3:{cid}",
+                    comms=parse_comms(result),
+                )
+            )
     finally:
         con.close()
     return out
@@ -915,8 +946,10 @@ def _claude_runs(job: str, claude_dir: Path, force: bool) -> list[dict[str, Any]
         recs = list(_jsonl(path))
         first = next((r for r in recs if r.get("type") == "user"), None)
         content = ((first or {}).get("message") or {}).get("content")
-        prompt = content if isinstance(content, str) else " ".join(
-            b.get("text", "") for b in content or [] if isinstance(b, dict)
+        prompt = (
+            content
+            if isinstance(content, str)
+            else " ".join(b.get("text", "") for b in content or [] if isinstance(b, dict))
         )
         if job not in prompt:
             continue
@@ -933,7 +966,11 @@ def _claude_runs(job: str, claude_dir: Path, force: bool) -> list[dict[str, Any]
             msg = r.get("message") or {}
             if r.get("type") != "assistant":
                 continue
-            text = " ".join(b.get("text", "") for b in msg.get("content") or [] if isinstance(b, dict) and b.get("type") == "text")
+            text = " ".join(
+                b.get("text", "")
+                for b in msg.get("content") or []
+                if isinstance(b, dict) and b.get("type") == "text"
+            )
             if r.get("isApiErrorMessage") or msg.get("model") == "<synthetic>":
                 error = text
                 continue
@@ -945,23 +982,41 @@ def _claude_runs(job: str, claude_dir: Path, force: bool) -> list[dict[str, Any]
         tin = tout = 0
         for model, u in usage_by_id.values():  # one entry per API message (logged once per block)
             models[model] = models.get(model, 0) + 1
-            tin += sum(int(u.get(k) or 0) for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+            tin += sum(
+                int(u.get(k) or 0)
+                for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+            )
             tout += int(u.get("output_tokens") or 0)
-        agent, task, rnd = identity_from_prompt(prompt, str(meta.get("name") or _name_from_meta(meta, agent_id)))
-        out.append(make_record(
-            job=job, task=task, agent=agent, runtime="claude",
-            model=max(models, key=lambda k: models[k]) if models else None, round=rnd,
-            outcome="error" if error else "done", tokens_in=tin if usage_by_id else None,
-            tokens_out=tout if usage_by_id else None,
-            wall_s=active_seconds(stamps), span_s=_span(stamps),
-            note=error[:160] or None, source=f"claude:{agent_id}", comms=parse_comms(final),
-        ))
+        agent, task, rnd = identity_from_prompt(
+            prompt, str(meta.get("name") or _name_from_meta(meta, agent_id))
+        )
+        out.append(
+            make_record(
+                job=job,
+                task=task,
+                agent=agent,
+                runtime="claude",
+                model=max(models, key=lambda k: models[k]) if models else None,
+                round=rnd,
+                outcome="error" if error else "done",
+                tokens_in=tin if usage_by_id else None,
+                tokens_out=tout if usage_by_id else None,
+                wall_s=active_seconds(stamps),
+                span_s=_span(stamps),
+                note=error[:160] or None,
+                source=f"claude:{agent_id}",
+                comms=parse_comms(final),
+            )
+        )
     return out
 
 
 _AGENT_TYPE_PREFIX = {
-    "architect": "architect-", "reviewer": "reviewer-", "reviewer-lite": "revlite-",
-    "verifier": "verifier-", "implementer": "impl-",
+    "architect": "architect-",
+    "reviewer": "reviewer-",
+    "reviewer-lite": "revlite-",
+    "verifier": "verifier-",
+    "implementer": "impl-",
 }
 
 
@@ -1050,8 +1105,11 @@ def _apply_handoff_reviews(
         if any(source is rec for rec in pending):  # new this ingest: one row, review set
             source["review"] = verdict
             if dry_run:
-                print(f"telemetry: would record {verdict} for job={job!r} task={task!r}"
-                      f" round={rnd} from handoffs/{name}", file=sys.stderr)
+                print(
+                    f"telemetry: would record {verdict} for job={job!r} task={task!r}"
+                    f" round={rnd} from handoffs/{name}",
+                    file=sys.stderr,
+                )
             else:
                 print(f"review {verdict} {job} {task} r{rnd} from handoffs/{name}")
             continue
@@ -1099,7 +1157,9 @@ def ingest_runs(
         found += _claude_runs(job, claude_dir, force)
     existing = read_records()
     sources = {r.get("source") for r in existing if r.get("source")}
-    manual = {(r.get("job"), r.get("agent"), r.get("round")) for r in existing if not r.get("source")}
+    manual = {
+        (r.get("job"), r.get("agent"), r.get("round")) for r in existing if not r.get("source")
+    }
     new: list[dict[str, Any]] = []
     for rec in sorted(found, key=lambda r: str(r["source"])):
         if rec["source"] in sources or (rec["job"], rec["agent"], rec["round"]) in manual:
@@ -1143,13 +1203,17 @@ def main(argv: list[str] | None = None) -> int:
         "--force", action="store_true", help="ingest even a log modified < 120 s ago"
     )
     ing_p.add_argument("--model")
-    run_p = sub.add_parser("ingest-runs", help="records for every finished run of a job (T3 + Claude)")
+    run_p = sub.add_parser(
+        "ingest-runs", help="records for every finished run of a job (T3 + Claude)"
+    )
     run_p.add_argument("--job", required=True)
     run_p.add_argument("--t3-db", dest="t3_db", type=Path)
     run_p.add_argument("--cmd-dir", dest="cmd_dir", type=Path)
     run_p.add_argument("--claude-dir", dest="claude_dir", type=Path)
     run_p.add_argument("--dry-run", dest="dry_run", action="store_true")
-    run_p.add_argument("--force", action="store_true", help="include transcripts modified < 120 s ago")
+    run_p.add_argument(
+        "--force", action="store_true", help="include transcripts modified < 120 s ago"
+    )
     rev_p = sub.add_parser("review", help="append a review update for the latest record")
     rev_p.add_argument("--job", required=True)
     rev_p.add_argument("--task", required=True)
@@ -1191,10 +1255,15 @@ def main(argv: list[str] | None = None) -> int:
             auto_round=args.auto_round and args.round is None,
         )
     elif args.cmd == "ingest-runs":
-        added = ingest_runs(args.job, args.t3_db, args.cmd_dir, args.claude_dir, args.dry_run, args.force)
+        added = ingest_runs(
+            args.job, args.t3_db, args.cmd_dir, args.claude_dir, args.dry_run, args.force
+        )
         for new in added:
             print(json.dumps(new, ensure_ascii=False))
-        print(f"telemetry: {len(added)} run(s) {'found' if args.dry_run else 'recorded'} for {job_basename(args.job)}", file=sys.stderr)
+        print(
+            f"telemetry: {len(added)} run(s) {'found' if args.dry_run else 'recorded'} for {job_basename(args.job)}",
+            file=sys.stderr,
+        )
         return 0
     elif args.cmd == "review":
         rec = apply_review(args.job, args.task, args.review, args.round)

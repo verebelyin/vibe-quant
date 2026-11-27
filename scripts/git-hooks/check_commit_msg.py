@@ -99,7 +99,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     foreign = foreign_co_authors(text)
     if foreign:
         print(f"non-Claude Co-Authored-By trailer: {'; '.join(foreign)}", file=sys.stderr)
-        print(f"name maker/reviewer models in the Review section instead ({DOC_PATH})", file=sys.stderr)
+        print(
+            f"name maker/reviewer models in the Review section instead ({DOC_PATH})",
+            file=sys.stderr,
+        )
         return 1
 
     if current_branch() != DEFAULT_BRANCH:

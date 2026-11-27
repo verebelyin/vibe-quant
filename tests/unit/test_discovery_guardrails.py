@@ -291,7 +291,10 @@ class TestApplyGuardrails:
         )
         fitness = _make_fitness(trades=100)
         result = apply_guardrails(
-            fitness, num_genes=4, config=cfg, trade_returns=returns,
+            fitness,
+            num_genes=4,
+            config=cfg,
+            trade_returns=returns,
         )
         assert result.bootstrap_passed is True
         assert result.bootstrap_result is not None
@@ -309,7 +312,10 @@ class TestApplyGuardrails:
         )
         fitness = _make_fitness(trades=20)
         result = apply_guardrails(
-            fitness, num_genes=4, config=cfg, trade_returns=returns,
+            fitness,
+            num_genes=4,
+            config=cfg,
+            trade_returns=returns,
         )
         assert result.bootstrap_passed is False
         assert result.passed is False
@@ -326,7 +332,10 @@ class TestApplyGuardrails:
             bootstrap_min_sharpe=1.0,
         )
         result = apply_guardrails(
-            _make_fitness(trades=20), num_genes=4, config=cfg, trade_returns=returns,
+            _make_fitness(trades=20),
+            num_genes=4,
+            config=cfg,
+            trade_returns=returns,
         )
         reason = next(r for r in result.reasons if r.startswith("Bootstrap CI"))
         assert "t-stat" in reason

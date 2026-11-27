@@ -102,9 +102,7 @@ def test_unguarded_close_does_not_checkpoint(
     """An unguarded close books no streak, so it must not trigger the checkpoint."""
     node, trace = _trace_node(monkeypatch, seeded)
     guard = _close_guard(node, trace, losses=0, guarded=False)
-    monkeypatch.setattr(
-        node, "_save_checkpoint_now", lambda: trace.calls.append(("checkpoint",))
-    )
+    monkeypatch.setattr(node, "_save_checkpoint_now", lambda: trace.calls.append(("checkpoint",)))
 
     TradingGuard._on_position_event(guard, _Trip().closed)  # type: ignore[arg-type]
 

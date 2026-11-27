@@ -193,7 +193,9 @@ def assess_consistency(
     holdout-only validation), trades are compared as per-day rates.
     """
     report = ConsistencyReport(
-        reference=reference, val_sharpe=val_sharpe, val_trades=val_trades,
+        reference=reference,
+        val_sharpe=val_sharpe,
+        val_trades=val_trades,
         notes=list(reference.notes),
     )
 
@@ -327,7 +329,9 @@ def _normalize_params(
                 f"ambiguous parameters: {source_key[norm_key]!r} and {str(key)!r} "
                 f"both name {norm_key!r}"
             )
-            logger.warning("Ambiguous screening parameters: %s; skipping the exact-row match", reason)
+            logger.warning(
+                "Ambiguous screening parameters: %s; skipping the exact-row match", reason
+            )
             if ambiguities is not None and reason not in ambiguities:
                 ambiguities.append(reason)
             return None
@@ -408,7 +412,9 @@ def lookup_screening_reference(
         state, strategy_id, val_window, val_symbols, val_sizing
     )
     for run_id in unreadable:
-        reason = f"screening run {run_id} has unreadable parameters, so its effective DSL is unknown"
+        reason = (
+            f"screening run {run_id} has unreadable parameters, so its effective DSL is unknown"
+        )
         logger.warning("Refusing screening reference: %s", reason)
         rejected.append(reason)
         refused_ids.append(run_id)
@@ -426,8 +432,7 @@ def lookup_screening_reference(
         )
         if run_identity != wanted_identity:
             reason = (
-                f"screening run {run_id} executed a different effective DSL than the "
-                "validation run"
+                f"screening run {run_id} executed a different effective DSL than the validation run"
             )
             logger.warning("Refusing screening reference: %s", reason)
             rejected.append(reason)
@@ -451,17 +456,19 @@ def lookup_screening_reference(
                 )
         _, sharpe, trades = max(usable, key=lambda r: r[1])
         return (
-            mark(ScreeningReference(
-                sharpe=sharpe,
-                trades=trades,
-                source=f"screening_run:{run_id}:best",
-                start_date=start,
-                end_date=end,
-                notes=[
-                    f"{reason}; no exact parameter row matched, reference is the best-Sharpe row"
-                    for reason in ambiguities
-                ],
-            )),
+            mark(
+                ScreeningReference(
+                    sharpe=sharpe,
+                    trades=trades,
+                    source=f"screening_run:{run_id}:best",
+                    start_date=start,
+                    end_date=end,
+                    notes=[
+                        f"{reason}; no exact parameter row matched, reference is the best-Sharpe row"
+                        for reason in ambiguities
+                    ],
+                )
+            ),
             refused_ids,
         )
 
@@ -570,9 +577,7 @@ def _screening_candidates(
             try:
                 symbols = json.loads(run_symbols or "[]")
             except (TypeError, json.JSONDecodeError):
-                logger.debug(
-                    "Screening run %d has unreadable symbols; skipping it", run_id
-                )
+                logger.debug("Screening run %d has unreadable symbols; skipping it", run_id)
                 continue
             if sorted(symbols) != sorted(val_symbols):
                 continue
@@ -580,17 +585,13 @@ def _screening_candidates(
         if run_parameters is None:
             unreadable.append(run_id)
             continue
-        if wanted_sizing is not None and (
-            _recorded_sizing_params(run_parameters) != wanted_sizing
-        ):
+        if wanted_sizing is not None and (_recorded_sizing_params(run_parameters) != wanted_sizing):
             continue
         candidates.append((run_id, start, end, run_parameters))
     return candidates, unreadable
 
 
-def _config_fields(
-    dsl: dict[str, object] | None, strategy_name: str
-) -> tuple[str, ...] | None:
+def _config_fields(dsl: dict[str, object] | None, strategy_name: str) -> tuple[str, ...] | None:
     """The executed DSL's compiled config fields, or None when it does not compile.
 
     ``dsl`` is the DSL the run executed -- its ``dsl_override`` when it carried one, else
@@ -635,9 +636,7 @@ def _reference_from_discovery_notes(
     """
     wanted_body = dsl_body_key(strategy_dsl) if strategy_dsl else None
     wanted_sizing = None if val_sizing is None else dict(val_sizing)
-    notes_like = (
-        None if wanted_body is not None else f'%{strategy_name.removeprefix("genome_")}%'
-    )
+    notes_like = None if wanted_body is not None else f"%{strategy_name.removeprefix('genome_')}%"
     # DSL-known path scans every completed run: no sound SQL prefilter exists
     # for a renamed strategy (hundreds of runs; JSON parse stops at first hit).
     rows = state.list_completed_discovery_notes(notes_like)
@@ -649,9 +648,7 @@ def _reference_from_discovery_notes(
         strategies = payload.get("top_strategies")
         if not isinstance(strategies, list):
             continue
-        if wanted_sizing is not None and (
-            _discovery_recorded_sizing(payload) != wanted_sizing
-        ):
+        if wanted_sizing is not None and (_discovery_recorded_sizing(payload) != wanted_sizing):
             continue
         for entry in strategies:
             if not isinstance(entry, dict):

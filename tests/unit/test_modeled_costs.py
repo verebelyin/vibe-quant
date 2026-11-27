@@ -244,7 +244,9 @@ def test_paid_through_counts_closed_and_open_funding(archive: Path) -> None:
     other = open_long(entry_ns=entry)
     other_ledger = ledger_for(archive)
     assert other_ledger.paid_through(at(DAY_MIN) - ONE_MS, [other]) == 0.1  # 2 x 0.05
-    assert other_ledger.paid_through(at(DAY_MIN), [other]) == 0.15000000000000002  # + 00:00 (== now)
+    assert (
+        other_ledger.paid_through(at(DAY_MIN), [other]) == 0.15000000000000002
+    )  # + 00:00 (== now)
 
 
 def test_open_position_on_other_symbol(archive: Path) -> None:
@@ -317,7 +319,9 @@ def test_refined_boundary_exit(archive: Path, tmp_path: Path) -> None:
     assert refine == frozenset({BTC})  # a 1d bar outlasts an 8h interval
 
     pos = d1_sl_position()
-    ledger = ledger_for(archive, {"SL-1": sl_order(int(pos.ts_opened))}, refine=refine, catalog=catalog)
+    ledger = ledger_for(
+        archive, {"SL-1": sl_order(int(pos.ts_opened))}, refine=refine, catalog=catalog
+    )
 
     ledger.on_position_closed(pos)
 
@@ -345,7 +349,9 @@ def test_missing_1m_last_raises_from_on_position_closed(archive: Path, tmp_path:
     assert ledger.finalized == {}
 
 
-def test_other_refinement_error_is_wrapped_as_the_expected_text(archive: Path, tmp_path: Path) -> None:
+def test_other_refinement_error_is_wrapped_as_the_expected_text(
+    archive: Path, tmp_path: Path
+) -> None:
     """Any other refinement failure becomes the R10b ``DataUnavailableError`` naming the
     timeframe, with the original exception as ``__cause__``."""
     catalog = refined_catalog(tmp_path)
@@ -638,7 +644,9 @@ def test_market_stats_series_before_is_causal() -> None:
     """``before(ts)`` is strictly before: the bar AT the fill is excluded (the equality
     edge), so a fat future bar cannot move the slippage the fill is charged."""
     ts = [at(0), at(1), at(2)]
-    series = _module().MarketStatsSeries.from_bars(ts, [100.0, 100.0, 100.0], [1000.0, 1000.0, 5000.0])
+    series = _module().MarketStatsSeries.from_bars(
+        ts, [100.0, 100.0, 100.0], [1000.0, 1000.0, 5000.0]
+    )
 
     assert series.before(at(2)) == (1000.0, 0.02)  # the 5000 bar AT the fill is not read
     assert series.before(at(2) + 1) == (7000.0 / 3.0, 0.02)
@@ -649,9 +657,7 @@ def test_market_stats_series_before_is_causal() -> None:
 def _reference_stats(closes: list[float], volumes: list[float]) -> tuple[float, float]:
     """The two-pass SPEC formula over one prefix, written out independently of the series."""
     positive_volumes = [v for v in volumes if v > 0]
-    avg_volume = (
-        sum(positive_volumes) / len(positive_volumes) if positive_volumes else 1000.0
-    )
+    avg_volume = sum(positive_volumes) / len(positive_volumes) if positive_volumes else 1000.0
     positive = [c for c in closes if c > 0]
     volatility = 0.02
     if len(positive) >= 3:
@@ -687,15 +693,15 @@ def test_market_stats_series_survives_cancelling_variance() -> None:
     tiny = [100.0, 100.1, 100.2001, 100.3003001, 100.4006004, 100.501001, 100.601502]
     expected = _reference_stats(tiny, [1000.0] * len(tiny))[1]
     assert expected == 3.963769082608259e-12
-    assert _module().MarketStatsSeries.from_bars(
-        range(7), tiny, [1000.0] * 7
-    ).before(7)[1] == pytest.approx(expected, rel=1e-12)
+    assert _module().MarketStatsSeries.from_bars(range(7), tiny, [1000.0] * 7).before(7)[
+        1
+    ] == pytest.approx(expected, rel=1e-12)
 
     doubling = [100.0 * 2**i for i in range(7)]
     assert _reference_stats(doubling, [1000.0] * len(doubling))[1] == 0.02
-    assert _module().MarketStatsSeries.from_bars(
-        range(7), doubling, [1000.0] * 7
-    ).before(7)[1] == 0.02
+    assert (
+        _module().MarketStatsSeries.from_bars(range(7), doubling, [1000.0] * 7).before(7)[1] == 0.02
+    )
 
     # the recompute is per prefix: a prefix of the tiny series also matches its own reference
     series = _module().MarketStatsSeries.from_bars(range(7), tiny, [1000.0] * 7)

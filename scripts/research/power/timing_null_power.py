@@ -447,7 +447,9 @@ def trade_pnls(
         q = sp.frac * equity / p_in
         paid = 0.0
         if costs.funding is not None:
-            pays = costs.funding(tape.symbol, s, q * p_in, *tn.funding_window(tape, i, xb, at_close))
+            pays = costs.funding(
+                tape.symbol, s, q * p_in, *tn.funding_window(tape, i, xb, at_close)
+            )
             paid = sum(amount for _ts, amount in pays)
         pnl = s * q * (p_out - p_in) - costs.fee * q * p_in - costs.fee * q * p_out - paid
         realized += pnl

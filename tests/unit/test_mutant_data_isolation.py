@@ -46,7 +46,10 @@ def test_insert_into_private_archive(tmp_path: Path) -> None:
     archive.insert_funding_rates("BTCUSDT", [(1700000000000, 0.0001, 30000.0)], "t")
     archive.close()
 """
-_PATH_DEFAULT_MUTANT = ("self._db_path = db_path or DEFAULT_ARCHIVE_PATH", "self._db_path = db_path and DEFAULT_ARCHIVE_PATH")
+_PATH_DEFAULT_MUTANT = (
+    "self._db_path = db_path or DEFAULT_ARCHIVE_PATH",
+    "self._db_path = db_path and DEFAULT_ARCHIVE_PATH",
+)
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -64,7 +67,11 @@ def _make_repo(tmp_path: Path) -> Path:
     for rel in ("vibe_quant/data/archive.py", "vibe_quant/db/connection.py"):
         (repo / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(_REAL / rel, repo / rel)
-    for rel in ("vibe_quant/__init__.py", "vibe_quant/data/__init__.py", "vibe_quant/db/__init__.py"):
+    for rel in (
+        "vibe_quant/__init__.py",
+        "vibe_quant/data/__init__.py",
+        "vibe_quant/db/__init__.py",
+    ):
         (repo / rel).write_text("")
     (repo / "tests").mkdir()
     (repo / "tests" / "test_writer.py").write_text(_WRITER_TEST)
@@ -190,7 +197,18 @@ def test_mutate_main_fails_closed_when_the_real_data_changes(
 
     old, new = _PATH_DEFAULT_MUTANT
     rc = mutate.main(
-        ["--repo", str(repo), "--file", "vibe_quant/data/archive.py", "--old", old, "--new", new, "--", "true"],
+        [
+            "--repo",
+            str(repo),
+            "--file",
+            "vibe_quant/data/archive.py",
+            "--old",
+            old,
+            "--new",
+            new,
+            "--",
+            "true",
+        ],
         run=leaky_run,
     )
     out = capsys.readouterr().out

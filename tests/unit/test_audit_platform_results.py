@@ -169,7 +169,11 @@ def _legacy_run(
 
 
 def _legacy_result(
-    conn: sqlite3.Connection, run_id: int, trades: int, sharpe: float | None, notes: str | None = None
+    conn: sqlite3.Connection,
+    run_id: int,
+    trades: int,
+    sharpe: float | None,
+    notes: str | None = None,
 ) -> None:
     conn.execute(
         "INSERT INTO backtest_results (run_id, total_trades, sharpe_ratio, notes) VALUES (?, ?, ?, ?)",

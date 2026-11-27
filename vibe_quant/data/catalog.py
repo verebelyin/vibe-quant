@@ -320,7 +320,11 @@ def aggregate_bars(
         if bar_key != group_key:
             # Aggregate current group
             if current_group:
-                aggregated.append(_aggregate_group(current_group, target_bar_type, size_precision, price_precision))
+                aggregated.append(
+                    _aggregate_group(
+                        current_group, target_bar_type, size_precision, price_precision
+                    )
+                )
 
             # Start new group
             current_group = [bar]
@@ -570,7 +574,9 @@ class CatalogManager:
                 existing = None
             else:
                 existing = {i.id: i for i in catalog_instruments}.get(instrument.id)
-            if existing is not None and type(existing).to_dict(existing) == type(instrument).to_dict(instrument):
+            if existing is not None and type(existing).to_dict(existing) == type(
+                instrument
+            ).to_dict(instrument):
                 return  # unchanged: no churn (validation runner calls this per run)
             shutil.rmtree(inst_dir)
             with self._catalog_lock:

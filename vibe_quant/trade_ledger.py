@@ -354,9 +354,9 @@ def moments_from_returns(returns: list[float]) -> tuple[float, float, tuple[floa
 
     # Adjusted Fisher G2 excess kurtosis (bias-corrected)
     # G2 = (n+1)(n-1) / ((n-2)(n-3)) * m4/m2² - 3(n-1)² / ((n-2)(n-3))
-    excess = ((n + 1) * (n - 1) * m4) / (
-        (n - 2) * (n - 3) * m2**2
-    ) - (3 * (n - 1) ** 2) / ((n - 2) * (n - 3))
+    excess = ((n + 1) * (n - 1) * m4) / ((n - 2) * (n - 3) * m2**2) - (3 * (n - 1) ** 2) / (
+        (n - 2) * (n - 3)
+    )
 
     # Full kurtosis = excess + 3 (DSR expects gamma_4, not excess)
     kurtosis = excess + 3.0
@@ -408,12 +408,10 @@ def apply_validation_moments(result: ValidationResult, returns: list[float]) -> 
         m3 = sum(d**3 for d in diffs) / n
         m4 = sum(d**4 for d in diffs) / n
 
-        result.skewness = round(
-            (math.sqrt(n * (n - 1)) / (n - 2)) * (m3 / m2**1.5), 4
+        result.skewness = round((math.sqrt(n * (n - 1)) / (n - 2)) * (m3 / m2**1.5), 4)
+        excess = ((n + 1) * (n - 1) * m4) / ((n - 2) * (n - 3) * m2**2) - (3 * (n - 1) ** 2) / (
+            (n - 2) * (n - 3)
         )
-        excess = ((n + 1) * (n - 1) * m4) / (
-            (n - 2) * (n - 3) * m2**2
-        ) - (3 * (n - 1) ** 2) / ((n - 2) * (n - 3))
         result.kurtosis = round(max(1.0, excess + 3.0), 4)
     except Exception:
         logger.warning("Could not compute return moments", exc_info=True)
@@ -651,7 +649,9 @@ def liquidated_close(pos: Any, hit: Any) -> tuple[float, list[float]]:
     for fill in pos.events:
         if int(fill.ts_event) > hit.ts:
             continue
-        sign = 1.0 if getattr(fill.order_side, "name", str(fill.order_side)).upper() == "BUY" else -1.0
+        sign = (
+            1.0 if getattr(fill.order_side, "name", str(fill.order_side)).upper() == "BUY" else -1.0
+        )
         commission = float(fill.commission)
         kept_commissions.append(commission)
         book.apply(
@@ -830,7 +830,5 @@ def validation_liquidated_run(
         if hit is None:
             adjusted.append(item)
         else:
-            adjusted.append(
-                _validation_liquidated_costs(item, hit, overlay.exit_override[key])
-            )
+            adjusted.append(_validation_liquidated_costs(item, hit, overlay.exit_override[key]))
     return adjusted, _validation_with_valuation_cash(overlay.ledgers, adjusted)

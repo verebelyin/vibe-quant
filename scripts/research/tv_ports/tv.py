@@ -118,13 +118,19 @@ def _render(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("render", "emulate"):
         p = sub.add_parser(name)
         p.add_argument("--port", required=True, help="port folder (port.yaml)")
-        p.add_argument("--set", action="append", default=[], metavar="k=v", help="parameter override")
-        p.add_argument("--timeframe", help="replace the strategy timeframe (1m, 5m, 15m, 1h, 4h, 1d)")
+        p.add_argument(
+            "--set", action="append", default=[], metavar="k=v", help="parameter override"
+        )
+        p.add_argument(
+            "--timeframe", help="replace the strategy timeframe (1m, 5m, 15m, 1h, 4h, 1d)"
+        )
         if name == "emulate":
             p.add_argument("--symbol", required=True)
             p.add_argument("--start", required=True)

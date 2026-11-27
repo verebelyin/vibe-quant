@@ -155,9 +155,7 @@ def test_scaffold_output_imports_cleanly(tmp_path: Path) -> None:
     )
     plugin_path = written[0]
 
-    spec = importlib.util.spec_from_file_location(
-        "_scaffold_smoke_test", plugin_path
-    )
+    spec = importlib.util.spec_from_file_location("_scaffold_smoke_test", plugin_path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
 
@@ -202,8 +200,7 @@ def test_scaffold_generated_test_passes(tmp_path: Path) -> None:
         env=env,
     )
     assert result.returncode == 0, (
-        f"Generated test failed.\nstdout:\n{result.stdout}\n"
-        f"stderr:\n{result.stderr}"
+        f"Generated test failed.\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
 
 

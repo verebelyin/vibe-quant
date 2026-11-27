@@ -244,7 +244,9 @@ def pooled_note(fitness: FitnessResult) -> dict[str, object] | None:
 
     k_eff, k_reason, mean_corr = pooled_k_eff(fitness.symbol_mtm_daily or {})
     return {
-        "symbols": {sym: {"return": stats[sym][0], "trades": stats[sym][1]} for sym in sorted(stats)},
+        "symbols": {
+            sym: {"return": stats[sym][0], "trades": stats[sym][1]} for sym in sorted(stats)
+        },
         "positive": sum(1 for ret, _trades in stats.values() if ret > 0),
         "need": pooled_sign_floor(len(stats)),
         "k_eff": k_eff,
@@ -421,9 +423,7 @@ class GateEvidence:
     ) = None
     buy_hold_closes_fn: Callable[[list[str]], dict[str, dict[int, float]]] | None = None
     timing_null_capture_fn: Callable[[StrategyChromosome], CapturedRun] | None = None
-    filter_fn: (
-        Callable[[StrategyChromosome, dict[str, float | int]], dict[str, bool]] | None
-    ) = None
+    filter_fn: Callable[[StrategyChromosome, dict[str, float | int]], dict[str, bool]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -752,7 +752,9 @@ class GateChain:
                         kept.append((chrom, fit))
                     else:
                         self.reject(
-                            chrom, fit, "cross_window",
+                            chrom,
+                            fit,
+                            "cross_window",
                             [
                                 f"Cross-window: {cwr.windows_passed}/{cwr.total_windows} "
                                 f"shifted windows passed (need {cwr.required}; "
@@ -773,14 +775,17 @@ class GateChain:
             if skip_reason is not None:
                 logger.warning(
                     "WFA requested (wfa_oos_step_days=%d) but not run: %s",
-                    cfg.wfa_oos_step_days, skip_reason,
+                    cfg.wfa_oos_step_days,
+                    skip_reason,
                 )
                 for chrom, fit in survivors:  # fail closed
                     self.reject(chrom, fit, "wfa", [f"WFA: {skip_reason}"])
                 survivors = []
             else:
                 wfa_results, error = self.evaluate_wfa_rolling(
-                    survivors, cfg.start_date, cfg.end_date,
+                    survivors,
+                    cfg.start_date,
+                    cfg.end_date,
                 )
                 kept = []
                 if error is not None:
@@ -793,7 +798,9 @@ class GateChain:
                             kept.append((chrom, fit))
                         else:
                             self.reject(
-                                chrom, fit, "wfa",
+                                chrom,
+                                fit,
+                                "wfa",
                                 [
                                     f"WFA: {wfa.windows_profitable}/{wfa.total_windows} rolling "
                                     f"windows profitable ({wfa.consistency:.0%} < "
@@ -830,7 +837,10 @@ class GateChain:
                         kept.append((chrom, fit))
                 logger.info(
                     "  Holdout gate: %d/%d passed (min_trades=%d, sharpe365>%s, return>0)",
-                    len(kept), len(survivors), holdout_floor, fmt_sharpe(cfg.holdout_min_sharpe),
+                    len(kept),
+                    len(survivors),
+                    holdout_floor,
+                    fmt_sharpe(cfg.holdout_min_sharpe),
                 )
                 survivors = kept
 
@@ -907,7 +917,9 @@ class GateChain:
                 closes = load_daily_closes(symbols, DEFAULT_CATALOG_PATH)
         except Exception as exc:
             reason = f"Buy-hold: benchmark closes unavailable: {exc}"
-            logger.warning("Buy-hold gate failing closed on %d candidates: %s", len(candidates), exc)
+            logger.warning(
+                "Buy-hold gate failing closed on %d candidates: %s", len(candidates), exc
+            )
             for chrom, fit in candidates:
                 self.reject(chrom, fit, "buy_hold", [reason])
             self._buy_hold_gate = {"enforced": True, "error": str(exc)}
@@ -1002,7 +1014,8 @@ class GateChain:
                 problem = f"Timing null: benchmark closes unavailable: {type(exc).__name__}"
                 logger.warning(
                     "Timing-null gate failing closed on %d candidates: %s",
-                    len(candidates), problem,
+                    len(candidates),
+                    problem,
                 )
         if problem is not None:
             for chrom, fit in candidates:
@@ -1107,11 +1120,16 @@ class GateChain:
             logger.info(
                 "  #%d %s: TRAIN sharpe365=%s dd=%.1f%% ret=%.1f%% trades=%d → "
                 "HOLDOUT sharpe365=%s dd=%.1f%% ret=%.1f%% trades=%d",
-                rank, chrom.uid,
-                fmt_sharpe(train_fit.sharpe_ratio), train_fit.max_drawdown * 100,
-                train_fit.total_return * 100, train_fit.total_trades,
-                fmt_sharpe(hr.sharpe_ratio), hr.max_drawdown * 100,
-                hr.total_return * 100, hr.total_trades,
+                rank,
+                chrom.uid,
+                fmt_sharpe(train_fit.sharpe_ratio),
+                train_fit.max_drawdown * 100,
+                train_fit.total_return * 100,
+                train_fit.total_trades,
+                fmt_sharpe(hr.sharpe_ratio),
+                hr.max_drawdown * 100,
+                hr.total_return * 100,
+                hr.total_trades,
             )
 
         # Summary: how much did strategies degrade on holdout?
@@ -1124,7 +1142,9 @@ class GateChain:
             logger.info(
                 "  Holdout summary: avg_train_sharpe365=%s → avg_holdout_sharpe365=%s "
                 "(%.1f%% degradation)",
-                fmt_sharpe(avg_train), fmt_sharpe(avg_holdout), degradation,
+                fmt_sharpe(avg_train),
+                fmt_sharpe(avg_holdout),
+                degradation,
             )
 
         return results
@@ -1157,7 +1177,9 @@ class GateChain:
 
         logger.info(
             "=== CROSS-WINDOW VALIDATION: %d strategies × %d shifted windows (need %d) ===",
-            len(candidates), len(windows), required,
+            len(candidates),
+            len(windows),
+            required,
         )
         for months, ws, we in windows:
             logger.info("  Window +%dmo: %s → %s", months, ws, we)
@@ -1168,12 +1190,16 @@ class GateChain:
             passes = 0
             for months, ws, we in windows:
                 try:
-                    hr = metrics_to_holdout_result(self._evidence.backtest_fn_factory(ws, we)(chrom))
+                    hr = metrics_to_holdout_result(
+                        self._evidence.backtest_fn_factory(ws, we)(chrom)
+                    )
                 except DataUnavailableError:
                     raise
                 except Exception:
                     logger.warning(
-                        "Cross-window eval failed: %s window +%dmo", chrom.uid, months,
+                        "Cross-window eval failed: %s window +%dmo",
+                        chrom.uid,
+                        months,
                         exc_info=True,
                     )
                     hr = FAILED_WINDOW
@@ -1195,21 +1221,24 @@ class GateChain:
             )
 
             window_strs = [
-                f"W+{months}mo: sharpe365={fmt_sharpe(hr.sharpe_ratio)} ret={hr.total_return*100:.1f}% "
+                f"W+{months}mo: sharpe365={fmt_sharpe(hr.sharpe_ratio)} ret={hr.total_return * 100:.1f}% "
                 f"[{'PASS' if (hr.total_return > 0 and hr.sharpe_ratio >= min_sharpe) else 'FAIL'}]"
                 for (months, _, _), hr in zip(windows, window_hrs, strict=True)
             ]
             logger.info(
                 "  #%d %s: %s → %d/%d shifted windows %s",
-                rank, chrom.uid,
+                rank,
+                chrom.uid,
                 " | ".join(window_strs),
-                passes, len(windows),
+                passes,
+                len(windows),
                 "PROMOTED" if passed else "REJECTED",
             )
 
         logger.info(
             "  Cross-window summary: %d/%d strategies promoted",
-            sum(1 for r in cross_results if r.passed), len(candidates),
+            sum(1 for r in cross_results if r.passed),
+            len(candidates),
         )
         return cross_results, None
 
@@ -1244,7 +1273,9 @@ class GateChain:
 
         logger.info(
             "=== WFA ROLLING VALIDATION: %d strategies × %d windows (%dd each, train range) ===",
-            len(candidates), len(windows), step,
+            len(candidates),
+            len(windows),
+            step,
         )
         for i, (ws, we) in enumerate(windows):
             logger.info("  Window %d: %s → %s", i, ws, we)
@@ -1257,7 +1288,9 @@ class GateChain:
 
             for ws, we in windows:
                 try:
-                    hr = metrics_to_holdout_result(self._evidence.backtest_fn_factory(ws, we)(chrom))
+                    hr = metrics_to_holdout_result(
+                        self._evidence.backtest_fn_factory(ws, we)(chrom)
+                    )
                 except DataUnavailableError:
                     raise
                 except Exception:
@@ -1287,20 +1320,28 @@ class GateChain:
             )
 
             w_strs = [
-                f"W{i}: ret={hr.total_return*100:.1f}% {'OK' if hr.total_return > 0 else 'LOSS'}"
+                f"W{i}: ret={hr.total_return * 100:.1f}% {'OK' if hr.total_return > 0 else 'LOSS'}"
                 for i, hr in enumerate(oos_results)
             ]
             logger.info(
                 "  #%d %s: %s → %d/%d profitable (%.0f%%) | %d/%d sharpe+ (%.0f%%) %s",
-                rank, chrom.uid, " | ".join(w_strs),
-                profitable, len(windows), consistency * 100,
-                sharpe_positive, len(windows), sharpe_consistency * 100,
+                rank,
+                chrom.uid,
+                " | ".join(w_strs),
+                profitable,
+                len(windows),
+                consistency * 100,
+                sharpe_positive,
+                len(windows),
+                sharpe_consistency * 100,
                 "PASS" if passed else "FAIL",
             )
 
         logger.info(
             "  WFA summary: %d/%d passed (min_consistency=%.0f%%)",
-            sum(1 for r in wfa_results if r.passed), len(candidates), min_consistency * 100,
+            sum(1 for r in wfa_results if r.passed),
+            len(candidates),
+            min_consistency * 100,
         )
         return wfa_results, None
 
@@ -1357,7 +1398,10 @@ def window_regime_sign(symbol: str, start_date: str, end_date: str) -> int:
     except Exception:
         logger.warning(
             "Regime sign: failed to load OHLC for %s %s→%s, treating as neutral",
-            symbol, start_date, end_date, exc_info=True,
+            symbol,
+            start_date,
+            end_date,
+            exc_info=True,
         )
         return 0
 
@@ -1438,7 +1482,9 @@ def passes_opposing_regime_gate(
         logger.info(
             "Regime gate: base window %s→%s is neutral (|ret| < %.0f%%) — "
             "requiring a pass on a bullish window",
-            start_date, end_date, REGIME_RETURN_THRESHOLD * 100,
+            start_date,
+            end_date,
+            REGIME_RETURN_THRESHOLD * 100,
         )
 
     min_sharpe_raw = payload.get("cross_window_min_sharpe", 0.5)
@@ -1448,7 +1494,10 @@ def passes_opposing_regime_gate(
         min_sharpe = 0.5
 
     for window, (shifted_start, shifted_end) in _shifted_windows_with_dates(
-        windows_raw, offsets_raw, start_date, end_date,
+        windows_raw,
+        offsets_raw,
+        start_date,
+        end_date,
     ):
         shifted_sign = regime_sign(symbol, shifted_start, shifted_end)
         if shifted_sign != required_sign:
@@ -1541,10 +1590,7 @@ def recheck_dsr_verdict(
                 num_trials,
             )
             if q95_rule_decided(spread)
-            else (
-                f"DSR not significant: p={dsr_result.p_value:.4f} "
-                f"(T={mtm_days}, N={num_trials})"
-            )
+            else (f"DSR not significant: p={dsr_result.p_value:.4f} (T={mtm_days}, N={num_trials})")
         )
     if floor_reasons:
         passed = False

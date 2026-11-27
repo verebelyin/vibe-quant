@@ -12,8 +12,13 @@ from vibe_quant.discovery.operators import (
 )
 
 
-def _gene(ind: str = "RSI", period: int = 14, condition: ConditionType = ConditionType.GT,
-          threshold: float = 50.0, sub_value: str | None = None) -> StrategyGene:
+def _gene(
+    ind: str = "RSI",
+    period: int = 14,
+    condition: ConditionType = ConditionType.GT,
+    threshold: float = 50.0,
+    sub_value: str | None = None,
+) -> StrategyGene:
     """Helper to create a gene with minimal boilerplate."""
     params: dict[str, float] = {"period": float(period)}
     if ind == "MACD":
@@ -21,18 +26,28 @@ def _gene(ind: str = "RSI", period: int = 14, condition: ConditionType = Conditi
     elif ind == "STOCH":
         params = {"period_k": float(period), "period_d": 3.0}
     return StrategyGene(
-        indicator_type=ind, parameters=params, condition=condition,
-        threshold=threshold, sub_value=sub_value,
+        indicator_type=ind,
+        parameters=params,
+        condition=condition,
+        threshold=threshold,
+        sub_value=sub_value,
     )
 
 
-def _chrom(entry_genes: list[StrategyGene], exit_genes: list[StrategyGene],
-           sl: float = 2.0, tp: float = 5.0,
-           direction: Direction = Direction.LONG) -> StrategyChromosome:
+def _chrom(
+    entry_genes: list[StrategyGene],
+    exit_genes: list[StrategyGene],
+    sl: float = 2.0,
+    tp: float = 5.0,
+    direction: Direction = Direction.LONG,
+) -> StrategyChromosome:
     """Helper to create a chromosome."""
     return StrategyChromosome(
-        entry_genes=entry_genes, exit_genes=exit_genes,
-        stop_loss_pct=sl, take_profit_pct=tp, direction=direction,
+        entry_genes=entry_genes,
+        exit_genes=exit_genes,
+        stop_loss_pct=sl,
+        take_profit_pct=tp,
+        direction=direction,
     )
 
 
@@ -94,13 +109,19 @@ class TestChromosomeDistance:
         a = _chrom(
             [_gene("RSI", 14, ConditionType.GT, 50.0)],
             [_gene("ATR", 14, ConditionType.LT, 0.01)],
-            sl=1.0, tp=1.0, direction=Direction.LONG,
+            sl=1.0,
+            tp=1.0,
+            direction=Direction.LONG,
         )
         b = _chrom(
-            [_gene("CCI", 50, ConditionType.CROSSES_BELOW, -200.0),
-             _gene("STOCH", 21, ConditionType.LTE, 20.0)],
+            [
+                _gene("CCI", 50, ConditionType.CROSSES_BELOW, -200.0),
+                _gene("STOCH", 21, ConditionType.LTE, 20.0),
+            ],
             [_gene("MFI", 30, ConditionType.GT, 80.0)],
-            sl=10.0, tp=20.0, direction=Direction.SHORT,
+            sl=10.0,
+            tp=20.0,
+            direction=Direction.SHORT,
         )
         d = chromosome_distance(a, b)
         assert d > 0.5
@@ -142,14 +163,18 @@ class TestChromosomeDistance:
         b = _chrom(
             [_gene("CCI"), _gene("STOCH"), _gene("MFI"), _gene("ADX"), _gene("WILLR")],
             [_gene("ROC"), _gene("MACD"), _gene("RSI")],
-            sl=10.0, tp=20.0, direction=Direction.SHORT,
+            sl=10.0,
+            tp=20.0,
+            direction=Direction.SHORT,
         )
         d = chromosome_distance(a, b)
         assert 0.0 <= d <= 1.0
 
 
 def _ext(
-    block: ExitBlock, short: ExitBlock | None = None, max_bars: int | None = None,
+    block: ExitBlock,
+    short: ExitBlock | None = None,
+    max_bars: int | None = None,
     direction: Direction = Direction.LONG,
 ) -> StrategyChromosome:
     """Same genes everywhere, so only the exit rules can move the distance."""

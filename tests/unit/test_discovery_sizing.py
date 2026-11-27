@@ -166,8 +166,11 @@ def _reach_run(
         NTBacktestFn,
         "__call__",
         lambda self, c: {
-            "sharpe_ratio": 1.0, "total_return": 0.05, "max_drawdown": 0.05,
-            "profit_factor": 1.5, "total_trades": 100,
+            "sharpe_ratio": 1.0,
+            "total_return": 0.05,
+            "max_drawdown": 0.05,
+            "profit_factor": 1.5,
+            "total_trades": 100,
         },  # fmt: skip
     )
     monkeypatch.setattr(DiscoveryPipeline, "run", lambda self: run_fn(self))
@@ -231,9 +234,7 @@ def test_zero_champion_run_records_notes_sizing(
 # ---------------------------------------------------------------------------
 
 
-def test_cli_records_notes_margin_limit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_cli_records_notes_margin_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """T6/B5a: ``--max-margin-pct`` is recorded in ``notes.sizing`` like the other keys.
 
     The limit applies to every screening backtest of the run (the same setup the
@@ -259,13 +260,17 @@ def test_cli_atr_sizing_reaches_every_fn_and_notes(
     """``--sizing-mode atr`` reaches every backtest fn the CLI builds and
     is recorded (all three ATR fields) where promote/replay read it."""
     rc, _run, notes, built = _reach_run(
-        tmp_path, monkeypatch,
+        tmp_path,
+        monkeypatch,
         extra_args=["--sizing-mode", "atr", "--sizing-atr-multiplier", "3"],
     )
     assert rc == 0
     assert notes["sizing"] == {
-        "max_position_pct": 1.0, "risk_per_trade": 0.01, "sizing_mode": "atr",
-        "sizing_atr_period": 14, "sizing_atr_multiplier": 3.0,
+        "max_position_pct": 1.0,
+        "risk_per_trade": 0.01,
+        "sizing_mode": "atr",
+        "sizing_atr_period": 14,
+        "sizing_atr_multiplier": 3.0,
     }
     assert built
     assert all(

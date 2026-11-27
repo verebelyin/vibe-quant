@@ -413,41 +413,42 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Optional
 
+
 @dataclass
 class Position:
     symbol: str
-    side: str                    # 'long' or 'short'
+    side: str  # 'long' or 'short'
     entry_price: Decimal
     quantity: Decimal
     leverage: int
-    margin_type: str             # 'isolated' or 'cross'
+    margin_type: str  # 'isolated' or 'cross'
     initial_margin: Decimal
-    maintenance_margin_rate: Decimal = Decimal('0.005')  # 0.5% default
-    
+    maintenance_margin_rate: Decimal = Decimal("0.005")  # 0.5% default
+
     @property
     def position_value(self) -> Decimal:
         return self.quantity * self.entry_price
-    
+
     @property
     def maintenance_margin(self) -> Decimal:
         return self.position_value * self.maintenance_margin_rate
-    
-    def liquidation_price(self, extra_margin: Decimal = Decimal('0')) -> Decimal:
+
+    def liquidation_price(self, extra_margin: Decimal = Decimal("0")) -> Decimal:
         """Calculate liquidation price for isolated margin position."""
         margin_diff = self.initial_margin - self.maintenance_margin + extra_margin
-        
-        if self.side == 'long':
+
+        if self.side == "long":
             return self.entry_price - (margin_diff / self.quantity)
         else:  # short
             return self.entry_price + (margin_diff / self.quantity)
-    
+
     def unrealized_pnl(self, current_price: Decimal) -> Decimal:
         """Calculate unrealized PnL at current price."""
-        if self.side == 'long':
+        if self.side == "long":
             return self.quantity * (current_price - self.entry_price)
         else:
             return self.quantity * (self.entry_price - current_price)
-    
+
     def roi_percent(self, current_price: Decimal) -> Decimal:
         """Calculate ROI as percentage of margin (leverage-amplified)."""
         pnl = self.unrealized_pnl(current_price)
@@ -456,20 +457,24 @@ class Position:
 
 class FeeCalculator:
     """Calculate trading fees including maker/taker and funding."""
-    
-    def __init__(self, maker_fee: Decimal = Decimal('0.0002'),
-                 taker_fee: Decimal = Decimal('0.0005'),
-                 funding_interval_hours: int = 8):
+
+    def __init__(
+        self,
+        maker_fee: Decimal = Decimal("0.0002"),
+        taker_fee: Decimal = Decimal("0.0005"),
+        funding_interval_hours: int = 8,
+    ):
         self.maker_fee = maker_fee
         self.taker_fee = taker_fee
         self.funding_interval_hours = funding_interval_hours
-    
+
     def trading_fee(self, notional: Decimal, is_maker: bool) -> Decimal:
         rate = self.maker_fee if is_maker else self.taker_fee
         return notional * rate
-    
-    def funding_fee(self, position_value: Decimal, funding_rate: Decimal,
-                    hours_held: int) -> Decimal:
+
+    def funding_fee(
+        self, position_value: Decimal, funding_rate: Decimal, hours_held: int
+    ) -> Decimal:
         """Calculate cumulative funding fees for position duration."""
         periods = hours_held / self.funding_interval_hours
         return position_value * funding_rate * Decimal(str(periods))
@@ -477,22 +482,26 @@ class FeeCalculator:
 
 class SlippageModel:
     """Volume-based slippage estimation."""
-    
-    def __init__(self, base_slippage_bps: Decimal = Decimal('1'),
-                 volume_impact_factor: Decimal = Decimal('0.1')):
+
+    def __init__(
+        self,
+        base_slippage_bps: Decimal = Decimal("1"),
+        volume_impact_factor: Decimal = Decimal("0.1"),
+    ):
         self.base_slippage = base_slippage_bps / 10000
         self.volume_impact_factor = volume_impact_factor
-    
-    def estimate(self, order_size: Decimal, avg_daily_volume: Decimal,
-                 volatility: Optional[Decimal] = None) -> Decimal:
+
+    def estimate(
+        self, order_size: Decimal, avg_daily_volume: Decimal, volatility: Optional[Decimal] = None
+    ) -> Decimal:
         """Estimate slippage as fraction of price."""
         volume_ratio = order_size / avg_daily_volume
-        volume_impact = self.volume_impact_factor * (volume_ratio ** Decimal('0.5'))
-        
-        volatility_impact = Decimal('0')
+        volume_impact = self.volume_impact_factor * (volume_ratio ** Decimal("0.5"))
+
+        volatility_impact = Decimal("0")
         if volatility:
-            volatility_impact = volatility * Decimal('0.5')
-        
+            volatility_impact = volatility * Decimal("0.5")
+
         return self.base_slippage + volume_impact + volatility_impact
 ```
 
@@ -503,88 +512,89 @@ from enum import Enum
 from typing import List, Dict
 import math
 
+
 class SizingMethod(Enum):
-    FIXED_FRACTIONAL = 'fixed_fractional'
-    KELLY = 'kelly'
-    VOLATILITY_BASED = 'volatility_based'
+    FIXED_FRACTIONAL = "fixed_fractional"
+    KELLY = "kelly"
+    VOLATILITY_BASED = "volatility_based"
+
 
 @dataclass
 class BankrollConfig:
     sizing_method: SizingMethod = SizingMethod.FIXED_FRACTIONAL
-    risk_per_trade: Decimal = Decimal('0.02')      # 2% risk per trade
-    kelly_fraction: Decimal = Decimal('0.5')       # Half-Kelly
-    max_position_pct: Decimal = Decimal('0.10')    # 10% max single position
-    max_portfolio_risk: Decimal = Decimal('0.06')  # 6% total portfolio at risk
-    max_daily_loss: Decimal = Decimal('0.02')      # 2% daily loss limit
-    max_drawdown_pause: Decimal = Decimal('0.15')  # Pause at 15% drawdown
+    risk_per_trade: Decimal = Decimal("0.02")  # 2% risk per trade
+    kelly_fraction: Decimal = Decimal("0.5")  # Half-Kelly
+    max_position_pct: Decimal = Decimal("0.10")  # 10% max single position
+    max_portfolio_risk: Decimal = Decimal("0.06")  # 6% total portfolio at risk
+    max_daily_loss: Decimal = Decimal("0.02")  # 2% daily loss limit
+    max_drawdown_pause: Decimal = Decimal("0.15")  # Pause at 15% drawdown
     max_leverage: int = 20
 
 
 class BankrollManager:
     """Position sizing and risk management."""
-    
+
     def __init__(self, config: BankrollConfig, initial_capital: Decimal):
         self.config = config
         self.equity = initial_capital
         self.peak_equity = initial_capital
         self.trade_history: List[Dict] = []
-    
-    def fixed_fractional_size(self, entry_price: Decimal, 
-                               stop_loss: Decimal) -> Decimal:
+
+    def fixed_fractional_size(self, entry_price: Decimal, stop_loss: Decimal) -> Decimal:
         """Calculate position size using fixed fractional method."""
         risk_per_share = abs(entry_price - stop_loss)
         if risk_per_share == 0:
-            return Decimal('0')
-        
+            return Decimal("0")
+
         dollar_risk = self.equity * self.config.risk_per_trade
         position_size = dollar_risk / risk_per_share
-        
+
         # Apply maximum position limit
         max_position = self.equity * self.config.max_position_pct / entry_price
         return min(position_size, max_position)
-    
-    def kelly_size(self, win_rate: Decimal, avg_win: Decimal, 
-                   avg_loss: Decimal) -> Decimal:
+
+    def kelly_size(self, win_rate: Decimal, avg_win: Decimal, avg_loss: Decimal) -> Decimal:
         """Calculate position size using Kelly Criterion."""
         if avg_loss == 0:
-            return Decimal('0')
-        
+            return Decimal("0")
+
         win_loss_ratio = avg_win / avg_loss
         kelly_pct = win_rate - ((1 - win_rate) / win_loss_ratio)
-        kelly_pct = max(Decimal('0'), kelly_pct)  # No negative sizing
-        
+        kelly_pct = max(Decimal("0"), kelly_pct)  # No negative sizing
+
         # Apply fractional Kelly
         adjusted_kelly = kelly_pct * self.config.kelly_fraction
-        
+
         return self.equity * adjusted_kelly
-    
-    def volatility_size(self, atr: Decimal, entry_price: Decimal,
-                        atr_multiplier: Decimal = Decimal('2')) -> Decimal:
+
+    def volatility_size(
+        self, atr: Decimal, entry_price: Decimal, atr_multiplier: Decimal = Decimal("2")
+    ) -> Decimal:
         """Calculate position size based on ATR volatility."""
         dollar_risk = self.equity * self.config.risk_per_trade
         stop_distance = atr * atr_multiplier
-        
+
         position_value = dollar_risk / (stop_distance / entry_price)
         return position_value / entry_price
-    
+
     @property
     def current_drawdown(self) -> Decimal:
         if self.peak_equity == 0:
-            return Decimal('0')
+            return Decimal("0")
         return (self.peak_equity - self.equity) / self.peak_equity
-    
+
     def is_trading_allowed(self) -> bool:
         """Check if trading should be paused due to drawdown."""
         return self.current_drawdown < self.config.max_drawdown_pause
-    
+
     def drawdown_scaling_factor(self) -> Decimal:
         """Scale position sizes based on current drawdown."""
         dd = self.current_drawdown
         if dd >= self.config.max_drawdown_pause:
-            return Decimal('0')
-        elif dd >= Decimal('0.10'):  # 10% drawdown = half size
-            return Decimal('0.5')
-        return Decimal('1.0')
+            return Decimal("0")
+        elif dd >= Decimal("0.10"):  # 10% drawdown = half size
+            return Decimal("0.5")
+        return Decimal("1.0")
 ```
 
 ## Exchange integration specifications
@@ -626,60 +636,58 @@ from ethereal_sdk import EtherealClient
 from typing import List, Dict
 import asyncio
 
+
 class EtherealAdapter:
     """Adapter for Ethereal exchange integration."""
-    
+
     def __init__(self, private_key: str, testnet: bool = True):
         base_url = "https://api.etherealtest.net" if testnet else "https://api.ethereal.trade"
-        self.client = EtherealClient(
-            private_key=private_key,
-            base_url=base_url
-        )
+        self.client = EtherealClient(private_key=private_key, base_url=base_url)
         self.product_cache: Dict[str, str] = {}  # symbol -> product_id
-    
+
     async def initialize(self):
         """Cache product IDs for symbol lookup."""
         products = await self.client.get_products()
         for product in products:
-            self.product_cache[product['symbol']] = product['id']
-    
-    async def fetch_historical_ohlcv(self, symbol: str, 
-                                      start_time: int, end_time: int,
-                                      interval: str = '1m') -> List[Dict]:
+            self.product_cache[product["symbol"]] = product["id"]
+
+    async def fetch_historical_ohlcv(
+        self, symbol: str, start_time: int, end_time: int, interval: str = "1m"
+    ) -> List[Dict]:
         """Fetch historical OHLCV data from Archive API."""
         # Ethereal uses Archive API for historical data
         # May need to aggregate trades into candles
         product_id = self.product_cache.get(symbol)
         if not product_id:
             raise ValueError(f"Unknown symbol: {symbol}")
-        
+
         # Implementation depends on Archive API structure
         # May need to fetch trades and aggregate to OHLCV
         pass
-    
+
     async def get_market_price(self, symbol: str) -> Dict:
         """Get current market price."""
         product_id = self.product_cache[symbol]
         return await self.client.get_market_price(product_id=product_id)
-    
-    async def place_order(self, symbol: str, side: str, 
-                          quantity: float, price: float = None,
-                          order_type: str = 'limit') -> Dict:
+
+    async def place_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float = None,
+        order_type: str = "limit",
+    ) -> Dict:
         """Place order on Ethereal (uses EIP-712 signing)."""
         product_id = self.product_cache[symbol]
-        
-        if order_type == 'market':
+
+        if order_type == "market":
             return await self.client.place_market_order(
-                product_id=product_id,
-                side=side,
-                quantity=str(quantity)
+                product_id=product_id, side=side, quantity=str(quantity)
             )
         else:
             return await self.client.place_limit_order(
-                product_id=product_id,
-                side=side,
-                quantity=str(quantity),
-                price=str(price)
+                product_id=product_id, side=side, quantity=str(quantity), price=str(price)
             )
 ```
 
@@ -693,58 +701,55 @@ from celery import Celery
 import redis
 
 # Celery configuration for distributed backtesting
-celery_app = Celery('backtester',
-    broker='redis://localhost:6379/0',
-    backend='redis://localhost:6379/0'
+celery_app = Celery(
+    "backtester", broker="redis://localhost:6379/0", backend="redis://localhost:6379/0"
 )
 
+
 @celery_app.task(bind=True)
-def run_backtest(self, strategy_id: int, symbols: List[str],
-                 start_date: str, end_date: str, params: Dict):
+def run_backtest(
+    self, strategy_id: int, symbols: List[str], start_date: str, end_date: str, params: Dict
+):
     """Run backtest as Celery task."""
     from freqtrade.optimize.backtesting import Backtesting
-    
+
     config = build_config(strategy_id, symbols, start_date, end_date, params)
     backtesting = Backtesting(config)
     results = backtesting.start()
-    
+
     # Store results in database
     save_backtest_results(strategy_id, results)
-    return results['summary']
+    return results["summary"]
 
 
 class BacktestOrchestrator:
     """Orchestrate parallel backtest execution."""
-    
+
     def __init__(self, max_workers: int = 16):
         self.max_workers = max_workers
         self.redis = redis.Redis()
-    
-    async def run_parameter_sweep(self, strategy_id: int, 
-                                   param_grid: List[Dict]) -> List[Dict]:
+
+    async def run_parameter_sweep(self, strategy_id: int, param_grid: List[Dict]) -> List[Dict]:
         """Run backtests for all parameter combinations in parallel."""
         tasks = []
         for params in param_grid:
             task = run_backtest.delay(strategy_id, params)
             tasks.append(task)
-        
+
         # Collect results
         results = []
         for task in tasks:
             result = task.get(timeout=3600)  # 1 hour timeout
             results.append(result)
-        
+
         return results
-    
-    async def run_multi_strategy(self, strategy_ids: List[int],
-                                  symbols: List[str],
-                                  date_range: tuple) -> Dict:
+
+    async def run_multi_strategy(
+        self, strategy_ids: List[int], symbols: List[str], date_range: tuple
+    ) -> Dict:
         """Run multiple strategies in parallel."""
-        tasks = [
-            run_backtest.delay(sid, symbols, *date_range, {})
-            for sid in strategy_ids
-        ]
-        
+        tasks = [run_backtest.delay(sid, symbols, *date_range, {}) for sid in strategy_ids]
+
         return [task.get(timeout=3600) for task in tasks]
 ```
 
@@ -754,40 +759,40 @@ class BacktestOrchestrator:
 import pandas as pd
 import pyarrow.parquet as pq
 
+
 class DataLoader:
     """Memory-efficient data loading."""
-    
+
     def __init__(self, data_path: str):
         self.data_path = data_path
-    
-    def load_symbol_data(self, symbol: str, start: str, end: str,
-                         columns: List[str] = None) -> pd.DataFrame:
+
+    def load_symbol_data(
+        self, symbol: str, start: str, end: str, columns: List[str] = None
+    ) -> pd.DataFrame:
         """Load data with column pruning and date filtering."""
         if columns is None:
-            columns = ['time', 'open', 'high', 'low', 'close', 'volume']
-        
+            columns = ["time", "open", "high", "low", "close", "volume"]
+
         # Use predicate pushdown for efficient filtering
         filters = [
-            ('symbol', '=', symbol),
-            ('time', '>=', pd.Timestamp(start)),
-            ('time', '<=', pd.Timestamp(end))
+            ("symbol", "=", symbol),
+            ("time", ">=", pd.Timestamp(start)),
+            ("time", "<=", pd.Timestamp(end)),
         ]
-        
-        df = pq.read_table(
-            self.data_path,
-            columns=columns,
-            filters=filters
-        ).to_pandas()
-        
+
+        df = pq.read_table(self.data_path, columns=columns, filters=filters).to_pandas()
+
         # Use memory-efficient dtypes
-        df = df.astype({
-            'open': 'float32',
-            'high': 'float32',
-            'low': 'float32',
-            'close': 'float32',
-            'volume': 'int32'
-        })
-        
+        df = df.astype(
+            {
+                "open": "float32",
+                "high": "float32",
+                "low": "float32",
+                "close": "float32",
+                "volume": "int32",
+            }
+        )
+
         return df
 ```
 
@@ -798,6 +803,7 @@ import numpy as np
 from dataclasses import dataclass
 import time
 
+
 @dataclass
 class LatencyConfig:
     mean_latency_ms: float = 5.0
@@ -806,39 +812,37 @@ class LatencyConfig:
     spike_multiplier: float = 10.0
     min_latency_ms: float = 0.5
 
+
 class LatencySimulator:
     """Simulate realistic network latency for order execution."""
-    
+
     def __init__(self, config: LatencyConfig):
         self.config = config
-    
+
     def get_latency_ms(self) -> float:
         """Generate random latency sample."""
-        base = np.random.normal(
-            self.config.mean_latency_ms,
-            self.config.latency_std_ms
-        )
-        
+        base = np.random.normal(self.config.mean_latency_ms, self.config.latency_std_ms)
+
         # Random spike simulation
         if np.random.random() < self.config.spike_probability:
             base *= self.config.spike_multiplier
-        
+
         return max(self.config.min_latency_ms, base)
-    
-    def simulate_order_execution(self, order_time: float, 
-                                  price_at_order: float,
-                                  price_series: pd.Series) -> tuple:
+
+    def simulate_order_execution(
+        self, order_time: float, price_at_order: float, price_series: pd.Series
+    ) -> tuple:
         """Simulate order execution with latency-adjusted fill price."""
         latency_ms = self.get_latency_ms()
         execution_time = order_time + (latency_ms / 1000)
-        
+
         # Find price at execution time
         execution_idx = price_series.index.searchsorted(execution_time)
         if execution_idx >= len(price_series):
             execution_price = price_series.iloc[-1]
         else:
             execution_price = price_series.iloc[execution_idx]
-        
+
         return execution_price, latency_ms
 ```
 

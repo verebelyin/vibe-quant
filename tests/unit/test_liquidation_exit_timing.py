@@ -72,7 +72,9 @@ def test_stop_refines_to_first_1m_bar_reaching_the_level():
     assert timing.refined == 1
     assert timing.kept_bar_close == 0
 
-    live_at_139 = refine_resting_exits([_exit(active_from=1_713_363_599_999_000_000)], bars, _FOUR_H)
+    live_at_139 = refine_resting_exits(
+        [_exit(active_from=1_713_363_599_999_000_000)], bars, _FOUR_H
+    )
     assert live_at_139.scan_ts[("p@0", 0)] == 1_713_363_659_999_000_000
 
 
@@ -95,7 +97,9 @@ def test_limits_need_strict_penetration_not_a_touch():
     """SELL LIMIT 105 rejects high 105.0, refines on the next minute 105.1."""
     sell_bars = {
         "BTCUSDT": _series(
-            _BAR_OPEN, [104.0, 104.5, 105.0] + [105.5] * 237, highs=[105.0, 105.0, 105.1] + [106.0] * 237
+            _BAR_OPEN,
+            [104.0, 104.5, 105.0] + [105.5] * 237,
+            highs=[105.0, 105.0, 105.1] + [106.0] * 237,
         )
     }
     sell = refine_resting_exits([_exit(kind="limit", falls=False, level=105.0)], sell_bars, _FOUR_H)
@@ -103,7 +107,9 @@ def test_limits_need_strict_penetration_not_a_touch():
 
     buy_bars = {
         "BTCUSDT": _series(
-            _BAR_OPEN, [106.0, 105.0, 104.9] + [104.0] * 237, highs=[107.0, 106.0, 105.5] + [105.0] * 237
+            _BAR_OPEN,
+            [106.0, 105.0, 104.9] + [104.0] * 237,
+            highs=[107.0, 106.0, 105.5] + [105.0] * 237,
         )
     }
     buy = refine_resting_exits([_exit(kind="limit", falls=True, level=105.0)], buy_bars, _FOUR_H)
@@ -239,9 +245,7 @@ def test_a_bar_opening_past_the_level_is_a_candidate():
     assert late.kept_bar_close == 1
     assert late.scan_ts[("p@0", 0)] == _FILL
 
-    gapped = {
-        "BTCUSDT": _series(_BAR_OPEN, [104.0] + [98.0] * 239, highs=[105.1] + [99.0] * 239)
-    }
+    gapped = {"BTCUSDT": _series(_BAR_OPEN, [104.0] + [98.0] * 239, highs=[105.1] + [99.0] * 239)}
     limit = refine_resting_exits([_exit(kind="limit", falls=False, level=105.0)], gapped, _FOUR_H)
     assert limit.scan_ts[("p@0", 0)] == _ts(0)
 
@@ -256,4 +260,3 @@ def test_missing_exit_bars_is_data_unavailable():
     assert issubclass(MissingExitBars, DataUnavailableError)
     assert issubclass(MissingExitBars, ValueError)
     assert str(MissingExitBars("BTCUSDT: no 1m LAST series")) == "BTCUSDT: no 1m LAST series"
-

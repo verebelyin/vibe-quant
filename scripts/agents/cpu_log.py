@@ -33,8 +33,14 @@ def _top(n: int = 5) -> list[dict[str, object]]:
             continue
         pid, cpu, rss, cmd = parts
         try:
-            rows.append({"pid": int(pid), "cpu": float(cpu.replace(",", ".")), "rss_mb": int(rss) // 1024,
-                         "cmd": label(cmd)})
+            rows.append(
+                {
+                    "pid": int(pid),
+                    "cpu": float(cpu.replace(",", ".")),
+                    "rss_mb": int(rss) // 1024,
+                    "cmd": label(cmd),
+                }
+            )
         except ValueError:
             continue
     rows.sort(key=lambda r: float(r["cpu"]), reverse=True)  # type: ignore[arg-type]
@@ -68,8 +74,12 @@ def _free_gb() -> float | None:
 def sample(out: Path, every: float) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     while True:
-        rec = {"t": time.strftime("%H:%M:%S"), "load1": round(os.getloadavg()[0], 2),
-               "free_gb": _free_gb(), "top": _top()}
+        rec = {
+            "t": time.strftime("%H:%M:%S"),
+            "load1": round(os.getloadavg()[0], 2),
+            "free_gb": _free_gb(),
+            "top": _top(),
+        }
         with out.open("a") as f:
             f.write(json.dumps(rec) + "\n")
         time.sleep(every)
@@ -83,9 +93,13 @@ def summarize(lines: list[dict[str, object]], since: str, until: str | None) -> 
     loads = [float(r["load1"]) for r in sel]  # type: ignore[arg-type]
     frees = [float(r["free_gb"]) for r in sel if r.get("free_gb") is not None]  # type: ignore[arg-type]
     seen = Counter(str(p["cmd"]) for r in sel for p in r["top"])  # type: ignore[attr-defined]
-    return {"samples": len(sel), "load_mean": round(sum(loads) / len(loads), 2),
-            "load_max": max(loads), "free_gb_min": min(frees) if frees else None,
-            "top_cmds": seen.most_common(5)}
+    return {
+        "samples": len(sel),
+        "load_mean": round(sum(loads) / len(loads), 2),
+        "load_max": max(loads),
+        "free_gb_min": min(frees) if frees else None,
+        "top_cmds": seen.most_common(5),
+    }
 
 
 def main(argv: list[str] | None = None) -> int:

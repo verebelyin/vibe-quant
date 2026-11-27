@@ -53,7 +53,7 @@ def test_known_footguns_are_blocked(command: str) -> None:
         "sed -i.bak 's/a/b/' f.py",
         "sed -i .bak 's/a/b/' f.py",
         "sed -n '1,5p' f.py",
-        "rg -n \"sed -i 's\" docs",
+        'rg -n "sed -i \'s" docs',
         'D="/tmp/a b"; ls "$D"; cd $D',
         'F="a.py b.py"; for f in $F; do echo $f; done',
         "bash -c 'AB=\"vb read\"; $AB kb/'",

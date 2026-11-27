@@ -151,7 +151,12 @@ def test_replay_equals_runtime_stream_for_every_registry_compute_spec(name: str)
         key = "ind" if output_name == primary else f"ind_{output_name}"
         runtime = _runtime(snapshots, key)
         differing = int(
-            (~((replayed[output_name] == runtime) | (np.isnan(replayed[output_name]) & np.isnan(runtime)))).sum()
+            (
+                ~(
+                    (replayed[output_name] == runtime)
+                    | (np.isnan(replayed[output_name]) & np.isnan(runtime))
+                )
+            ).sum()
         )
         assert np.array_equal(replayed[output_name], runtime, equal_nan=True), (
             f"{name}.{output_name}: replay differs from the generated stream on "

@@ -131,7 +131,9 @@ def test_cell_note_round_trips_and_rejects_garbage() -> None:
 # Launch-time rejection (rule, CLI, API)
 # ---------------------------------------------------------------------------
 
-R52_MESSAGE = "bankroll cell (isolated, 1.0, 0.5): max_position_pct (2.0) must not exceed leverage (1.0)"
+R52_MESSAGE = (
+    "bankroll cell (isolated, 1.0, 0.5): max_position_pct (2.0) must not exceed leverage (1.0)"
+)
 R53_MESSAGE = "use either the bankroll grid or --liquidation-mode/--leverage/--max-margin-pct"
 
 
@@ -242,7 +244,9 @@ _LAUNCH: dict[str, Any] = {
     "start_date": "2024-01-01", "end_date": "2025-01-01",
 }  # fmt: skip
 _GRID_BODY: dict[str, Any] = {
-    "modes": ["cross", "isolated"], "leverages": [5, 1], "max_margin_pcts": [0.5, 0.25],
+    "modes": ["cross", "isolated"],
+    "leverages": [5, 1],
+    "max_margin_pcts": [0.5, 0.25],
 }
 
 
@@ -376,7 +380,10 @@ def _patch_run(
             (cell.mode, cell.leverage, cell.max_margin_pct)
         )
         # one champion per cell run; the holdout Sharpe encodes the cell it came from
-        champ = (_chrom(stop_loss_pct=1.0 + idx), _fit(sharpe_ratio=2.0 + idx, mtm_daily_returns=_series(5.0, seed=idx + 1)))  # noqa: E501
+        champ = (
+            _chrom(stop_loss_pct=1.0 + idx),
+            _fit(sharpe_ratio=2.0 + idx, mtm_daily_returns=_series(5.0, seed=idx + 1)),
+        )  # noqa: E501
         return DiscoveryResult(
             generations=[], top_strategies=[champ], total_candidates_evaluated=evaluated,
             converged=False, convergence_generation=None,
@@ -396,7 +403,9 @@ def test_pooled_n_counts_every_cell(monkeypatch: pytest.MonkeyPatch) -> None:
     """2x2x2 grid, 1 seed, 30 evaluations per cell -> N = 240 (+ prior)."""
     _patch_run(monkeypatch)
     cfg = _mock_cfg(prior_trials_fn=lambda s, e: 30, top_k=8)
-    res, _cells = pooling._run_bankroll_grid(ALL_CELLS, 1, cfg, _fns_for, "/tmp/vq_bg_progress.json")
+    res, _cells = pooling._run_bankroll_grid(
+        ALL_CELLS, 1, cfg, _fns_for, "/tmp/vq_bg_progress.json"
+    )
     assert res.total_candidates_evaluated == 240
     assert res.dsr_trials is not None
     assert res.dsr_trials["raw"] == 240
@@ -448,11 +457,14 @@ def test_gates_use_champion_cell(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_zero_champion_cell_does_not_shift_cells(monkeypatch: pytest.MonkeyPatch) -> None:
     """A cell whose run finds nothing still counts its evaluations, and the returned cells stay
     aligned with the surviving champions."""
+
     def fake_run(self: Any) -> DiscoveryResult:
         cell = self._backtest_fn.cell
-        tops = [] if cell.leverage == 1.0 else [
-            (_chrom(stop_loss_pct=cell.leverage), _fit(mtm_daily_returns=_series(5.0)))
-        ]
+        tops = (
+            []
+            if cell.leverage == 1.0
+            else [(_chrom(stop_loss_pct=cell.leverage), _fit(mtm_daily_returns=_series(5.0)))]
+        )
         return DiscoveryResult(
             generations=[], top_strategies=tops, total_candidates_evaluated=30,
             converged=False, convergence_generation=None,
@@ -544,7 +556,11 @@ def test_champion_records_cell(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     )
     assert rc == 0
     by_cell = {
-        (e["bankroll"]["liquidation_mode"], e["bankroll"]["leverage"], e["bankroll"]["max_margin_pct"])
+        (
+            e["bankroll"]["liquidation_mode"],
+            e["bankroll"]["leverage"],
+            e["bankroll"]["max_margin_pct"],
+        )
         for e in notes["top_strategies"]
     }
     assert by_cell == {X_CELL, Y_CELL}
@@ -569,7 +585,11 @@ async def test_full_range_headline_per_cell(
     rc, db, run_id, notes = _drive_main(tmp_path, monkeypatch, GRID_ARGS, _two_champions())
     assert rc == 0
     entries = {
-        (e["bankroll"]["liquidation_mode"], e["bankroll"]["leverage"], e["bankroll"]["max_margin_pct"]): e
+        (
+            e["bankroll"]["liquidation_mode"],
+            e["bankroll"]["leverage"],
+            e["bankroll"]["max_margin_pct"],
+        ): e
         for e in notes["top_strategies"]
     }
     assert set(entries) == {X_CELL, Y_CELL}
@@ -702,7 +722,11 @@ async def test_promote_inherits_cell(tmp_path: Path) -> None:
             replayed = state.get_backtest_run(rr.json()["replay_run_id"])
             assert replayed is not None
             rp = replayed["parameters"]
-            assert (rp["liquidation_mode"], rp["leverage"], rp["max_margin_pct"]) == (mode, lev, pct)
+            assert (rp["liquidation_mode"], rp["leverage"], rp["max_margin_pct"]) == (
+                mode,
+                lev,
+                pct,
+            )
 
 
 @pytest.mark.parametrize(
@@ -723,7 +747,10 @@ async def test_child_fails_closed_on_bad_bankroll(tmp_path: Path, bad: object) -
         ):
             r = await ac.post(url)
             assert r.status_code == 422, r.text
-            assert r.json()["detail"] == f"discovery run {run_id} strategy 1 has no valid bankroll setup"
+            assert (
+                r.json()["detail"]
+                == f"discovery run {run_id} strategy 1 has no valid bankroll setup"
+            )
         assert _run_count(state) == runs_before
         assert _run_count(state, "strategies") == strategies_before
         # the intact neighbour still promotes

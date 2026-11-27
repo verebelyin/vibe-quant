@@ -29,7 +29,9 @@ _LIFECYCLE_COLUMNS = re.compile(
     r"\b(status|pid|started_at|heartbeat_at|completed_at|error_message)\b", re.IGNORECASE
 )
 # ``UPDATE backtest_runs SET parameters ...`` up to its WHERE (or closing quote).
-_PARAMETERS_UPDATE = re.compile(r"UPDATE backtest_runs SET parameters\b(?P<rest>.*?)(?: WHERE\b|\"|$)")
+_PARAMETERS_UPDATE = re.compile(
+    r"UPDATE backtest_runs SET parameters\b(?P<rest>.*?)(?: WHERE\b|\"|$)"
+)
 
 # db/schema.py is exempt as a whole: migrations and repairs rewrite lifecycle rows.
 # The markers keep the exemption honest: each must still be in the file.
@@ -94,7 +96,7 @@ def test_multiline_run_status_update_is_flagged() -> None:
 
 def test_dynamic_run_update_is_flagged() -> None:
     """The f-string SET form of update_backtest_run_status is flagged too."""
-    source = 'f"UPDATE backtest_runs SET {\', \'.join(updates)} WHERE id = ?{guard}"'
+    source = "f\"UPDATE backtest_runs SET {', '.join(updates)} WHERE id = ?{guard}\""
     assert offenders({"db/state_manager.py": source}) == [f"db/state_manager.py: {_RUN_UPDATE}"]
 
 
@@ -129,7 +131,7 @@ def test_parameters_write_is_allowed_only_in_its_own_files() -> None:
         "UPDATE backtest_runs SET parameters = ?, heartbeat_at = datetime('now') WHERE id = ?",
         "UPDATE backtest_runs SET parameters = ?,\n   error_message = NULL WHERE id = ?",
         "UPDATE backtest_runs SET parameters = ?, completed_at = NULL, pid = NULL",
-        'f"UPDATE backtest_runs SET parameters = ?, {extra} status = \'failed\'"',
+        "f\"UPDATE backtest_runs SET parameters = ?, {extra} status = 'failed'\"",
     ],
     ids=["status", "heartbeat", "error-multiline", "no-where", "fstring"],
 )

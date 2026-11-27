@@ -58,9 +58,7 @@ def state(db: Path) -> Iterator[StateManager]:
 @pytest.fixture
 def foreign() -> Iterator[subprocess.Popen[bytes]]:
     """An unrelated process (own session → also a process-group leader)."""
-    proc = subprocess.Popen(
-        ["sleep", "30"], start_new_session=True, stdout=subprocess.DEVNULL
-    )
+    proc = subprocess.Popen(["sleep", "30"], start_new_session=True, stdout=subprocess.DEVNULL)
     yield proc
     proc.kill()
     proc.wait()
@@ -287,8 +285,19 @@ class TestDataJobs:
     ) -> None:
         job_id = -456
         cmd = [
-            sys.executable, "-m", "vibe_quant.jobs.data_job", "--run-id", str(job_id),
-            "--db", str(db), "--", "ingest", "--symbols", "BTCUSDT", "--start", "not-a-date",
+            sys.executable,
+            "-m",
+            "vibe_quant.jobs.data_job",
+            "--run-id",
+            str(job_id),
+            "--db",
+            str(db),
+            "--",
+            "ingest",
+            "--symbols",
+            "BTCUSDT",
+            "--start",
+            "not-a-date",
         ]
         pid = jobs.start_job(job_id, "data_ingest", cmd)
         assert _wait_dead(jobs, pid, timeout=60)

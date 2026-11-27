@@ -80,8 +80,18 @@ TAKER_DSL: dict[str, object] = {
 }
 
 IDENTITY_KEYS = {
-    "v", "strategy_name", "dsl_sha256", "symbols", "timeframe", "start_date", "end_date",
-    "detail_timeframe", "latency_preset", "venue", "launch", "entry_order",
+    "v",
+    "strategy_name",
+    "dsl_sha256",
+    "symbols",
+    "timeframe",
+    "start_date",
+    "end_date",
+    "detail_timeframe",
+    "latency_preset",
+    "venue",
+    "launch",
+    "entry_order",
 }
 
 
@@ -93,10 +103,14 @@ def clone_catalog(dst: Path, symbols: Sequence[str]) -> Path:
     src = CATALOG.resolve()
     for symbol in symbols:
         inst = f"{symbol}-PERP.BINANCE"
-        pairs = [(src / "data" / "crypto_perpetual" / inst, dst / "data" / "crypto_perpetual" / inst)]
+        pairs = [
+            (src / "data" / "crypto_perpetual" / inst, dst / "data" / "crypto_perpetual" / inst)
+        ]
         pairs += [
-            (src / "data" / "bar" / f"{inst}-{tf}-LAST-EXTERNAL",
-             dst / "data" / "bar" / f"{inst}-{tf}-LAST-EXTERNAL")
+            (
+                src / "data" / "bar" / f"{inst}-{tf}-LAST-EXTERNAL",
+                dst / "data" / "bar" / f"{inst}-{tf}-LAST-EXTERNAL",
+            )
             for tf in ("4-HOUR", "1-MINUTE")
         ]
         for s, d in pairs:
@@ -118,7 +132,10 @@ def funded_archive(path: Path, symbols: Sequence[str], *, taker: bool = False) -
         for n, symbol in enumerate(symbols):
             archive.insert_funding_rates(
                 symbol,
-                [(t, (0.0003 if i % 2 else -0.0001) * (n + 1), None) for i, t in enumerate(settlements)],
+                [
+                    (t, (0.0003 if i % 2 else -0.0001) * (n + 1), None)
+                    for i, t in enumerate(settlements)
+                ],
                 "test",
             )
             archive.insert_funding_intervals(symbol, [(t, 8) for t in settlements], "test")
@@ -176,8 +193,13 @@ def make_parent(
     state = StateManager(db)
     sid = state.create_strategy(name=str(dsl["name"]), dsl_config=dsl)
     run_id = state.create_backtest_run(
-        strategy_id=sid, run_mode="validation", symbols=symbols, timeframe="4h",
-        start_date=START, end_date=END, parameters=parameters or {},
+        strategy_id=sid,
+        run_mode="validation",
+        symbols=symbols,
+        timeframe="4h",
+        start_date=START,
+        end_date=END,
+        parameters=parameters or {},
     )
     state.close()
     catalog = clone_catalog(root / "catalog0", symbols)
@@ -217,7 +239,9 @@ _NOT_COMPARED = {"run_id", "execution_time_seconds", "notes", "mtm_probe"}
 
 def comparable(res: ValidationResult) -> str:
     """Every result field but ids/timing/notes, with the recorded identity (NaN == NaN)."""
-    out = {f.name: getattr(res, f.name) for f in dataclasses.fields(res) if f.name not in _NOT_COMPARED}
+    out = {
+        f.name: getattr(res, f.name) for f in dataclasses.fields(res) if f.name not in _NOT_COMPARED
+    }
     out["validation_input"] = res.notes.get("validation_input")
     return json.dumps(out, default=repr, sort_keys=True)
 
@@ -321,14 +345,20 @@ def test_variant_state_db_free_cold_funded(single_parent: Parent, tmp_path: Path
     env = {**os.environ, "PYTHONPATH": str(REPO)}
     done = subprocess.run(
         [sys.executable, str(tmp_path / "child.py"), str(tmp_path / "spec.json")],
-        cwd=work, env=env, capture_output=True, text=True, timeout=600,
+        cwd=work,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=600,
     )
     assert done.returncode == 0, done.stderr[-4000:]
     out = json.loads((tmp_path / "out.json").read_text())
 
     # The only database the variant process opened is the archive snapshot.
-    resolved = {Path(p.removeprefix("get_connection:").removeprefix("file:").split("?")[0]).resolve()
-                for p in out["opened"]}
+    resolved = {
+        Path(p.removeprefix("get_connection:").removeprefix("file:").split("?")[0]).resolve()
+        for p in out["opened"]
+    }
     assert resolved == {snapshot.resolve()}, out["opened"]
     assert any(p.startswith("get_connection:") for p in out["opened"])  # funding read
     assert any(p.startswith("file:") for p in out["opened"])  # taker klines read
@@ -360,7 +390,8 @@ def test_variant_equals_run(single_parent: Parent, tmp_path: Path) -> None:
     for i, parent in enumerate(parents):
         symbols = json.loads(parent.inp.run_config_json)["symbols"]
         got = run_variant(
-            parent.inp, {},
+            parent.inp,
+            {},
             catalog_path=clone_catalog(tmp_path / f"w{i}" / "catalog", symbols),
             archive_path=sqlite_backup(parent.archive, tmp_path / f"snap{i}.db"),
             mtm_probe=False,
@@ -435,7 +466,8 @@ def test_force_stop_flag(
 ) -> None:
     parent = single_parent
     kw: dict[str, Any] = {
-        "archive_path": sqlite_backup(parent.archive, tmp_path / "snap.db"), "mtm_probe": False
+        "archive_path": sqlite_backup(parent.archive, tmp_path / "snap.db"),
+        "mtm_probe": False,
     }
     request.getfixturevalue("force_stop_after_profit")
     stopped = run_variant(
@@ -449,9 +481,7 @@ def test_force_stop_flag(
 
 @pytest.mark.slow(reason="real NT validation run() + walk-forward, ~6 s")
 @needs_catalog
-def test_force_stopped_run_is_stored_failed(
-    tmp_path: Path, request: pytest.FixtureRequest
-) -> None:
+def test_force_stopped_run_is_stored_failed(tmp_path: Path, request: pytest.FixtureRequest) -> None:
     """A run NT force-stopped part-way is a failed run naming the stop time, never a
     completed full-window result (single run and walk-forward)."""
     request.getfixturevalue("force_stop_after_profit")
@@ -468,13 +498,20 @@ def test_force_stopped_run_is_stored_failed(
         assert state.get_backtest_result(parent.run_id) is not None  # metrics kept to inspect
 
         wf_id = state.create_backtest_run(
-            strategy_id=int(run["strategy_id"]), run_mode="validation", symbols=["BTCUSDT"],
-            timeframe="4h", start_date=START, end_date=END, parameters={},
+            strategy_id=int(run["strategy_id"]),
+            run_mode="validation",
+            symbols=["BTCUSDT"],
+            timeframe="4h",
+            start_date=START,
+            end_date=END,
+            parameters={},
         )
     finally:
         state.close()
     runner = ValidationRunner(
-        db_path=parent.db, logs_path=parent.logs, catalog_path=parent.catalog,
+        db_path=parent.db,
+        logs_path=parent.logs,
+        catalog_path=parent.catalog,
         funding_archive_path=parent.archive,
     )
     try:
@@ -500,7 +537,9 @@ def test_force_stopped_run_is_stored_failed(
     assert stored is not None
     wf_notes = json.loads(str(stored["notes"]))
     assert wf_notes["engine_force_stop"] == {
-        "window": first, "of": len(windows), "stopped_at": window_stop
+        "window": first,
+        "of": len(windows),
+        "stopped_at": window_stop,
     }
     assert "fee_schedule" in wf_notes  # the aggregate notes are kept beside it
 
@@ -554,9 +593,11 @@ def test_terminal_mark_is_not_a_force_stop(tmp_path: Path) -> None:
     assert parent.result.total_trades == 1
     assert parent.result.engine_force_stopped is False
     got = run_variant(
-        parent.inp, {},
+        parent.inp,
+        {},
         catalog_path=clone_catalog(tmp_path / "w", ["BTCUSDT"]),
-        archive_path=sqlite_backup(parent.archive, tmp_path / "snap.db"), mtm_probe=False,
+        archive_path=sqlite_backup(parent.archive, tmp_path / "snap.db"),
+        mtm_probe=False,
     )
     assert got.engine_force_stopped is False
     assert comparable(got) == comparable(parent.result)
@@ -606,7 +647,9 @@ def test_force_stopped_market_twin_reports_error(
 )
 @needs_catalog
 def test_variant_invalid_override(
-    single_parent: Parent, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    single_parent: Parent,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     override: dict[str, object],
 ) -> None:
     import nautilus_trader.backtest.node as nt_node
@@ -617,13 +660,19 @@ def test_variant_invalid_override(
     run_row = json.loads(parent.inp.run_config_json)
     state = StateManager(copy)
     rid = state.create_backtest_run(
-        strategy_id=int(run_row["strategy_id"]), run_mode="validation", symbols=["BTCUSDT"],
-        timeframe="4h", start_date=START, end_date=END,
+        strategy_id=int(run_row["strategy_id"]),
+        run_mode="validation",
+        symbols=["BTCUSDT"],
+        timeframe="4h",
+        start_date=START,
+        end_date=END,
         parameters={**run_row["parameters"], **override},
     )
     state.close()
     runner = ValidationRunner(
-        db_path=copy, logs_path=tmp_path / "logs", catalog_path=parent.catalog,
+        db_path=copy,
+        logs_path=tmp_path / "logs",
+        catalog_path=parent.catalog,
         funding_archive_path=parent.archive,
     )
     with pytest.raises(ValidationRunnerError) as run_err:
@@ -698,8 +747,12 @@ def stub_parent(
     state = StateManager(db)
     sid = state.create_strategy(name=str(dsl["name"]), dsl_config=dsl)
     rid = state.create_backtest_run(
-        strategy_id=sid, run_mode="validation", symbols=symbols or ["BTCUSDT"],
-        timeframe=timeframe, start_date="2025-01-01", end_date="2025-02-01",
+        strategy_id=sid,
+        run_mode="validation",
+        symbols=symbols or ["BTCUSDT"],
+        timeframe=timeframe,
+        start_date="2025-01-01",
+        end_date="2025-02-01",
         parameters=parameters or {},
     )
     state.close()
@@ -711,9 +764,14 @@ def stub_parent(
     return result, variant_input(db, rid)
 
 
-def _variant(inp: VariantInput, tmp_path: Path, overrides: dict[str, object] | None = None) -> ValidationResult:
+def _variant(
+    inp: VariantInput, tmp_path: Path, overrides: dict[str, object] | None = None
+) -> ValidationResult:
     return run_variant(
-        inp, overrides or {}, catalog_path=tmp_path / "clone", archive_path=tmp_path / "snap.db",
+        inp,
+        overrides or {},
+        catalog_path=tmp_path / "clone",
+        archive_path=tmp_path / "snap.db",
         mtm_probe=False,
     )
 
@@ -749,9 +807,14 @@ def test_input_identity(stub_engine: list[dict[str, Any]], tmp_path: Path) -> No
     # A second, unrelated run: every forwarded value follows its own inputs.
     other_dsl = {**RSI_DSL, "name": "variant_probe_other", "timeframe": "1h"}
     other, _ = stub_parent(
-        tmp_path, other_dsl, symbols=["ETHUSDT", "BTCUSDT"], timeframe="1h",
-        parameters={"initial_balance": 5000}, latency_preset="retail",
-        detail_timeframe="5m", name="other",
+        tmp_path,
+        other_dsl,
+        symbols=["ETHUSDT", "BTCUSDT"],
+        timeframe="1h",
+        parameters={"initial_balance": 5000},
+        latency_preset="retail",
+        detail_timeframe="5m",
+        name="other",
     )
     other_id = other.notes["validation_input"]
     assert isinstance(other_id, dict)
@@ -845,14 +908,32 @@ def test_variant_maker(stub_engine: list[dict[str, Any]], tmp_path: Path) -> Non
 def test_variant_keeps_caller_inputs(stub_engine: list[dict[str, Any]], tmp_path: Path) -> None:
     """An override variant keeps the parent's detail/latency, its overrides and the probe off."""
     cases: list[tuple[dict[str, Any], dict[str, object], str, str, dict[str, object], str]] = [
-        ({"detail_timeframe": "15m", "latency_preset": "retail", "name": "a",
-          "parameters": {"stop_loss_percent": 2.5}}, {"max_position_pct": 2.0},
-         "15m", "retail", {"stop_loss_percent": 2.5, "max_position_pct": 2.0},
-         '{"max_position_pct":2.0,"stop_loss_percent":2.5}'),
-        ({"detail_timeframe": "5m", "latency_preset": "co_located", "name": "b",
-          "parameters": {"initial_balance": 5000}}, {"stop_loss_percent": 1.5},
-         "5m", "co_located", {"initial_balance": 5000, "stop_loss_percent": 1.5},
-         '{"initial_balance":5000,"stop_loss_percent":1.5}'),
+        (
+            {
+                "detail_timeframe": "15m",
+                "latency_preset": "retail",
+                "name": "a",
+                "parameters": {"stop_loss_percent": 2.5},
+            },
+            {"max_position_pct": 2.0},
+            "15m",
+            "retail",
+            {"stop_loss_percent": 2.5, "max_position_pct": 2.0},
+            '{"max_position_pct":2.0,"stop_loss_percent":2.5}',
+        ),
+        (
+            {
+                "detail_timeframe": "5m",
+                "latency_preset": "co_located",
+                "name": "b",
+                "parameters": {"initial_balance": 5000},
+            },
+            {"stop_loss_percent": 1.5},
+            "5m",
+            "co_located",
+            {"initial_balance": 5000, "stop_loss_percent": 1.5},
+            '{"initial_balance":5000,"stop_loss_percent":1.5}',
+        ),
     ]
     for parent_kw, overrides, detail, latency, params, launch in cases:
         _, inp = stub_parent(tmp_path, RSI_DSL, **parent_kw)
@@ -865,7 +946,9 @@ def test_variant_keeps_caller_inputs(stub_engine: list[dict[str, Any]], tmp_path
         identity = got.notes["validation_input"]
         assert isinstance(identity, dict)
         assert (identity["detail_timeframe"], identity["latency_preset"], identity["launch"]) == (
-            detail, latency, launch,
+            detail,
+            latency,
+            launch,
         )
 
 
@@ -875,13 +958,20 @@ def test_run_frozen_forwards_inputs(stub_engine: list[dict[str, Any]], tmp_path:
     run_config = json.loads(inp.run_config_json)
     frozen = json.dumps(run_config, sort_keys=True)
     base = {
-        "strategy_name": inp.strategy_name, "dsl_json": inp.dsl_json, "run_config": run_config,
-        "catalog_path": tmp_path / "clone", "archive_path": tmp_path / "snap.db",
+        "strategy_name": inp.strategy_name,
+        "dsl_json": inp.dsl_json,
+        "run_config": run_config,
+        "catalog_path": tmp_path / "clone",
+        "archive_path": tmp_path / "snap.db",
     }
     cases: list[tuple[dict[str, Any], str, str, bool]] = [
         ({}, "1m", "cloud", True),
-        ({"detail_override": "15m", "latency_override": "retail", "mtm_probe": False},
-         "15m", "retail", False),
+        (
+            {"detail_override": "15m", "latency_override": "retail", "mtm_probe": False},
+            "15m",
+            "retail",
+            False,
+        ),
     ]
     identities = []
     for kw, detail, latency, probe in cases:
@@ -934,8 +1024,9 @@ def _engine(positions: list[Any], closes: dict[str, list[tuple[int, float, float
     for iid, rows in closes.items():
         bar_type = _ExecBarType(iid)
         bars[str(bar_type)] = [
-            SimpleNamespace(bar_type=bar_type, ts_init=ts, volume=0.0, open=c, high=max(c, lo),
-                            low=lo, close=c)
+            SimpleNamespace(
+                bar_type=bar_type, ts_init=ts, volume=0.0, open=c, high=max(c, lo), low=lo, close=c
+            )
             for ts, c, lo in rows
         ]
     return fake_engine(positions, bars_by_type=bars)
@@ -956,10 +1047,18 @@ def _extract(
 
     res = ValidationResult(starting_balance=START_BAL)
     extract_trades(
-        res, engine, VENUE if venue is None else venue,  # type: ignore[arg-type]
-        funding_calculator=funding, run_start_date=start, run_end_date=end,
-        execution_timeframe="1m", catalog_path="unused", liquidation_mode=mode,
-        slippage=OFF_SLIPPAGE, cost_ledger=None, mtm_probe=probe,
+        res,
+        engine,
+        VENUE if venue is None else venue,  # type: ignore[arg-type]
+        funding_calculator=funding,
+        run_start_date=start,
+        run_end_date=end,
+        execution_timeframe="1m",
+        catalog_path="unused",
+        liquidation_mode=mode,
+        slippage=OFF_SLIPPAGE,
+        cost_ledger=None,
+        mtm_probe=probe,
     )
     return res
 
@@ -1021,7 +1120,8 @@ def test_mtm_probe_paths(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_variant_mtm_probe_matches_the_parent(single_parent: Parent, tmp_path: Path) -> None:
     parent = single_parent
     got = run_variant(
-        parent.inp, {},
+        parent.inp,
+        {},
         catalog_path=clone_catalog(tmp_path / "w", ["BTCUSDT"]),
         archive_path=sqlite_backup(parent.archive, tmp_path / "snap.db"),
         mtm_probe=True,
@@ -1039,7 +1139,8 @@ def test_variant_mtm_probe_matches_the_parent(single_parent: Parent, tmp_path: P
 def test_run_frozen_matches_variant(single_parent: Parent, tmp_path: Path) -> None:
     parent = single_parent
     want = run_variant(
-        parent.inp, {},
+        parent.inp,
+        {},
         catalog_path=clone_catalog(tmp_path / "w0", ["BTCUSDT"]),
         archive_path=sqlite_backup(parent.archive, tmp_path / "snap0.db"),
         mtm_probe=True,
@@ -1094,10 +1195,20 @@ def test_mtm_daily_semantics(monkeypatch: pytest.MonkeyPatch) -> None:
     hourly = [(day0 + k * _H - 1_000_000, 40000.0, 40000.0) for k in range(1, 97)]
 
     # 1. Entry on day 0, funding settled on day 1, exit on day 2: each lands on its own day.
-    trip = Pos("P-1", BTC, [Fill(day0 + 10 * _H, OrderSide.BUY, 1.0, 40000.0, 20.0),
-                            Fill(day0 + 2 * _DAY_NS + 12 * _H, OrderSide.SELL, 1.0, 40000.0, 20.5)])
-    res = _extract(_engine([trip], {BTC: hourly}), "2024-01-01", "2024-01-05",
-                   funding=_AtFunding((day0 + _DAY_NS + 8 * _H,)))
+    trip = Pos(
+        "P-1",
+        BTC,
+        [
+            Fill(day0 + 10 * _H, OrderSide.BUY, 1.0, 40000.0, 20.0),
+            Fill(day0 + 2 * _DAY_NS + 12 * _H, OrderSide.SELL, 1.0, 40000.0, 20.5),
+        ],
+    )
+    res = _extract(
+        _engine([trip], {BTC: hourly}),
+        "2024-01-01",
+        "2024-01-05",
+        funding=_AtFunding((day0 + _DAY_NS + 8 * _H,)),
+    )
     assert res.mtm_probe is not None and res.mtm_probe.daily is not None
     assert res.mtm_probe.daily.first_day == day0 // _DAY_NS
     assert _equity(res) == pytest.approx([9980.0, 9975.0, 9954.5, 9954.5], abs=1e-9)
@@ -1105,7 +1216,9 @@ def test_mtm_daily_semantics(monkeypatch: pytest.MonkeyPatch) -> None:
 
     # 2. A surviving position is marked at the run end, its estimated exit fee included.
     rising = [*hourly[:72], *[(ts, 41000.0, 41000.0) for ts, _, _ in hourly[72:]]]
-    held = Pos("P-2", BTC, [Fill(day0 + 10 * _H, OrderSide.BUY, 1.0, 40000.0, 20.0)], is_closed=False)
+    held = Pos(
+        "P-2", BTC, [Fill(day0 + 10 * _H, OrderSide.BUY, 1.0, 40000.0, 20.0)], is_closed=False
+    )
     venue = SimpleNamespace(**vars(VENUE), taker_fee=0.0005)
     res = _extract(_engine([held], {BTC: rising}), "2024-01-01", "2024-01-05", venue=venue)
     (trade,) = res.trades
@@ -1119,8 +1232,9 @@ def test_mtm_daily_semantics(monkeypatch: pytest.MonkeyPatch) -> None:
         end_ns = date_to_ns(end)
         assert end_ns is not None
         bars = [(ts, c, lo) for ts, c, lo in hourly if ts < end_ns] + [(end_ns, 39000.0, 39000.0)]
-        opened = Pos("P-3", BTC, [Fill(day0 + 2 * _H, OrderSide.BUY, 1.0, 40000.0, 0.0)],
-                     is_closed=False)
+        opened = Pos(
+            "P-3", BTC, [Fill(day0 + 2 * _H, OrderSide.BUY, 1.0, 40000.0, 0.0)], is_closed=False
+        )
         res = _extract(_engine([opened], {BTC: bars}), "2024-01-01", end, venue=venue)
         assert res.mtm_probe is not None
         # the end bar's dip to 39000 and the terminal mark's exit fee (39000 * .0005)
@@ -1131,7 +1245,11 @@ def test_mtm_daily_semantics(monkeypatch: pytest.MonkeyPatch) -> None:
     no_last_bars(monkeypatch)
     res = _extract(_engine([long_btc()], {}), START, END)
     assert res.mtm_probe is not None
-    assert (res.mtm_probe.paths, res.mtm_probe.daily, res.mtm_probe.dd) == ("unavailable", None, None)
+    assert (res.mtm_probe.paths, res.mtm_probe.daily, res.mtm_probe.dd) == (
+        "unavailable",
+        None,
+        None,
+    )
     assert res.max_drawdown == 0.0  # closed-trade fallback on a winning trade
     monkeypatch.undo()
 
@@ -1148,7 +1266,11 @@ def test_mtm_daily_semantics(monkeypatch: pytest.MonkeyPatch) -> None:
     res = _extract(engine_for([long_btc(sell_bar=None)], mk), START, END, mode="isolated")
     probe = res.mtm_probe
     assert liq_note(res)["count"] == 1
-    assert probe is not None and (probe.paths, probe.ledger, probe.bust_ts) == ("ok", "overlay", None)
+    assert probe is not None and (probe.paths, probe.ledger, probe.bust_ts) == (
+        "ok",
+        "overlay",
+        None,
+    )
     assert probe.path_divergence is liq_note(res)["path_divergence"]
     assert probe.dd == res.max_drawdown
     assert _equity(res) == pytest.approx([START_BAL + sum(t.net_pnl for t in res.trades)], abs=1e-9)

@@ -220,9 +220,7 @@ async def test_launch_ma_only_pool_is_422_before_any_run(
     assert popen.call_count == 0
 
 
-@pytest.mark.parametrize(
-    "body_extra", [{}, {"indicator_pool": None}], ids=["omitted", "null"]
-)
+@pytest.mark.parametrize("body_extra", [{}, {"indicator_pool": None}], ids=["omitted", "null"])
 async def test_launch_default_pool_unchanged(
     client: tuple[AsyncClient, StateManager, BacktestJobManager],
     body_extra: dict[str, object],

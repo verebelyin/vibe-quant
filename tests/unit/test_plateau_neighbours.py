@@ -304,4 +304,3 @@ def test_stops_respect_the_run_range() -> None:
         for n in plateau_neighbours(chrom, _key, max_neighbours=8, sl_range=(0.5, 8.98))
     ]
     assert wider == default
-

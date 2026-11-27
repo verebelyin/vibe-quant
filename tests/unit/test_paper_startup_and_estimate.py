@@ -323,8 +323,6 @@ def _estimate_payload(node: PaperTradingNode, seeded: dict[str, Any]) -> dict[st
     return payloads[0]
 
 
-
-
 async def test_startup_connect_timeout_alerts_once_critical(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
@@ -457,8 +455,6 @@ async def test_startup_timeout_alert_bypasses_the_rate_limit(
         assert await _alert_calls(node, alerts) == [("error", _timeout_message(), True)]
     finally:
         await node._shutdown()
-
-
 
 
 async def test_isolated_long_position_open_reports_the_estimated_liquidation_price(
@@ -796,8 +792,6 @@ async def test_timeout_does_not_overwrite_an_existing_halt_message(
         assert await _alert_calls(node, alerts) == [("error", _timeout_message(), True)]
     finally:
         await node._shutdown()
-
-
 
 
 class _Boom(Exception):

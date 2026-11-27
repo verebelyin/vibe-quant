@@ -49,8 +49,13 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-def _gene(ind: str, params: dict[str, float], cond: ConditionType = ConditionType.LT,
-          thr: float = 30.0, sub: str | None = None) -> StrategyGene:
+def _gene(
+    ind: str,
+    params: dict[str, float],
+    cond: ConditionType = ConditionType.LT,
+    thr: float = 30.0,
+    sub: str | None = None,
+) -> StrategyGene:
     return StrategyGene(ind, params, cond, thr, sub)
 
 
@@ -66,30 +71,56 @@ def _chrom(**kw: Any) -> StrategyChromosome:
     return StrategyChromosome(**base)
 
 
-def _fit(sharpe: float = 2.0, trades: int = 150, ret: float = 0.4, score: float = 0.6,
-         trade_returns: tuple[float, ...] = ()) -> FitnessResult:
+def _fit(
+    sharpe: float = 2.0,
+    trades: int = 150,
+    ret: float = 0.4,
+    score: float = 0.6,
+    trade_returns: tuple[float, ...] = (),
+) -> FitnessResult:
     return FitnessResult(
-        sharpe_ratio=sharpe, max_drawdown=0.1, profit_factor=1.8, total_trades=trades,
-        total_return=ret, complexity_penalty=0.0, overtrade_penalty=0.0, sl_tp_penalty=0.0,
-        raw_score=score, adjusted_score=score, passed_filters=True, filter_results={},
+        sharpe_ratio=sharpe,
+        max_drawdown=0.1,
+        profit_factor=1.8,
+        total_trades=trades,
+        total_return=ret,
+        complexity_penalty=0.0,
+        overtrade_penalty=0.0,
+        sl_tp_penalty=0.0,
+        raw_score=score,
+        adjusted_score=score,
+        passed_filters=True,
+        filter_results={},
         trade_returns=trade_returns,
     )
 
 
 def _cfg(**kw: Any) -> DiscoveryConfig:
     base: dict[str, Any] = {
-        "population_size": 6, "max_generations": 2, "elite_count": 1, "top_k": 5,
-        "min_trades": 50, "max_workers": None, "timeframe": "4h",
-        "start_date": "2024-01-01", "end_date": "2024-06-01",
-        "require_bootstrap_ci": False, "require_dsr": False,
+        "population_size": 6,
+        "max_generations": 2,
+        "elite_count": 1,
+        "top_k": 5,
+        "min_trades": 50,
+        "max_workers": None,
+        "timeframe": "4h",
+        "start_date": "2024-01-01",
+        "end_date": "2024-06-01",
+        "require_bootstrap_ci": False,
+        "require_dsr": False,
     }
     base.update(kw)
     return DiscoveryConfig(**base)
 
 
 def _bt(sharpe: float = 2.0, ret: float = 0.3, trades: int = 120) -> dict[str, Any]:
-    return {"sharpe_ratio": sharpe, "max_drawdown": 0.1, "profit_factor": 1.8,
-            "total_trades": trades, "total_return": ret}
+    return {
+        "sharpe_ratio": sharpe,
+        "max_drawdown": 0.1,
+        "profit_factor": 1.8,
+        "total_trades": trades,
+        "total_return": ret,
+    }
 
 
 def _top(n: int) -> list[tuple[StrategyChromosome, FitnessResult]]:
@@ -132,14 +163,19 @@ def test_rejected_candidate_keeps_its_dsl_for_manual_validation() -> None:
 
 def _gates(pipe: DiscoveryPipeline, top: list[tuple[StrategyChromosome, FitnessResult]]) -> Any:
     return pipe._apply_validation_gates(
-        top, generations=[], total_evaluated=10, converged=False, convergence_gen=None,
+        top,
+        generations=[],
+        total_evaluated=10,
+        converged=False,
+        convergence_gen=None,
     )
 
 
 def test_all_fail_cross_window_gives_zero_champions() -> None:
     pipe = DiscoveryPipeline(
-        _cfg(cross_window_months=[1]), backtest_fn=lambda c: _bt(),
-        backtest_fn_factory=lambda s, e: (lambda c: _bt(sharpe=-1.0, ret=-0.1)),
+        _cfg(cross_window_months=[1]),
+        backtest_fn=lambda c: _bt(),
+        backtest_fn_factory=lambda s, e: lambda c: _bt(sharpe=-1.0, ret=-0.1),
     )
     res = _gates(pipe, _top(3))
     assert res.top_strategies == []
@@ -148,8 +184,9 @@ def test_all_fail_cross_window_gives_zero_champions() -> None:
 
 def test_all_fail_wfa_gives_zero_champions() -> None:
     pipe = DiscoveryPipeline(
-        _cfg(wfa_oos_step_days=30), backtest_fn=lambda c: _bt(),
-        backtest_fn_factory=lambda s, e: (lambda c: _bt(ret=-0.01)),
+        _cfg(wfa_oos_step_days=30),
+        backtest_fn=lambda c: _bt(),
+        backtest_fn_factory=lambda s, e: lambda c: _bt(ret=-0.01),
     )
     res = _gates(pipe, _top(3))
     assert res.top_strategies == []
@@ -162,9 +199,7 @@ def test_cross_window_in_sample_window_never_counts() -> None:
     pipe = DiscoveryPipeline(
         _cfg(end_date="2025-06-01", cross_window_months=[3, 6]),
         backtest_fn=lambda c: _bt(),
-        backtest_fn_factory=lambda ws, we: (
-            lambda c: _bt(sharpe=metrics[ws][0], ret=metrics[ws][1])
-        ),
+        backtest_fn_factory=lambda ws, we: lambda c: _bt(sharpe=metrics[ws][0], ret=metrics[ws][1]),
     )
     results, error = pipe.gates.evaluate_cross_windows([(_chrom(), _fit(sharpe=3.0))])
     assert error is None
@@ -177,9 +212,13 @@ def test_cross_window_in_sample_window_never_counts() -> None:
 
 def test_no_cross_window_or_wfa_window_overlaps_holdout() -> None:
     cfg = _cfg(
-        start_date="2024-01-01", end_date="2024-10-19",
-        train_test_split=0.8, holdout_start_date="2024-10-19", holdout_end_date="2025-01-01",
-        cross_window_months=[1, 3], wfa_oos_step_days=30,
+        start_date="2024-01-01",
+        end_date="2024-10-19",
+        train_test_split=0.8,
+        holdout_start_date="2024-10-19",
+        holdout_end_date="2025-01-01",
+        cross_window_months=[1, 3],
+        wfa_oos_step_days=30,
     )
     pipe = DiscoveryPipeline(cfg, backtest_fn=lambda c: _bt())
     for _, ws, we in pipe.cross_window_ranges():
@@ -194,8 +233,12 @@ def test_no_cross_window_or_wfa_window_overlaps_holdout() -> None:
 
 def _holdout_cfg(**kw: Any) -> DiscoveryConfig:
     return _cfg(
-        start_date="2024-01-01", end_date="2024-10-19", train_test_split=0.8,
-        holdout_start_date="2024-10-19", holdout_end_date="2025-01-01", **kw,
+        start_date="2024-01-01",
+        end_date="2024-10-19",
+        train_test_split=0.8,
+        holdout_start_date="2024-10-19",
+        holdout_end_date="2025-01-01",
+        **kw,
     )
 
 
@@ -203,8 +246,9 @@ def test_holdout_is_the_final_gate() -> None:
     def holdout(c: StrategyChromosome) -> dict[str, Any]:
         return _bt(ret=0.05, trades=30) if c.stop_loss_pct == 1.0 else _bt(ret=-0.02, trades=30)
 
-    pipe = DiscoveryPipeline(_holdout_cfg(), backtest_fn=lambda c: _bt(),
-                             holdout_backtest_fn=holdout)
+    pipe = DiscoveryPipeline(
+        _holdout_cfg(), backtest_fn=lambda c: _bt(), holdout_backtest_fn=holdout
+    )
     res = _gates(pipe, _top(3))
     assert [c.stop_loss_pct for c, _ in res.top_strategies] == [1.0]
     assert len(res.holdout_results) == 1 and res.holdout_results[0].total_return == 0.05
@@ -219,7 +263,8 @@ def test_holdout_min_trades_is_half_the_train_rate() -> None:
     # train 292 days, holdout 74 days: 50 * 74 / (2 * 292) = 6.33 -> 6
     assert pipe.holdout_min_trades() == 6
     few = DiscoveryPipeline(
-        _holdout_cfg(), backtest_fn=lambda c: _bt(),
+        _holdout_cfg(),
+        backtest_fn=lambda c: _bt(),
         holdout_backtest_fn=lambda c: _bt(ret=0.05, trades=5),
     )
     res = _gates(few, _top(1))
@@ -236,7 +281,8 @@ def test_holdout_used_only_for_survivors_not_ranking() -> None:
         return _bt(ret=0.05, trades=30)
 
     pipe = DiscoveryPipeline(
-        _holdout_cfg(cross_window_months=[1]), backtest_fn=lambda c: _bt(),
+        _holdout_cfg(cross_window_months=[1]),
+        backtest_fn=lambda c: _bt(),
         holdout_backtest_fn=holdout,
         backtest_fn_factory=lambda s, e: (
             lambda c: _bt() if c.stop_loss_pct == 3.0 else _bt(ret=-0.1)
@@ -256,7 +302,8 @@ def test_cli_and_api_default_to_a_holdout() -> None:
 
 
 def test_full_run_all_fail_holdout_persists_zero_with_reasons(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """End-to-end CLI (mock): champions all fail the holdout -> 0 champions."""
     from vibe_quant.db.state_manager import StateManager
@@ -264,14 +311,17 @@ def test_full_run_all_fail_holdout_persists_zero_with_reasons(
 
     db = tmp_path / "s.db"
     sm = StateManager(db)
-    run_id = sm.create_backtest_run(None, "discovery", ["BTCUSDT"], "4h",
-                                    "2024-01-01", "2024-07-01", {})
+    run_id = sm.create_backtest_run(
+        None, "discovery", ["BTCUSDT"], "4h", "2024-01-01", "2024-07-01", {}
+    )
     sm.close()
 
     def mock_bt(chrom: StrategyChromosome) -> dict[str, Any]:
         r = random.Random(len(chrom.entry_genes))
-        return {**_bt(sharpe=2.5, ret=0.4, trades=150),
-                "trade_returns": tuple(r.gauss(0.003, 0.001) for _ in range(150))}
+        return {
+            **_bt(sharpe=2.5, ret=0.4, trades=150),
+            "trade_returns": tuple(r.gauss(0.003, 0.001) for _ in range(150)),
+        }
 
     monkeypatch.setattr("vibe_quant.discovery.run._mock_backtest", mock_bt)
     # the holdout uses the same mock fn object; make it lose instead
@@ -283,12 +333,32 @@ def test_full_run_all_fail_holdout_persists_zero_with_reasons(
         real_pipeline_init(self, *args, **kwargs)
 
     monkeypatch.setattr(DiscoveryPipeline, "__init__", init)
-    monkeypatch.setattr("sys.argv", [
-        "prog", "--run-id", str(run_id), "--population-size", "6", "--max-generations", "2",
-        "--elite-count", "1", "--max-workers", "-1", "--timeframe", "4h",
-        "--start-date", "2024-01-01", "--end-date", "2024-07-01",
-        "--no-dsr", "--db", str(db), "--mock",
-    ])
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prog",
+            "--run-id",
+            str(run_id),
+            "--population-size",
+            "6",
+            "--max-generations",
+            "2",
+            "--elite-count",
+            "1",
+            "--max-workers",
+            "-1",
+            "--timeframe",
+            "4h",
+            "--start-date",
+            "2024-01-01",
+            "--end-date",
+            "2024-07-01",
+            "--no-dsr",
+            "--db",
+            str(db),
+            "--mock",
+        ],
+    )
     assert cli.main() == 0
     sm = StateManager(db)
     notes = json.loads(sm.get_backtest_result(run_id)["notes"])  # type: ignore[index]
@@ -310,14 +380,20 @@ def test_full_run_all_fail_holdout_persists_zero_with_reasons(
 
 
 def _w(sharpe: float, ret: float, trades: int, dd: float = 0.1, pf: float = 1.5) -> dict[str, Any]:
-    return {"sharpe_ratio": sharpe, "max_drawdown": dd, "profit_factor": pf,
-            "total_trades": trades, "total_return": ret}
+    return {
+        "sharpe_ratio": sharpe,
+        "max_drawdown": dd,
+        "profit_factor": pf,
+        "total_trades": trades,
+        "total_return": ret,
+    }
 
 
 def test_worst_of_n_gates_one_great_window_two_bad() -> None:
     """Audit C6: Sharpe [6,-1,-1], trades [48,1,1] used to score 0.587."""
     agg = NTBacktestFn._aggregate_multi_window(
-        [_w(6.0, 0.90, 48, 0.05, 3.0), _w(-1.0, -0.10, 1), _w(-1.0, -0.10, 1)], min_trades=50,
+        [_w(6.0, 0.90, 48, 0.05, 3.0), _w(-1.0, -0.10, 1), _w(-1.0, -0.10, 1)],
+        min_trades=50,
     )
     fr = _evaluate_single(_chrom(), lambda _c: agg, min_trades=50, timeframe="4h")
     assert fr.adjusted_score == 0.0
@@ -339,10 +415,12 @@ def test_per_window_trade_gate() -> None:
     # min_trades 50, N=3 -> each window needs max(1, 50 // 6) = 8 trades
     assert NTBacktestFn.per_window_min_trades(50, 3) == 8
     ok = NTBacktestFn._aggregate_multi_window(
-        [_w(1.0, 0.1, 30), _w(1.0, 0.1, 30), _w(1.0, 0.1, 8)], min_trades=50,
+        [_w(1.0, 0.1, 30), _w(1.0, 0.1, 30), _w(1.0, 0.1, 8)],
+        min_trades=50,
     )
     bad = NTBacktestFn._aggregate_multi_window(
-        [_w(1.0, 0.1, 30), _w(1.0, 0.1, 30), _w(1.0, 0.1, 7)], min_trades=50,
+        [_w(1.0, 0.1, 30), _w(1.0, 0.1, 30), _w(1.0, 0.1, 7)],
+        min_trades=50,
     )
     assert ok["sharpe_ratio"] == 1.0
     assert bad["sharpe_ratio"] == -1.0 and bad["total_return"] == 0.0
@@ -396,9 +474,7 @@ def test_seed_genes_outside_ga_pool_are_dropped() -> None:
     genes: absolute-price thresholds) — runs 785/786 still carry them."""
     atr = _gene("ATR", {"period": 14.0}, ConditionType.GT, 0.1324)
     rsi_exit = _gene("RSI", {"period": 14.0}, ConditionType.GT, 70.0)
-    mixed = _chrom(
-        entry_genes=[atr, _gene("RSI", {"period": 14.0})], exit_genes=[atr, rsi_exit]
-    )
+    mixed = _chrom(entry_genes=[atr, _gene("RSI", {"period": 14.0})], exit_genes=[atr, rsi_exit])
     atr_only = _chrom(entry_genes=[atr], exit_genes=[atr])
     pop = initialize_population(6, seed_chromosomes=[atr_only, mixed])
     for chrom in pop:
@@ -500,7 +576,9 @@ def test_adaptive_rsi_alpha_reaches_dsl() -> None:
     c2 = _chrom(entry_genes=[_gene("ADAPTIVE_RSI", {"period": 14.0, "alpha": 0.9})])
     d1, d2 = chromosome_to_dsl(c1), chromosome_to_dsl(c2)
     assert d1["indicators"]["adaptive_rsi_entry_0"] == {  # type: ignore[index]
-        "type": "ADAPTIVE_RSI", "period": 14, "alpha": 0.7,
+        "type": "ADAPTIVE_RSI",
+        "period": 14,
+        "alpha": 0.7,
     }
     d1.pop("name")
     d2.pop("name")
@@ -515,8 +593,9 @@ def test_dead_and_fractional_params_are_canonicalized() -> None:
     )
     assert macd_line.parameters["signal_period"] == 9.0  # unused by the MACD line
     macd_sig = canonicalize_gene(
-        _gene("MACD", {"fast_period": 12.0, "slow_period": 26.0, "signal_period": 11.0},
-              sub="signal")
+        _gene(
+            "MACD", {"fast_period": 12.0, "slow_period": 26.0, "signal_period": 11.0}, sub="signal"
+        )
     )
     assert macd_sig.parameters["signal_period"] == 11.0
     arsi = canonicalize_gene(_gene("ADAPTIVE_RSI", {"period": 14.4, "alpha": 0.7712}))
@@ -539,9 +618,13 @@ def test_random_and_mutated_genes_have_integer_periods() -> None:
 
 def test_sl_tp_penalty_uses_per_direction_values_for_both() -> None:
     both = _chrom(
-        direction=Direction.BOTH, stop_loss_pct=2.0, take_profit_pct=2.0,
-        stop_loss_long_pct=10.0, take_profit_long_pct=0.5,
-        stop_loss_short_pct=2.0, take_profit_short_pct=4.0,
+        direction=Direction.BOTH,
+        stop_loss_pct=2.0,
+        take_profit_pct=2.0,
+        stop_loss_long_pct=10.0,
+        take_profit_long_pct=0.5,
+        stop_loss_short_pct=2.0,
+        take_profit_short_pct=4.0,
     )
     fr = _evaluate_single(both, lambda _c: _bt(), min_trades=50, timeframe="4h")
     assert fr.sl_tp_penalty == compute_sl_tp_penalty(10.0, 0.5) == 0.15
@@ -565,7 +648,8 @@ def test_multi_seed_rechecks_dsr_with_pooled_trials(monkeypatch: pytest.MonkeyPa
     days = compute_day_count(cfg.start_date, cfg.end_date)
     assert days is not None
     sharpe = next(
-        s / 100 for s in range(100, 1000)
+        s / 100
+        for s in range(100, 1000)
         if apply_discovery_dsr(s / 100, 400, days).is_significant
         and not apply_discovery_dsr(s / 100, 1200, days).is_significant
     )
@@ -573,8 +657,11 @@ def test_multi_seed_rechecks_dsr_with_pooled_trials(monkeypatch: pytest.MonkeyPa
 
     def fake_run(self: DiscoveryPipeline) -> DiscoveryResult:
         return DiscoveryResult(
-            generations=[], top_strategies=[champ], total_candidates_evaluated=400,
-            converged=False, convergence_generation=None,
+            generations=[],
+            top_strategies=[champ],
+            total_candidates_evaluated=400,
+            converged=False,
+            convergence_generation=None,
         )
 
     monkeypatch.setattr(DiscoveryPipeline, "run", fake_run)

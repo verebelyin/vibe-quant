@@ -47,7 +47,9 @@ def _dsl(tf: str = "1h", extra: str | None = None) -> dict[str, Any]:
 
 
 def test_runner_raises_on_empty_catalog(tmp_path: Path) -> None:
-    runner = NTScreeningRunner(_dsl("1h"), ["BTCUSDT"], "2024-01-01", "2024-02-01", catalog_path=str(tmp_path))
+    runner = NTScreeningRunner(
+        _dsl("1h"), ["BTCUSDT"], "2024-01-01", "2024-02-01", catalog_path=str(tmp_path)
+    )
     with pytest.raises(MissingBarDataError, match=r"BTCUSDT-PERP\.BINANCE-1-HOUR-LAST-EXTERNAL"):
         runner({})
 
@@ -64,18 +66,33 @@ def test_1d_smoke_on_catalog_without_1d(tmp_path: Path) -> None:
     cm = CatalogManager(tmp_path)
     cm.write_instrument(inst)
     cm.write_bars(_minute_bars(inst, "4h", 1440))
-    runner = NTScreeningRunner(_dsl("4h", "1d"), ["BTCUSDT"], "2024-01-01", "2024-01-02", catalog_path=str(tmp_path))
+    runner = NTScreeningRunner(
+        _dsl("4h", "1d"), ["BTCUSDT"], "2024-01-01", "2024-01-02", catalog_path=str(tmp_path)
+    )
     with pytest.raises(MissingBarDataError, match="1-DAY"):
         runner({})
 
 
 def _minute_bars(inst: Any, interval: str, n: int) -> list[Any]:
     klines = [
-        {"open_time": _DAY0 + i * 60_000, "open": 100.0, "high": 101.0, "low": 99.0,
-         "close": 100.5, "volume": 1.0, "close_time": _DAY0 + i * 60_000 + 59_999}
+        {
+            "open_time": _DAY0 + i * 60_000,
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.5,
+            "volume": 1.0,
+            "close_time": _DAY0 + i * 60_000 + 59_999,
+        }
         for i in range(n)
     ]
-    return klines_to_bars(klines, inst.id, get_bar_type("BTCUSDT", interval), inst.size_precision, inst.price_precision)
+    return klines_to_bars(
+        klines,
+        inst.id,
+        get_bar_type("BTCUSDT", interval),
+        inst.size_precision,
+        inst.price_precision,
+    )
 
 
 def test_partial_overlap_does_not_raise(tmp_path: Path) -> None:
@@ -97,7 +114,9 @@ def test_discovery_all_missing_aborts_with_bar_type(tmp_path: Path) -> None:
 
         dsl = chromosome_to_dsl(chrom)
         dsl["timeframe"] = "4h"
-        r = NTScreeningRunner(dsl, ["BTCUSDT"], "2024-01-01", "2024-02-01", catalog_path=str(tmp_path))
+        r = NTScreeningRunner(
+            dsl, ["BTCUSDT"], "2024-01-01", "2024-02-01", catalog_path=str(tmp_path)
+        )
         r({})
         return {}
 

@@ -269,10 +269,10 @@ def test_entry_and_exit_cross_coexist() -> None:
 @pytest.mark.parametrize(
     ("ma_kind", "p_fast", "p_slow"),
     [
-        ("KAMA", 5.0, 50.0),     # pool min vs pool max
-        ("FRAMA", 6.0, 50.0),    # FRAMA's own min (6) vs max (50)
-        ("VIDYA", 5.0, 6.0),     # tight adjacency (min, min+1)
-        ("KAMA", 49.0, 50.0),    # tight adjacency at the top
+        ("KAMA", 5.0, 50.0),  # pool min vs pool max
+        ("FRAMA", 6.0, 50.0),  # FRAMA's own min (6) vs max (50)
+        ("VIDYA", 5.0, 6.0),  # tight adjacency (min, min+1)
+        ("KAMA", 49.0, 50.0),  # tight adjacency at the top
     ],
 )
 def test_boundary_periods_compile(ma_kind: str, p_fast: float, p_slow: float) -> None:
@@ -294,12 +294,8 @@ def test_direction_both_emits_cross_to_long_and_short() -> None:
     chrom = _make_cross_chrom("KAMA", 10.0, 30.0)
     chrom.direction = Direction.BOTH
     # inydc: a BOTH chromosome carries its own short-side genes
-    chrom.short_entry_genes = [
-        StrategyGene("RSI", {"period": 14}, ConditionType.GT, 70.0)
-    ]
-    chrom.short_exit_genes = [
-        StrategyGene("RSI", {"period": 14}, ConditionType.LT, 30.0)
-    ]
+    chrom.short_entry_genes = [StrategyGene("RSI", {"period": 14}, ConditionType.GT, 70.0)]
+    chrom.short_exit_genes = [StrategyGene("RSI", {"period": 14}, ConditionType.LT, 30.0)]
     chrom.short_ma_entry_genes = [
         PriceVsMAConditionGene(
             indicator_type="KAMA",
@@ -364,8 +360,7 @@ def test_crossover_of_two_cross_parents_compiles() -> None:
                     p_slow = g.parameters_slow.get("period")
                     if p_fast is not None and p_slow is not None:
                         assert p_fast < p_slow, (
-                            f"iter {i} child {label}: invariant broken "
-                            f"fast={p_fast} slow={p_slow}"
+                            f"iter {i} child {label}: invariant broken fast={p_fast} slow={p_slow}"
                         )
             dsl_dict = chromosome_to_dsl(child)
             dsl_dict["timeframe"] = "5m"

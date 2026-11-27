@@ -140,9 +140,7 @@ def test_spec_hash_is_sha256_of_sorted_json() -> None:
         pytest.param({"band": 10**400}, id="band-int-overflow"),
         pytest.param({"symbols": ("BTCUSDT",)}, id="one-symbol"),
         pytest.param({"symbols": ("BTCUSDT", "BTCUSDT")}, id="duplicate-symbol"),
-        pytest.param(
-            {"symbols": ("BTCUSDT", "BTCUSDT", "ETHUSDT")}, id="duplicate-of-three"
-        ),
+        pytest.param({"symbols": ("BTCUSDT", "BTCUSDT", "ETHUSDT")}, id="duplicate-of-three"),
         pytest.param({"symbols": ("BTCUSDT", "")}, id="empty-symbol"),
         pytest.param({"start_ns": _START + 1}, id="start-not-midnight"),
         pytest.param({"end_ns": _END + 1}, id="end-not-midnight"),
@@ -266,9 +264,7 @@ def test_plan_orders_cases() -> None:
     """Open, close, flip, and the band on same-side resizes."""
     specs = _specs()
     prices = {"BTCUSDT": 51000.0, "SOLUSDT": 100.0}
-    orders, band_skips, min_notional_skips = plan_orders(
-        {}, {"BTCUSDT": 98}, prices, specs, 0.10
-    )
+    orders, band_skips, min_notional_skips = plan_orders({}, {"BTCUSDT": 98}, prices, specs, 0.10)
     assert orders == (OrderIntent("BTCUSDT", 98, False),)
     assert (band_skips, min_notional_skips) == (0, 0)
     orders, _, _ = plan_orders({"BTCUSDT": 98}, {"BTCUSDT": 0}, prices, specs, 0.10)
@@ -367,7 +363,16 @@ def test_decide_passes_signal_hole_through() -> None:
     spec = CarrySpec(**_kwargs(symbols=_SYMBOLS))
     signals = {"BTCUSDT": None, "ETHUSDT": 0.002, "SOLUSDT": 0.001, "BNBUSDT": -0.001}
     prices = {"BTCUSDT": 51000.0, "ETHUSDT": 3000.0, "SOLUSDT": 100.0, "BNBUSDT": 400.0}
-    decision = decide(_START, 10_000.0, signals, {"BTCUSDT": "funding_hole"}, prices, {"BTCUSDT": 5}, _specs(), spec)
+    decision = decide(
+        _START,
+        10_000.0,
+        signals,
+        {"BTCUSDT": "funding_hole"},
+        prices,
+        {"BTCUSDT": 5},
+        _specs(),
+        spec,
+    )
     assert decision.excluded["BTCUSDT"] == "funding_hole"
     assert decision.weights["BTCUSDT"] == 0.0
     assert decision.target_steps["BTCUSDT"] == 0
@@ -408,12 +413,12 @@ def test_decide_non_positive_equity_fails_closed(equity: float, live: bool) -> N
         assert math.isnan(error.value.leg_notional)
     else:
         assert error.value.leg_notional == equity
-    assert decide(_START, 1e-9, dict.fromkeys(_SYMBOLS), {}, {}, {}, specs, spec).rounding_drift == 0.0
+    assert (
+        decide(_START, 1e-9, dict.fromkeys(_SYMBOLS), {}, {}, {}, specs, spec).rounding_drift == 0.0
+    )
 
 
-@pytest.mark.parametrize(
-    "equity", [0.0, -1.0, float("nan")], ids=["zero", "negative", "nan"]
-)
+@pytest.mark.parametrize("equity", [0.0, -1.0, float("nan")], ids=["zero", "negative", "nan"])
 def test_equity_guard_precedes_held_unpriced(equity: float) -> None:
     """With BOTH a non-positive equity and a held-but-unpriced leg, ``CarryEquityTooSmall`` wins.
 
@@ -601,7 +606,14 @@ def test_inverse_vol_extreme_ratio() -> None:
     vols = {"ETHUSDT": 1e-310, "BNBUSDT": 0.04, "BTCUSDT": 0.02, "SOLUSDT": 0.04}
     with pytest.raises(CarryEquityTooSmall) as caught:
         decide(
-            _MONDAY, 100_000.0, _VOL_SIGNALS, {}, _VOL_PRICES, _FLAT, _specs(), _vol_spec(),
+            _MONDAY,
+            100_000.0,
+            _VOL_SIGNALS,
+            {},
+            _VOL_PRICES,
+            _FLAT,
+            _specs(),
+            _vol_spec(),
             vols=vols,
         )
     error = caught.value
@@ -614,7 +626,14 @@ def test_inverse_vol_zero_weight_fails() -> None:
     vols = {"ETHUSDT": 1e-310, "BNBUSDT": 1e20, "BTCUSDT": 0.02, "SOLUSDT": 0.04}
     with pytest.raises(CarryEquityTooSmall) as caught:
         decide(
-            _MONDAY, 100_000.0, _VOL_SIGNALS, {}, _VOL_PRICES, _FLAT, _specs(), _vol_spec(),
+            _MONDAY,
+            100_000.0,
+            _VOL_SIGNALS,
+            {},
+            _VOL_PRICES,
+            _FLAT,
+            _specs(),
+            _vol_spec(),
             vols=vols,
         )
     error = caught.value
@@ -683,7 +702,9 @@ def test_min_quote_volume_serialization() -> None:
     assert isinstance(spec.min_quote_volume, float)
     assert list(spec.to_json())[7:] == ["min_quote_volume"]
     assert spec.to_json()["min_quote_volume"] == 1e8
-    assert spec.spec_hash() != CarrySpec.from_dates(_SYMBOLS, "2022-06-01", "2026-09-28").spec_hash()
+    assert (
+        spec.spec_hash() != CarrySpec.from_dates(_SYMBOLS, "2022-06-01", "2026-09-28").spec_hash()
+    )
     assert CarrySpec(**_kwargs(min_quote_volume=5e-324)).min_quote_volume == 5e-324
 
 
@@ -698,9 +719,7 @@ def _six_settlements() -> dict[str, Settlements]:
     upper = _MONDAY - 60 * 10**9
     first = ((upper - 7 * _DAY_NS) // (8 * _HOUR_NS) + 1) * 8 * _HOUR_NS
     times = tuple(range(first, upper + 1, 8 * _HOUR_NS))
-    return {
-        symbol: Settlements(times, (_SIX_RATES[symbol],) * len(times)) for symbol in _SIX
-    }
+    return {symbol: Settlements(times, (_SIX_RATES[symbol],) * len(times)) for symbol in _SIX}
 
 
 def _six_decision(illiquid: set[str], current: dict[str, int]) -> Any:
@@ -708,8 +727,14 @@ def _six_decision(illiquid: set[str], current: dict[str, int]) -> Any:
     b0 = _MONDAY - _MONDAY % _DAY_NS
     week = {b0 - k * _DAY_NS: 1e9 for k in range(1, 8)}
     volume = {s: {d: 1e7 for d in week} if s in illiquid else week for s in _SIX}
-    prices = {"BTCUSDT": 30_000.0, "ETHUSDT": 1_800.0, "SOLUSDT": 40.0, "BNBUSDT": 300.0,
-              "SUIUSDT": 3.0, "ZECUSDT": 50.0}
+    prices = {
+        "BTCUSDT": 30_000.0,
+        "ETHUSDT": 1_800.0,
+        "SOLUSDT": 40.0,
+        "BNBUSDT": 300.0,
+        "SUIUSDT": 3.0,
+        "ZECUSDT": 50.0,
+    }
     sizing = {s: PriceTick(_MONDAY - 10**6, prices[s]) for s in _SIX}
     eligible = decision_signals(spec, _six_settlements(), sizing, _MONDAY, quote_volume=volume)
     specs = {s: InstrumentSpec.from_instrument(create_instrument(s)) for s in _SIX}
@@ -764,7 +789,10 @@ _W1_B = 0.1068692329089242
 
 
 def _keyed(path: list[float]) -> dict[int, float]:
-    return {_TS_B0 - back * _TS_DAY: close for back, close in zip(range(len(path) - 1, -1, -1), path, strict=True)}
+    return {
+        _TS_B0 - back * _TS_DAY: close
+        for back, close in zip(range(len(path) - 1, -1, -1), path, strict=True)
+    }
 
 
 def _ts_closes(paths: dict[str, list[float]]) -> dict[str, dict[int, float]]:
@@ -820,7 +848,14 @@ def test_time_series_weights_w1() -> None:
     assert book.lam == 0.534346164544621
     assert book.weights == {"A": _W1_A, "B": _W1_B, "C": 0.0}
     decision = decide(
-        _TS_D, 10_000.0, _W1_SIGNALS, {}, _W1_PRICES, {}, _w1_specs(), _ts_spec(),
+        _TS_D,
+        10_000.0,
+        _W1_SIGNALS,
+        {},
+        _W1_PRICES,
+        {},
+        _w1_specs(),
+        _ts_spec(),
         trend_closes=_ts_closes(_W1_CLOSES),
     )
     assert decision.weights == {"A": _W1_A, "B": _W1_B, "C": 0.0}
@@ -867,7 +902,11 @@ def test_time_series_weights_long_short() -> None:
             "long_short",
         ),
         # finite returns ~1e308 twice: a naive fsum of the book returns overflows
-        ({"A": [1.0, 1e308, 1.0, 1e308], "B": [1.0, 1.0, 1.0, 1.0]}, {"A": 1.0, "B": None}, "long_flat"),
+        (
+            {"A": [1.0, 1e308, 1.0, 1e308], "B": [1.0, 1.0, 1.0, 1.0]},
+            {"A": 1.0, "B": None},
+            "long_flat",
+        ),
     ],
 )
 def test_book_without_vol_is_flat(
@@ -893,7 +932,10 @@ def test_flat_and_single_coin_books() -> None:
     assert one.weights == {"A": 0.18131936556464978, "B": 0.0, "C": 0.0}
 
 
-@pytest.mark.parametrize(("regime", "state"), [(-0.2, "filter_off"), (None, "filter_off"), (0.0, "filter_off"), (0.2, None)])
+@pytest.mark.parametrize(
+    ("regime", "state"),
+    [(-0.2, "filter_off"), (None, "filter_off"), (0.0, "filter_off"), (0.2, None)],
+)
 def test_regime_filter(regime: float | None, state: str | None) -> None:
     """R27: regime None or <= 0 -> every weight 0 and filter_off; > 0 -> the W1 book."""
     spec = _ts_spec(trend_filter="A")
@@ -913,17 +955,54 @@ def test_min_leg_rules() -> None:
     """R30: a leg below its tradable size -> target 0 (+1 skip); E*gross/n below -> raise."""
     closes = _ts_closes(_W1_CLOSES)
     edge = (_W1_B * 10_000.0) / 2  # 2 x min_notional == |w_B| * E exactly
-    kept = decide(_TS_D, 10_000.0, _W1_SIGNALS, {}, _W1_PRICES, {}, _w1_specs(B=edge), _ts_spec(), trend_closes=closes)
+    kept = decide(
+        _TS_D,
+        10_000.0,
+        _W1_SIGNALS,
+        {},
+        _W1_PRICES,
+        {},
+        _w1_specs(B=edge),
+        _ts_spec(),
+        trend_closes=closes,
+    )
     assert (kept.target_steps["B"], kept.min_leg_skips) == (2116, 0)
     over = math.nextafter(edge, math.inf)
-    skipped = decide(_TS_D, 10_000.0, _W1_SIGNALS, {}, _W1_PRICES, {}, _w1_specs(B=over), _ts_spec(), trend_closes=closes)
+    skipped = decide(
+        _TS_D,
+        10_000.0,
+        _W1_SIGNALS,
+        {},
+        _W1_PRICES,
+        {},
+        _w1_specs(B=over),
+        _ts_spec(),
+        trend_closes=closes,
+    )
     assert (skipped.target_steps, skipped.min_leg_skips) == ({"A": 16355, "B": 0, "C": 0}, 1)
     assert skipped.orders == (OrderIntent("A", 16355, False),)
     # E * gross / n = 3000 / 3 = 1000 == required (2 x 500): no raise
-    decide(_TS_D, 3_000.0, _W1_SIGNALS, {}, _W1_PRICES, {}, _w1_specs(C=500.0), _ts_spec(), trend_closes=closes)
+    decide(
+        _TS_D,
+        3_000.0,
+        _W1_SIGNALS,
+        {},
+        _W1_PRICES,
+        {},
+        _w1_specs(C=500.0),
+        _ts_spec(),
+        trend_closes=closes,
+    )
     with pytest.raises(CarryEquityTooSmall) as small:
         decide(
-            _TS_D, 3_000.0, _W1_SIGNALS, {}, _W1_PRICES, {}, _w1_specs(C=500.25), _ts_spec(),
+            _TS_D,
+            3_000.0,
+            _W1_SIGNALS,
+            {},
+            _W1_PRICES,
+            {},
+            _w1_specs(C=500.25),
+            _ts_spec(),
             trend_closes=closes,
         )
     assert (small.value.symbol, small.value.decision_ns) == ("C", _TS_D)
@@ -934,12 +1013,24 @@ def test_time_series_no_price_rule() -> None:
     """R17 (rule): unheld without a sizing price -> no_price, target 0; held -> CarryDataError."""
     prices = {"B": 50.49, "C": 10.0}
     closes = _ts_closes(_W1_CLOSES)
-    decision = decide(_TS_D, 10_000.0, _W1_SIGNALS, {}, prices, {}, _w1_specs(), _ts_spec(), trend_closes=closes)
+    decision = decide(
+        _TS_D, 10_000.0, _W1_SIGNALS, {}, prices, {}, _w1_specs(), _ts_spec(), trend_closes=closes
+    )
     assert decision.excluded == {"A": "no_price"}
     assert decision.target_steps["A"] == 0
     assert decision.weights["A"] == 0.0
     with pytest.raises(CarryDataError, match="no price for held A"):
-        decide(_TS_D, 10_000.0, _W1_SIGNALS, {}, prices, {"A": 5}, _w1_specs(), _ts_spec(), trend_closes=closes)
+        decide(
+            _TS_D,
+            10_000.0,
+            _W1_SIGNALS,
+            {},
+            prices,
+            {"A": 5},
+            _w1_specs(),
+            _ts_spec(),
+            trend_closes=closes,
+        )
 
 
 # --- R31 / C9-9: the gross cap bypasses the band, one Decimal budget ---
@@ -948,10 +1039,19 @@ _UNIT = {"A": _ts_instr("A", "1", 1.0), "B": _ts_instr("B", "1", 1.0)}
 _LOW_VOL = _ts_closes({"A": [100.0, 101.0, 100.0, 101.0], "B": [100.0, 101.0, 100.0, 101.0]})
 
 
-def _capped(held: dict[str, int], signals: dict[str, float | None], gross: float = 1.0, **kw: Any) -> Any:
+def _capped(
+    held: dict[str, int], signals: dict[str, float | None], gross: float = 1.0, **kw: Any
+) -> Any:
     spec = _ts_spec(("A", "B"), vol_target=2.0, gross=gross, band=0.10)
     return decide(
-        _TS_D, 100.0, signals, {}, {"A": 1.0, "B": 1.0}, held, kw.get("specs", _UNIT), spec,
+        _TS_D,
+        100.0,
+        signals,
+        {},
+        {"A": 1.0, "B": 1.0},
+        held,
+        kw.get("specs", _UNIT),
+        spec,
         trend_closes=_LOW_VOL,
     )
 
@@ -1003,7 +1103,14 @@ def test_exposure_applies_order_deltas() -> None:
     specs = {"A": _ts_instr("A", "1", 1.0, min_quantity="20"), "B": _UNIT["B"]}
     spec = _ts_spec(("A", "B"), vol_target=2.0, gross=0.15, direction="long_short")
     decision = decide(
-        _TS_D, 100.0, {"A": -1.0, "B": None}, {}, {"A": 1.0, "B": 1.0}, {"A": 40}, specs, spec,
+        _TS_D,
+        100.0,
+        {"A": -1.0, "B": None},
+        {},
+        {"A": 1.0, "B": 1.0},
+        {"A": 40},
+        specs,
+        spec,
         trend_closes=_LOW_VOL,
     )
     assert decision.target_steps["A"] == -14
@@ -1016,9 +1123,17 @@ def test_funding_decision_keeps_new_fields_default() -> None:
     """R3: a funding decision carries the trend fields at their defaults."""
     spec = CarrySpec.from_dates(_SYMBOLS, "2022-06-01", "2026-09-28")
     decision = decide(
-        _MONDAY, 100_000.0,
+        _MONDAY,
+        100_000.0,
         {"BTCUSDT": 0.002, "ETHUSDT": -0.001, "SOLUSDT": 0.0, "BNBUSDT": 0.0005},
-        {}, {"BTCUSDT": 30_000.0, "ETHUSDT": 1_800.0, "BNBUSDT": 300.0, "SOLUSDT": 40.0},
-        {"BTCUSDT": 0, "ETHUSDT": 0, "SOLUSDT": 0, "BNBUSDT": 0}, _specs(), spec,
+        {},
+        {"BTCUSDT": 30_000.0, "ETHUSDT": 1_800.0, "BNBUSDT": 300.0, "SOLUSDT": 40.0},
+        {"BTCUSDT": 0, "ETHUSDT": 0, "SOLUSDT": 0, "BNBUSDT": 0},
+        _specs(),
+        spec,
     )
-    assert (decision.book_state, decision.min_leg_skips, decision.exposure_after_plan) == (None, 0, None)
+    assert (decision.book_state, decision.min_leg_skips, decision.exposure_after_plan) == (
+        None,
+        0,
+        None,
+    )

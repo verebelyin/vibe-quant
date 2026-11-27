@@ -84,7 +84,9 @@ def cross_window_ranges_for(
         windows.append((months, ws_dt.strftime("%Y-%m-%d"), end_date))
     if holdout_start:
         assert_windows_outside_holdout(
-            [(ws, we) for _, ws, we in windows], holdout_start, "Cross-window",
+            [(ws, we) for _, ws, we in windows],
+            holdout_start,
+            "Cross-window",
         )
     return windows
 
@@ -181,7 +183,9 @@ def plan_windows(
     if train_test_split > 0:
         try:
             train_start, train_end, holdout_start, holdout_end = split_date_range(
-                start_date, end_date, train_test_split,
+                start_date,
+                end_date,
+                train_test_split,
             )
         except ValueError as exc:
             problems.append(str(exc))
@@ -200,14 +204,20 @@ def plan_windows(
         valid_months = [m for m in cross_window_months if m >= 1]
         try:
             cross = cross_window_ranges_for(
-                list(dict.fromkeys(valid_months)), train_start, train_end, holdout_start or "",
+                list(dict.fromkeys(valid_months)),
+                train_start,
+                train_end,
+                holdout_start or "",
             )
         except ValueError as exc:
             problems.append(str(exc))
         if wfa_oos_step_days > 0:
             try:
                 wfa = wfa_window_ranges_for(
-                    wfa_oos_step_days, train_start, train_end, holdout_start or "",
+                    wfa_oos_step_days,
+                    train_start,
+                    train_end,
+                    holdout_start or "",
                 )
                 if not wfa:
                     problems.append(

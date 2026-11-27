@@ -81,7 +81,9 @@ def git(repo: Path, *args: str, check: bool = True) -> str:
     return proc.stdout
 
 
-_CLAUDE_TRAILER = re.compile(r"^Co-Authored-By: Claude .*<noreply@anthropic\.com>\s*$", re.MULTILINE)
+_CLAUDE_TRAILER = re.compile(
+    r"^Co-Authored-By: Claude .*<noreply@anthropic\.com>\s*$", re.MULTILINE
+)
 
 
 def parse_task(spec: str) -> Task:
@@ -177,7 +179,8 @@ def task_fork_source(repo: Path, start: str, task: Task) -> tuple[str, str]:
         # merge-base is stale (its delta would re-apply what main already holds). A task
         # already merged into ``start`` has merge-base == its tip: its recorded base stands.
         stale = subprocess.run(
-            ["git", "-C", str(repo), "merge-base", "--is-ancestor", recorded, base], capture_output=True
+            ["git", "-C", str(repo), "merge-base", "--is-ancestor", recorded, base],
+            capture_output=True,
         )
         if stale.returncode == 0:
             return base, "merge-base (stale .vq-base)"
@@ -221,7 +224,9 @@ def verified_minus_later(
                 f.write_text(body)
                 files.append(str(f))
             # merge-file <current> <base> <other>: undo tip->base on top of current
-            proc = subprocess.run(["git", "merge-file", "-p", *files], capture_output=True, text=True)
+            proc = subprocess.run(
+                ["git", "merge-file", "-p", *files], capture_output=True, text=True
+            )
             if proc.returncode != 0:
                 return None
             text = proc.stdout
@@ -277,7 +282,16 @@ def land_task(
             )
     if rehearse:  # messages were linted up front; the pre-commit lint runs here by hand
         _rehearse_lint(repo)
-        git(repo, "-c", "core.hooksPath=/dev/null", "commit", "-q", "--no-verify", "-F", str(task.message))
+        git(
+            repo,
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "-q",
+            "--no-verify",
+            "-F",
+            str(task.message),
+        )
     else:
         git(repo, "commit", "-q", "-F", str(task.message))
     return git(repo, "rev-parse", "HEAD").strip()
@@ -310,7 +324,9 @@ def _rehearse_lint(wt: Path) -> None:
     delta: a task that only lints clean together with a later task (two tasks each adding the
     same def, ruff F811) is refused by the rehearsal, before any task commits on main."""
     env = {**os.environ, "VQ_RUFF": os.environ.get("VQ_RUFF", str(_RUFF))}
-    proc = subprocess.run(["bash", str(_LINT_HOOK)], cwd=wt, capture_output=True, text=True, env=env)
+    proc = subprocess.run(
+        ["bash", str(_LINT_HOOK)], cwd=wt, capture_output=True, text=True, env=env
+    )
     if proc.returncode != 0:
         tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-20:])
         raise LandError(f"pre-commit lint failed on this task's own delta:\n{tail}")
@@ -330,7 +346,17 @@ def rehearsal_failures(
     failures: list[str] = []
     with tempfile.TemporaryDirectory() as tmp:
         wt = Path(tmp) / "rehearsal"
-        git(repo, "-c", "core.hooksPath=/dev/null", "worktree", "add", "-q", "--detach", str(wt), start)
+        git(
+            repo,
+            "-c",
+            "core.hooksPath=/dev/null",
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            str(wt),
+            start,
+        )
         try:
             for task, (fork, source), later in zip(tasks, forks, laters, strict=True):
                 try:

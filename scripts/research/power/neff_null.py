@@ -265,8 +265,7 @@ def build_verdict(
     marginal = tuple(
         key
         for key, rate in rates.items()
-        if threshold_exit_code(rate) == 0
-        and clopper_pearson_upper(counts[key], reps) > THRESHOLD
+        if threshold_exit_code(rate) == 0 and clopper_pearson_upper(counts[key], reps) > THRESHOLD
     )
     topup_failing: tuple[str, ...] = ()
     if failing:
@@ -512,9 +511,7 @@ def run_config(
             denoms[name] += 1
             counts[name] += int(any_pick_passed(chains, num_trials))
 
-    rates = {
-        name: (counts[name] / denoms[name] if denoms[name] else 0.0) for name in COLUMN_NAMES
-    }
+    rates = {name: (counts[name] / denoms[name] if denoms[name] else 0.0) for name in COLUMN_NAMES}
     cp_upper = clopper_pearson_upper(counts["ev"], reps)
     return {
         "key": cfg.key,
@@ -783,7 +780,9 @@ def write_report(report: Mapping[str, object], out: Path) -> None:
     out.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 
 
-def print_report(report: Mapping[str, object], *, topup_rows: Sequence[Mapping[str, object]]) -> None:
+def print_report(
+    report: Mapping[str, object], *, topup_rows: Sequence[Mapping[str, object]]
+) -> None:
     """Print the V2-neff verdict line, the per-config columns and the escalation."""
     verdict = cast("dict[str, Any]", report["verdict"])
     print(cast("str", verdict["line"]))
@@ -957,7 +956,12 @@ def pooled_entry(
         return cast("dict[str, float | int]", {"window_results": rows})
 
     train_out = [
-        outcome([synth.make_window(replace(base, returns=r), ws, we) for ws, we in base.plan.eval_windows])
+        outcome(
+            [
+                synth.make_window(replace(base, returns=r), ws, we)
+                for ws, we in base.plan.eval_windows
+            ]
+        )
         for r in train
     ]
     bt = pooled_backtest_fn(window).aggregate_symbol_results(chromosome, train_out)
@@ -1049,7 +1053,9 @@ def pooled_draws(cfg: PooledConfig, rep: int, tag: int, candidates: int) -> list
     return out
 
 
-def pooled_candidates(cfg: PooledConfig, rep: int, tag: int, candidates: int) -> list[PooledCandidate]:
+def pooled_candidates(
+    cfg: PooledConfig, rep: int, tag: int, candidates: int
+) -> list[PooledCandidate]:
     """Replicate ``rep``'s pooled S = 0 candidates (:func:`pooled_draws` through :func:`pooled_entry`)."""
     return [
         pooled_entry(cfg.window, chromosome, train, holdout)
@@ -1136,9 +1142,7 @@ def pooled_replicate(
     chain = pooled_chain(cfg.window, entries, closes)
     k_effs = [
         k
-        for k, _reason, _corr in (
-            pooled_k_eff(e.fitness.symbol_mtm_daily or {}) for e in entries
-        )
+        for k, _reason, _corr in (pooled_k_eff(e.fitness.symbol_mtm_daily or {}) for e in entries)
         if k is not None
     ]
     return {
@@ -1150,7 +1154,9 @@ def pooled_replicate(
     }
 
 
-def summarize_pooled(cfg: PooledConfig, rows: Sequence[Mapping[str, object]], candidates: int) -> dict[str, object]:
+def summarize_pooled(
+    cfg: PooledConfig, rows: Sequence[Mapping[str, object]], candidates: int
+) -> dict[str, object]:
     """One config's row from its replicates (any-pick-of-all count, picks, stages, K_eff)."""
     reps = len(rows)
     count = sum(int(bool(r["fp"])) for r in rows)
@@ -1229,7 +1235,9 @@ def run_pooled(
         with ProcessPoolExecutor(
             max_workers=workers, initializer=_init_pooled_worker, initargs=(closes,)
         ) as pool:
-            outs = list(pool.map(_pooled_unit, units, chunksize=max(1, len(units) // (workers * 8))))
+            outs = list(
+                pool.map(_pooled_unit, units, chunksize=max(1, len(units) // (workers * 8)))
+            )
     return [
         summarize_pooled(cfg, outs[k * reps : (k + 1) * reps], candidates)
         for k, cfg in enumerate(cfgs)
@@ -1254,9 +1262,13 @@ def pooled_verdict(
     never a verdict (MARGINAL, exit 2) whatever its grid and size (rev-gc4-1 S1).
     """
     verdict = gpool_verdict(results, reps=reps, topup_rows=topup_rows)
-    line = verdict.line.replace("G-pool neff (pick=all)", "G-pooled neff (6 symbols, pick=all, q95)")
+    line = verdict.line.replace(
+        "G-pool neff (pick=all)", "G-pooled neff (6 symbols, pick=all, q95)"
+    )
     if quick:
-        return replace(verdict, status="MARGINAL", exit_code=2, line=f"{line} (quick stream, no verdict)")
+        return replace(
+            verdict, status="MARGINAL", exit_code=2, line=f"{line} (quick stream, no verdict)"
+        )
     return replace(verdict, line=line)
 
 
@@ -1348,9 +1360,7 @@ def main_pooled(args: argparse.Namespace) -> int:
         reps=reps, candidates=args.candidates, quick=args.quick, coin_rhos=args.coin_rho
     )
     quick = args.quick or tag == POOLED_QUICK_TAG
-    out = args.out or Path(GPOOLED_DIR) / (
-        "neff_null6.quick.json" if quick else "neff_null6.json"
-    )
+    out = args.out or Path(GPOOLED_DIR) / ("neff_null6.quick.json" if quick else "neff_null6.json")
     start = time.perf_counter()
     with _quiet_chain():
         closes = load_pooled_closes(Path(args.catalog))

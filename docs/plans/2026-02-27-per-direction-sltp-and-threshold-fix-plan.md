@@ -151,14 +151,13 @@ In `vibe_quant/discovery/operators.py`, make `_THRESHOLD_RANGES` public by renam
 In `vibe_quant/discovery/genome.py`, import `THRESHOLD_RANGES` from operators and add to `validate_chromosome()` after the parameter validation loop (around line 283, before SL/TP checks):
 
 ```python
-            # Validate threshold is within indicator's expected range
-            if gene.indicator_type in THRESHOLD_RANGES:
-                tlo, thi = THRESHOLD_RANGES[gene.indicator_type]
-                if not (tlo <= gene.threshold <= thi):
-                    errors.append(
-                        f"{prefix}: threshold {gene.threshold} outside "
-                        f"[{tlo}, {thi}] for {gene.indicator_type}"
-                    )
+# Validate threshold is within indicator's expected range
+if gene.indicator_type in THRESHOLD_RANGES:
+    tlo, thi = THRESHOLD_RANGES[gene.indicator_type]
+    if not (tlo <= gene.threshold <= thi):
+        errors.append(
+            f"{prefix}: threshold {gene.threshold} outside [{tlo}, {thi}] for {gene.indicator_type}"
+        )
 ```
 
 Also update `is_valid_chromosome` in `operators.py` to check threshold ranges:
@@ -198,6 +197,7 @@ Create `tests/unit/test_schema_per_direction.py`:
 
 ```python
 """Tests for per-direction SL/TP in DSL schema."""
+
 from __future__ import annotations
 
 import pytest
@@ -229,41 +229,59 @@ class TestPerDirectionSLTP:
         assert strategy.take_profit_short is None
 
     def test_per_direction_stop_loss(self) -> None:
-        strategy = StrategyDSL(**_base_dsl(
-            stop_loss_long={"type": "fixed_pct", "percent": 1.09},
-            stop_loss_short={"type": "fixed_pct", "percent": 8.29},
-        ))
+        strategy = StrategyDSL(
+            **_base_dsl(
+                stop_loss_long={"type": "fixed_pct", "percent": 1.09},
+                stop_loss_short={"type": "fixed_pct", "percent": 8.29},
+            )
+        )
         assert strategy.stop_loss_long.percent == 1.09
         assert strategy.stop_loss_short.percent == 8.29
         assert strategy.stop_loss.percent == 2.0  # base still there
 
     def test_per_direction_take_profit(self) -> None:
-        strategy = StrategyDSL(**_base_dsl(
-            take_profit_long={"type": "fixed_pct", "percent": 17.13},
-            take_profit_short={"type": "fixed_pct", "percent": 13.06},
-        ))
+        strategy = StrategyDSL(
+            **_base_dsl(
+                take_profit_long={"type": "fixed_pct", "percent": 17.13},
+                take_profit_short={"type": "fixed_pct", "percent": 13.06},
+            )
+        )
         assert strategy.take_profit_long.percent == 17.13
         assert strategy.take_profit_short.percent == 13.06
 
     def test_per_direction_atr_validates_indicator(self) -> None:
         """Per-direction ATR SL must reference existing indicator."""
         with pytest.raises(Exception):
-            StrategyDSL(**_base_dsl(
-                stop_loss_long={"type": "atr_fixed", "atr_multiplier": 1.5, "indicator": "nonexistent"},
-            ))
+            StrategyDSL(
+                **_base_dsl(
+                    stop_loss_long={
+                        "type": "atr_fixed",
+                        "atr_multiplier": 1.5,
+                        "indicator": "nonexistent",
+                    },
+                )
+            )
 
     def test_per_direction_atr_valid_indicator(self) -> None:
-        strategy = StrategyDSL(**_base_dsl(
-            indicators={"rsi": {"type": "RSI"}, "atr_main": {"type": "ATR"}},
-            stop_loss_long={"type": "atr_fixed", "atr_multiplier": 1.5, "indicator": "atr_main"},
-        ))
+        strategy = StrategyDSL(
+            **_base_dsl(
+                indicators={"rsi": {"type": "RSI"}, "atr_main": {"type": "ATR"}},
+                stop_loss_long={
+                    "type": "atr_fixed",
+                    "atr_multiplier": 1.5,
+                    "indicator": "atr_main",
+                },
+            )
+        )
         assert strategy.stop_loss_long.atr_multiplier == 1.5
 
     def test_only_long_override(self) -> None:
         """Can override just one direction."""
-        strategy = StrategyDSL(**_base_dsl(
-            stop_loss_long={"type": "fixed_pct", "percent": 1.0},
-        ))
+        strategy = StrategyDSL(
+            **_base_dsl(
+                stop_loss_long={"type": "fixed_pct", "percent": 1.0},
+            )
+        )
         assert strategy.stop_loss_long.percent == 1.0
         assert strategy.stop_loss_short is None
 ```
@@ -278,10 +296,18 @@ Expected: FAIL — fields don't exist on StrategyDSL
 In `vibe_quant/dsl/schema.py`, add 4 optional fields to `StrategyDSL` (after `take_profit` on line 455):
 
 ```python
-    stop_loss_long: StopLossConfig | None = Field(default=None, description="Stop loss override for longs")
-    stop_loss_short: StopLossConfig | None = Field(default=None, description="Stop loss override for shorts")
-    take_profit_long: TakeProfitConfig | None = Field(default=None, description="Take profit override for longs")
-    take_profit_short: TakeProfitConfig | None = Field(default=None, description="Take profit override for shorts")
+stop_loss_long: StopLossConfig | None = Field(
+    default=None, description="Stop loss override for longs"
+)
+stop_loss_short: StopLossConfig | None = Field(
+    default=None, description="Stop loss override for shorts"
+)
+take_profit_long: TakeProfitConfig | None = Field(
+    default=None, description="Take profit override for longs"
+)
+take_profit_short: TakeProfitConfig | None = Field(
+    default=None, description="Take profit override for shorts"
+)
 ```
 
 Add model validators to check ATR indicator references for per-direction configs (after existing `validate_take_profit_indicator`):
@@ -383,35 +409,41 @@ Expected: FAIL
 In `vibe_quant/dsl/compiler.py`, in `_generate_config_class()`, after the existing take profit block (around line 465), add:
 
 ```python
-        # Add per-direction stop loss parameters (if present)
-        for direction in ("long", "short"):
-            sl_cfg = getattr(dsl, f"stop_loss_{direction}", None)
-            if sl_cfg is not None:
-                lines.append("")
-                lines.append(f"    # Stop loss ({direction}) parameters")
-                lines.append(f'    stop_loss_{direction}_type: str = "{sl_cfg.type}"')
-                if sl_cfg.percent is not None:
-                    lines.append(f"    stop_loss_{direction}_percent: float = {sl_cfg.percent}")
-                if sl_cfg.atr_multiplier is not None:
-                    lines.append(f"    stop_loss_{direction}_atr_multiplier: float = {sl_cfg.atr_multiplier}")
-                if sl_cfg.indicator is not None:
-                    lines.append(f'    stop_loss_{direction}_indicator: str = "{sl_cfg.indicator}"')
+# Add per-direction stop loss parameters (if present)
+for direction in ("long", "short"):
+    sl_cfg = getattr(dsl, f"stop_loss_{direction}", None)
+    if sl_cfg is not None:
+        lines.append("")
+        lines.append(f"    # Stop loss ({direction}) parameters")
+        lines.append(f'    stop_loss_{direction}_type: str = "{sl_cfg.type}"')
+        if sl_cfg.percent is not None:
+            lines.append(f"    stop_loss_{direction}_percent: float = {sl_cfg.percent}")
+        if sl_cfg.atr_multiplier is not None:
+            lines.append(
+                f"    stop_loss_{direction}_atr_multiplier: float = {sl_cfg.atr_multiplier}"
+            )
+        if sl_cfg.indicator is not None:
+            lines.append(f'    stop_loss_{direction}_indicator: str = "{sl_cfg.indicator}"')
 
-        # Add per-direction take profit parameters (if present)
-        for direction in ("long", "short"):
-            tp_cfg = getattr(dsl, f"take_profit_{direction}", None)
-            if tp_cfg is not None:
-                lines.append("")
-                lines.append(f"    # Take profit ({direction}) parameters")
-                lines.append(f'    take_profit_{direction}_type: str = "{tp_cfg.type}"')
-                if tp_cfg.percent is not None:
-                    lines.append(f"    take_profit_{direction}_percent: float = {tp_cfg.percent}")
-                if tp_cfg.atr_multiplier is not None:
-                    lines.append(f"    take_profit_{direction}_atr_multiplier: float = {tp_cfg.atr_multiplier}")
-                if tp_cfg.risk_reward_ratio is not None:
-                    lines.append(f"    take_profit_{direction}_risk_reward: float = {tp_cfg.risk_reward_ratio}")
-                if tp_cfg.indicator is not None:
-                    lines.append(f'    take_profit_{direction}_indicator: str = "{tp_cfg.indicator}"')
+# Add per-direction take profit parameters (if present)
+for direction in ("long", "short"):
+    tp_cfg = getattr(dsl, f"take_profit_{direction}", None)
+    if tp_cfg is not None:
+        lines.append("")
+        lines.append(f"    # Take profit ({direction}) parameters")
+        lines.append(f'    take_profit_{direction}_type: str = "{tp_cfg.type}"')
+        if tp_cfg.percent is not None:
+            lines.append(f"    take_profit_{direction}_percent: float = {tp_cfg.percent}")
+        if tp_cfg.atr_multiplier is not None:
+            lines.append(
+                f"    take_profit_{direction}_atr_multiplier: float = {tp_cfg.atr_multiplier}"
+            )
+        if tp_cfg.risk_reward_ratio is not None:
+            lines.append(
+                f"    take_profit_{direction}_risk_reward: float = {tp_cfg.risk_reward_ratio}"
+            )
+        if tp_cfg.indicator is not None:
+            lines.append(f'    take_profit_{direction}_indicator: str = "{tp_cfg.indicator}"')
 ```
 
 **Step 4: Run tests**
@@ -475,96 +507,96 @@ class TestPerDirectionSLTPRuntime:
 Replace the `_calculate_sl_price` method lines (153-172) to check per-direction config first:
 
 ```python
-    "def _calculate_sl_price(self, entry_price: float, is_long: bool) -> float | None:",
-    '    """Calculate stop-loss price based on config type (per-direction aware)."""',
-    "    # Check for per-direction override first",
-    "    dir_suffix = 'long' if is_long else 'short'",
-    "    sl_type = getattr(self.config, f'stop_loss_{dir_suffix}_type', None)",
-    "    if sl_type is None:",
-    "        sl_type = self.config.stop_loss_type",
-    "        prefix = 'stop_loss'",
-    "    else:",
-    "        prefix = f'stop_loss_{dir_suffix}'",
-    '    if sl_type == "fixed_pct":',
-    "        pct = getattr(self.config, f'{prefix}_percent')",
-    "        if is_long:",
-    "            return entry_price * (1 - pct / 100)",
-    "        else:",
-    "            return entry_price * (1 + pct / 100)",
-    '    elif sl_type in ("atr_fixed", "atr_trailing"):',
-    "        sl_ind = getattr(self.config, f'{prefix}_indicator', None)",
-    "        if sl_ind is None:",
-    "            return None",
-    "        atr_value = self._get_indicator_value(sl_ind)",
-    "        multiplier = getattr(self.config, f'{prefix}_atr_multiplier')",
-    "        if is_long:",
-    "            return entry_price - atr_value * multiplier",
-    "        else:",
-    "            return entry_price + atr_value * multiplier",
-    "    return None",
+("def _calculate_sl_price(self, entry_price: float, is_long: bool) -> float | None:",)
+('    """Calculate stop-loss price based on config type (per-direction aware)."""',)
+("    # Check for per-direction override first",)
+("    dir_suffix = 'long' if is_long else 'short'",)
+("    sl_type = getattr(self.config, f'stop_loss_{dir_suffix}_type', None)",)
+("    if sl_type is None:",)
+("        sl_type = self.config.stop_loss_type",)
+("        prefix = 'stop_loss'",)
+("    else:",)
+("        prefix = f'stop_loss_{dir_suffix}'",)
+('    if sl_type == "fixed_pct":',)
+("        pct = getattr(self.config, f'{prefix}_percent')",)
+("        if is_long:",)
+("            return entry_price * (1 - pct / 100)",)
+("        else:",)
+("            return entry_price * (1 + pct / 100)",)
+('    elif sl_type in ("atr_fixed", "atr_trailing"):',)
+("        sl_ind = getattr(self.config, f'{prefix}_indicator', None)",)
+("        if sl_ind is None:",)
+("            return None",)
+("        atr_value = self._get_indicator_value(sl_ind)",)
+("        multiplier = getattr(self.config, f'{prefix}_atr_multiplier')",)
+("        if is_long:",)
+("            return entry_price - atr_value * multiplier",)
+("        else:",)
+("            return entry_price + atr_value * multiplier",)
+("    return None",)
 ```
 
 Similarly replace `_calculate_tp_price` (lines 221-249):
 
 ```python
-    "def _calculate_tp_price(self, entry_price: float, is_long: bool) -> float | None:",
-    '    """Calculate take-profit price based on config type (per-direction aware)."""',
-    "    dir_suffix = 'long' if is_long else 'short'",
-    "    tp_type = getattr(self.config, f'take_profit_{dir_suffix}_type', None)",
-    "    if tp_type is None:",
-    "        tp_type = self.config.take_profit_type",
-    "        prefix = 'take_profit'",
-    "    else:",
-    "        prefix = f'take_profit_{dir_suffix}'",
-    '    if tp_type == "fixed_pct":',
-    "        pct = getattr(self.config, f'{prefix}_percent')",
-    "        if is_long:",
-    "            return entry_price * (1 + pct / 100)",
-    "        else:",
-    "            return entry_price * (1 - pct / 100)",
-    '    elif tp_type == "atr_fixed":',
-    "        tp_ind = getattr(self.config, f'{prefix}_indicator', None)",
-    "        if tp_ind is None:",
-    "            return None",
-    "        atr_value = self._get_indicator_value(tp_ind)",
-    "        multiplier = getattr(self.config, f'{prefix}_atr_multiplier')",
-    "        if is_long:",
-    "            return entry_price + atr_value * multiplier",
-    "        else:",
-    "            return entry_price - atr_value * multiplier",
-    '    elif tp_type == "risk_reward":',
-    "        sl_price = self._calculate_sl_price(entry_price, is_long)",
-    "        if sl_price is not None:",
-    "            sl_distance = abs(entry_price - sl_price)",
-    "            ratio = getattr(self.config, f'{prefix}_risk_reward')",
-    "            if is_long:",
-    "                return entry_price + sl_distance * ratio",
-    "            else:",
-    "                return entry_price - sl_distance * ratio",
-    "    return None",
+("def _calculate_tp_price(self, entry_price: float, is_long: bool) -> float | None:",)
+('    """Calculate take-profit price based on config type (per-direction aware)."""',)
+("    dir_suffix = 'long' if is_long else 'short'",)
+("    tp_type = getattr(self.config, f'take_profit_{dir_suffix}_type', None)",)
+("    if tp_type is None:",)
+("        tp_type = self.config.take_profit_type",)
+("        prefix = 'take_profit'",)
+("    else:",)
+("        prefix = f'take_profit_{dir_suffix}'",)
+('    if tp_type == "fixed_pct":',)
+("        pct = getattr(self.config, f'{prefix}_percent')",)
+("        if is_long:",)
+("            return entry_price * (1 + pct / 100)",)
+("        else:",)
+("            return entry_price * (1 - pct / 100)",)
+('    elif tp_type == "atr_fixed":',)
+("        tp_ind = getattr(self.config, f'{prefix}_indicator', None)",)
+("        if tp_ind is None:",)
+("            return None",)
+("        atr_value = self._get_indicator_value(tp_ind)",)
+("        multiplier = getattr(self.config, f'{prefix}_atr_multiplier')",)
+("        if is_long:",)
+("            return entry_price + atr_value * multiplier",)
+("        else:",)
+("            return entry_price - atr_value * multiplier",)
+('    elif tp_type == "risk_reward":',)
+("        sl_price = self._calculate_sl_price(entry_price, is_long)",)
+("        if sl_price is not None:",)
+("            sl_distance = abs(entry_price - sl_price)",)
+("            ratio = getattr(self.config, f'{prefix}_risk_reward')",)
+("            if is_long:",)
+("                return entry_price + sl_distance * ratio",)
+("            else:",)
+("                return entry_price - sl_distance * ratio",)
+("    return None",)
 ```
 
 Also update `_update_trailing_stop` (lines 174-218) to use per-direction prefix:
 
 ```python
-    "def _update_trailing_stop(self, bar: Bar) -> None:",
-    '    """Update trailing stop loss as price moves favorably."""',
-    "    if not self._position_open:",
-    "        return",
-    "    is_long = self._position_side == OrderSide.BUY",
-    "    dir_suffix = 'long' if is_long else 'short'",
-    "    sl_type = getattr(self.config, f'stop_loss_{dir_suffix}_type', None)",
-    "    if sl_type is None:",
-    "        sl_type = self.config.stop_loss_type",
-    "        prefix = 'stop_loss'",
-    "    else:",
-    "        prefix = f'stop_loss_{dir_suffix}'",
-    '    if sl_type != "atr_trailing":',
-    "        return",
-    "    sl_ind = getattr(self.config, f'{prefix}_indicator', None)",
-    "    if sl_ind is None:",
-    "        return",
-    ...  # rest of trailing logic unchanged, just uses `prefix` for atr_multiplier
+("def _update_trailing_stop(self, bar: Bar) -> None:",)
+('    """Update trailing stop loss as price moves favorably."""',)
+("    if not self._position_open:",)
+("        return",)
+("    is_long = self._position_side == OrderSide.BUY",)
+("    dir_suffix = 'long' if is_long else 'short'",)
+("    sl_type = getattr(self.config, f'stop_loss_{dir_suffix}_type', None)",)
+("    if sl_type is None:",)
+("        sl_type = self.config.stop_loss_type",)
+("        prefix = 'stop_loss'",)
+("    else:",)
+("        prefix = f'stop_loss_{dir_suffix}'",)
+('    if sl_type != "atr_trailing":',)
+("        return",)
+("    sl_ind = getattr(self.config, f'{prefix}_indicator', None)",)
+("    if sl_ind is None:",)
+("        return",)
+...  # rest of trailing logic unchanged, just uses `prefix` for atr_multiplier
 ```
 
 **Step 3: Run tests**
@@ -738,12 +770,16 @@ Update `clone()` to copy them.
 After existing SL/TP crossover, add:
 
 ```python
-    # Per-direction SL/TP: random pick per child
-    sl_long_a = parent_a.stop_loss_long_pct if random.random() < 0.5 else parent_b.stop_loss_long_pct
-    sl_short_a = parent_a.stop_loss_short_pct if random.random() < 0.5 else parent_b.stop_loss_short_pct
-    tp_long_a = parent_a.take_profit_long_pct if random.random() < 0.5 else parent_b.take_profit_long_pct
-    tp_short_a = parent_a.take_profit_short_pct if random.random() < 0.5 else parent_b.take_profit_short_pct
-    # ... same for child_b
+# Per-direction SL/TP: random pick per child
+sl_long_a = parent_a.stop_loss_long_pct if random.random() < 0.5 else parent_b.stop_loss_long_pct
+sl_short_a = parent_a.stop_loss_short_pct if random.random() < 0.5 else parent_b.stop_loss_short_pct
+tp_long_a = (
+    parent_a.take_profit_long_pct if random.random() < 0.5 else parent_b.take_profit_long_pct
+)
+tp_short_a = (
+    parent_a.take_profit_short_pct if random.random() < 0.5 else parent_b.take_profit_short_pct
+)
+# ... same for child_b
 ```
 
 Pass these into child construction.
@@ -753,15 +789,17 @@ Pass these into child construction.
 After existing SL/TP mutation, add:
 
 ```python
-    # Mutate per-direction SL/TP
-    if chrom.stop_loss_long_pct is not None and random.random() < mutation_rate * 0.5:
-        chrom.stop_loss_long_pct = _perturb(chrom.stop_loss_long_pct, 0.2, SL_RANGE[0], SL_RANGE[1])
-    if chrom.stop_loss_short_pct is not None and random.random() < mutation_rate * 0.5:
-        chrom.stop_loss_short_pct = _perturb(chrom.stop_loss_short_pct, 0.2, SL_RANGE[0], SL_RANGE[1])
-    if chrom.take_profit_long_pct is not None and random.random() < mutation_rate * 0.5:
-        chrom.take_profit_long_pct = _perturb(chrom.take_profit_long_pct, 0.2, TP_RANGE[0], TP_RANGE[1])
-    if chrom.take_profit_short_pct is not None and random.random() < mutation_rate * 0.5:
-        chrom.take_profit_short_pct = _perturb(chrom.take_profit_short_pct, 0.2, TP_RANGE[0], TP_RANGE[1])
+# Mutate per-direction SL/TP
+if chrom.stop_loss_long_pct is not None and random.random() < mutation_rate * 0.5:
+    chrom.stop_loss_long_pct = _perturb(chrom.stop_loss_long_pct, 0.2, SL_RANGE[0], SL_RANGE[1])
+if chrom.stop_loss_short_pct is not None and random.random() < mutation_rate * 0.5:
+    chrom.stop_loss_short_pct = _perturb(chrom.stop_loss_short_pct, 0.2, SL_RANGE[0], SL_RANGE[1])
+if chrom.take_profit_long_pct is not None and random.random() < mutation_rate * 0.5:
+    chrom.take_profit_long_pct = _perturb(chrom.take_profit_long_pct, 0.2, TP_RANGE[0], TP_RANGE[1])
+if chrom.take_profit_short_pct is not None and random.random() < mutation_rate * 0.5:
+    chrom.take_profit_short_pct = _perturb(
+        chrom.take_profit_short_pct, 0.2, TP_RANGE[0], TP_RANGE[1]
+    )
 ```
 
 **operators.py — `_random_chromosome` (lines 580-601):**
@@ -814,16 +852,25 @@ Add per-direction range checks:
 After building base SL/TP dict, add per-direction:
 
 ```python
-    # Per-direction SL/TP overrides (only for BOTH direction)
-    if direction == Direction.BOTH:
-        if chrom.stop_loss_long_pct is not None:
-            dsl["stop_loss_long"] = {"type": "fixed_pct", "percent": round(chrom.stop_loss_long_pct, 2)}
-        if chrom.stop_loss_short_pct is not None:
-            dsl["stop_loss_short"] = {"type": "fixed_pct", "percent": round(chrom.stop_loss_short_pct, 2)}
-        if chrom.take_profit_long_pct is not None:
-            dsl["take_profit_long"] = {"type": "fixed_pct", "percent": round(chrom.take_profit_long_pct, 2)}
-        if chrom.take_profit_short_pct is not None:
-            dsl["take_profit_short"] = {"type": "fixed_pct", "percent": round(chrom.take_profit_short_pct, 2)}
+# Per-direction SL/TP overrides (only for BOTH direction)
+if direction == Direction.BOTH:
+    if chrom.stop_loss_long_pct is not None:
+        dsl["stop_loss_long"] = {"type": "fixed_pct", "percent": round(chrom.stop_loss_long_pct, 2)}
+    if chrom.stop_loss_short_pct is not None:
+        dsl["stop_loss_short"] = {
+            "type": "fixed_pct",
+            "percent": round(chrom.stop_loss_short_pct, 2),
+        }
+    if chrom.take_profit_long_pct is not None:
+        dsl["take_profit_long"] = {
+            "type": "fixed_pct",
+            "percent": round(chrom.take_profit_long_pct, 2),
+        }
+    if chrom.take_profit_short_pct is not None:
+        dsl["take_profit_short"] = {
+            "type": "fixed_pct",
+            "percent": round(chrom.take_profit_short_pct, 2),
+        }
 ```
 
 **Step 4: Run all tests**

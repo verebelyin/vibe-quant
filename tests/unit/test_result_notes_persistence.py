@@ -103,9 +103,7 @@ def _mock_result(run_id: int, strategy_name: str) -> ValidationResult:
 
 def _strategy_and_run(db_path: Path) -> int:
     state = StateManager(db_path)
-    strategy_id = state.create_strategy(
-        name="test_strategy", dsl_config=DSL, description="Test"
-    )
+    strategy_id = state.create_strategy(name="test_strategy", dsl_config=DSL, description="Test")
     run_id = state.create_backtest_run(
         strategy_id=strategy_id,
         run_mode="validation",
@@ -137,9 +135,7 @@ def no_catalog_clamp(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class TestPersistedNotesBytes:
-    def test_screening_compiler_version_keeps_the_stored_notes_bytes(
-        self, tmp_path: Path
-    ) -> None:
+    def test_screening_compiler_version_keeps_the_stored_notes_bytes(self, tmp_path: Path) -> None:
         """``_store_compiler_version`` rewrites the notes JSON byte for byte as before."""
         db_path = tmp_path / "screening.db"
         state = StateManager(db_path)
@@ -220,7 +216,9 @@ def _discovery_row(state: StateManager, notes: str | None) -> int:
     return run_id
 
 
-def _reference_with_bad_newest_row(tmp_path: Path, bad_notes: str | None) -> ScreeningReference | None:
+def _reference_with_bad_newest_row(
+    tmp_path: Path, bad_notes: str | None
+) -> ScreeningReference | None:
     """A DB whose newest discovery row is ``bad_notes`` and whose older row is a match."""
     state = StateManager(tmp_path / "consistency.db")
     state.create_strategy("genome_abc123", {"name": "genome_abc123"})

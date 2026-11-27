@@ -83,13 +83,18 @@ def test_once_pass_prints_stall_and_posts_to_bus(
     proc = sleeper()
     log = _staged_worker(job, proc.pid, tmp_path)
     out = _run_watch(job, "--once")
-    assert re.search(rf"STALL w1 pid={proc.pid} log_idle=\d+m edit_idle=(?:\d+m|unknown)", out.stdout)
+    assert re.search(
+        rf"STALL w1 pid={proc.pid} log_idle=\d+m edit_idle=(?:\d+m|unknown)", out.stdout
+    )
     assert "KILLED" not in out.stdout
     assert proc.poll() is None
     msgs = [json.loads(line) for line in (job / "bus" / "messages.jsonl").read_text().splitlines()]
     assert any(
-        m.get("to") == "board" and m.get("topic") == "blockers" and m.get("kind") == "blocker"
-        and "w1" in str(m.get("body")) for m in msgs
+        m.get("to") == "board"
+        and m.get("topic") == "blockers"
+        and m.get("kind") == "blocker"
+        and "w1" in str(m.get("body"))
+        for m in msgs
     )
     assert any(m.get("to") == "chief" and m.get("kind") == "blocker" for m in msgs)
     assert log.exists()
@@ -134,8 +139,11 @@ def _isolated_kill(tmp_path: Path, mode: str) -> subprocess.CompletedProcess[str
     job.mkdir()
     proc = subprocess.Popen(
         [sys.executable, "-c", _HARNESS, str(_WATCH_PATH), str(job), str(tmp_path), mode],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        start_new_session=True, env={**os.environ, "SWARM_BOARD": str(job / "board")},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+        env={**os.environ, "SWARM_BOARD": str(job / "board")},
     )
     try:
         out, err = proc.communicate(timeout=90)
@@ -148,7 +156,11 @@ def _isolated_kill(tmp_path: Path, mode: str) -> subprocess.CompletedProcess[str
 
 def test_kill_same_group_worker_spares_supervisor_group(tmp_path: Path) -> None:
     res = _isolated_kill(tmp_path, "inproc")
-    assert res.returncode == 0 and "HARNESS-OK" in res.stdout, (res.returncode, res.stdout, res.stderr)
+    assert res.returncode == 0 and "HARNESS-OK" in res.stdout, (
+        res.returncode,
+        res.stdout,
+        res.stderr,
+    )
 
 
 def test_signal_refuses_pid_one_and_below(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -162,12 +174,16 @@ def test_signal_refuses_pid_one_and_below(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_kill_rechecks_pstart_before_signalling(
-    tmp_path: Path, sleeper: Callable[[], subprocess.Popen[bytes]], capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    sleeper: Callable[[], subprocess.Popen[bytes]],
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     job = tmp_path / "job"
     job.mkdir()
     proc = sleeper()  # own session: a regression can only hit this throwaway process
-    worker = sw.Worker("w1", proc.pid, tmp_path / "w.log", tmp_path, time.time(), pstart="Thu Jan  1 00:00:00 1970")
+    worker = sw.Worker(
+        "w1", proc.pid, tmp_path / "w.log", tmp_path, time.time(), pstart="Thu Jan  1 00:00:00 1970"
+    )
     sw._kill_worker(job, worker, "body")
     out = capsys.readouterr().out
     assert "KILL-FAILED w1" in out and "KILLED w1" not in out
@@ -191,7 +207,9 @@ def test_unverifiable_start_time_never_kills_or_counts_live(
     assert "KILL-FAILED w1 start time unverifiable" in out and "KILLED" not in out
     assert "WARN" in out
     assert calls == [] and not (job / "workers.jsonl").exists()
-    monkeypatch.setattr(sw, "proc_start", lambda pid: "Mon Jan  1 00:00:00 2026")  # recorded "" only
+    monkeypatch.setattr(
+        sw, "proc_start", lambda pid: "Mon Jan  1 00:00:00 2026"
+    )  # recorded "" only
     sw._kill_worker(job, worker, "body")
     assert "KILL-FAILED w1 start time unverifiable" in capsys.readouterr().out
     assert calls == []

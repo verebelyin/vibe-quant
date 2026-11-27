@@ -50,9 +50,7 @@ def test_take_consumes_the_pending_halt_once() -> None:
     assert halt.take() is None
 
 
-@pytest.mark.parametrize(
-    "state", [GuardState.RUNNING, GuardState.PAUSED], ids=lambda s: s.value
-)
+@pytest.mark.parametrize("state", [GuardState.RUNNING, GuardState.PAUSED], ids=lambda s: s.value)
 def test_prestart_resume_refuses_while_the_kill_switch_is_engaged(state: GuardState) -> None:
     """P7: the record checks the kill switch before "already running"/"from pause".
 

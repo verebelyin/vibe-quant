@@ -132,8 +132,9 @@ def replay_pta_series(
         if first >= stop:
             continue
         for name in names:
-            held[name] = _hold(segment[name][first - start : stop - start], held[name],
-                               output[name][first:stop])
+            held[name] = _hold(
+                segment[name][first - start : stop - start], held[name], output[name][first:stop]
+            )
 
     return output
 
@@ -151,9 +152,7 @@ def _hold(values: np.ndarray, held: float, out: np.ndarray) -> float:
     return float(out[-1])
 
 
-def _segment_arrays(
-    result: object, names: tuple[str, ...], n_rows: int
-) -> dict[str, np.ndarray]:
+def _segment_arrays(result: object, names: tuple[str, ...], n_rows: int) -> dict[str, np.ndarray]:
     """Float64 per-output arrays for one compute call (malformed output → NaN)."""
     missing = np.full(n_rows, np.nan, dtype=np.float64)
     arrays: dict[str, np.ndarray] = dict.fromkeys(names, missing)
@@ -363,8 +362,12 @@ def install_origin(
     )
     buf = PtaBuffer(0, with_close_ns=old.with_close_ns)
     buf.extend(
-        cols["open"][:k], cols["high"][:k], cols["low"][:k], cols["close"][:k],
-        cols["volume"][:k], close_ns=close_ns,
+        cols["open"][:k],
+        cols["high"][:k],
+        cols["low"][:k],
+        cols["close"][:k],
+        cols["volume"][:k],
+        close_ns=close_ns,
     )
     strategy._pta_buffer_cap[tf] = 0
     strategy._pta_bufs[tf] = buf
@@ -477,9 +480,7 @@ def _seed_held_values(strategy: Any, tf: str, replay: OriginReplay, k: int) -> N
         if ind_tf == tf and spec is not None and not spec.needs_context:
             meta[name] = (kind, ind_tf)
     params = {name: strategy._pta_params[name] for name in meta}
-    columns = strategy_pta_columns(
-        params, meta, {tf: 0}, tf, replay.frame, replay=replay.replay
-    )
+    columns = strategy_pta_columns(params, meta, {tf: 0}, tf, replay.frame, replay=replay.replay)
     values: dict[str, float] = strategy._pta_values
     for key, column in columns:
         value = float(column[k - 1])
@@ -510,7 +511,12 @@ class PtaPrecomputed:
     def feed(self, values: dict[str, float], ts_init: int, close: float) -> bool:
         """Write this bar's values into ``values``; False means the live path owns the bar."""
         i = self.fed
-        if self.failed_at is not None or i >= self.n or self.ts[i] != ts_init or self.close[i] != close:
+        if (
+            self.failed_at is not None
+            or i >= self.n
+            or self.ts[i] != ts_init
+            or self.close[i] != close
+        ):
             if self.failed_at is None:
                 self.failed_at = i
             return False

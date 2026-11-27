@@ -89,12 +89,17 @@ def window_metrics(row: Row, start: str, end: str, fee: float) -> dict[str, Any]
     entered = [p for p in row["positions"] if a_ns <= p["ts_open"] < b_ns]
     pnl = [
         oa.trade_multiplier(p["side"], p["px_open"], p["px_close"], fee) - 1.0
-        for p in entered if p["px_close"] is not None
+        for p in entered
+        if p["px_close"] is not None
     ]
     return {
-        "window": f"{start}..{end}", "days": len(vals), "ret": oa.compound(vals),
-        "trades": len(entered), "sharpe": oa.annual_sharpe(vals) if len(vals) > 2 else 0.0,
-        "pf": profit_factor(pnl), "dd": oa.max_drawdown(vals),
+        "window": f"{start}..{end}",
+        "days": len(vals),
+        "ret": oa.compound(vals),
+        "trades": len(entered),
+        "sharpe": oa.annual_sharpe(vals) if len(vals) > 2 else 0.0,
+        "pf": profit_factor(pnl),
+        "dd": oa.max_drawdown(vals),
     }
 
 
@@ -103,7 +108,9 @@ def search_ok(m: Row) -> bool:
 
 
 def unseen_ok(m: Row) -> bool:
-    return bool(m["ret"] > 0 and m["trades"] >= MIN_TRADES and m["pf"] >= MIN_PF and m["dd"] <= MAX_DD)
+    return bool(
+        m["ret"] > 0 and m["trades"] >= MIN_TRADES and m["pf"] >= MIN_PF and m["dd"] <= MAX_DD
+    )
 
 
 def _finite(v: float) -> float:
@@ -113,30 +120,55 @@ def _finite(v: float) -> float:
 # --------------------------------------------------------------------------- collect
 
 
-def _r2_tasks(grid: Sequence[Row]) -> tuple[dict[tuple[str, str, str, str], Row], list[dict[str, Any]]]:
+def _r2_tasks(
+    grid: Sequence[Row],
+) -> tuple[dict[tuple[str, str, str, str], Row], list[dict[str, Any]]]:
     """Search rows by (port, preset, tf, coin) and the test windows worth re-running."""
-    runs = {(r["port"], r["preset"], r["tf"], r["coin"], r["window"]): r for r in grid if r["kind"] == "run"}
+    runs = {
+        (r["port"], r["preset"], r["tf"], r["coin"], r["window"]): r
+        for r in grid
+        if r["kind"] == "run"
+    }
     search = {k[:4]: r for k, r in runs.items() if k[4] == "search"}
-    presets = {p.name: {e["name"]: e["values"] for e in preset_grid.load_presets(p)}
-               for p in preset_grid.port_dirs("all")}
+    presets = {
+        p.name: {e["name"]: e["values"] for e in preset_grid.load_presets(p)}
+        for p in preset_grid.port_dirs("all")
+    }
     tasks = []
     for (port, preset, tf, coin, window), r in runs.items():
         if window != "test" or r["error"]:
             continue
-        if not (r["ret"] > 0 and r["trades"] >= PRE_MIN_TRADES and (r["dd"] if r["dd"] is not None else 1) <= PRE_MAX_DD):
+        if not (
+            r["ret"] > 0
+            and r["trades"] >= PRE_MIN_TRADES
+            and (r["dd"] if r["dd"] is not None else 1) <= PRE_MAX_DD
+        ):
             continue
         vals = presets[port][preset]
-        tasks.append({
-            "key": f"rerun|{port}|{preset}|{tf}|{coin}", "sid": oa.setting_id(port, tf, vals),
-            "port": port, "tf": tf, "values": vals, "coin": coin,
-            "start": r["start"], "end": r["end"], "preset": preset, "ledger_ret": r["ret"],
-        })
+        tasks.append(
+            {
+                "key": f"rerun|{port}|{preset}|{tf}|{coin}",
+                "sid": oa.setting_id(port, tf, vals),
+                "port": port,
+                "tf": tf,
+                "values": vals,
+                "coin": coin,
+                "start": r["start"],
+                "end": r["end"],
+                "preset": preset,
+                "ledger_ret": r["ret"],
+            }
+        )
     return search, tasks
 
 
 def _fwd(fwd: Mapping[str, Any], sid: str, coin: str) -> dict[str, Any] | None:
     c = fwd.get(sid, {}).get(coin)
-    return None if c is None or "ret" not in c else {k: c[k] for k in ("window", "ret", "trades", "dd", "carried")}
+    return (
+        None
+        if c is None or "ret" not in c
+        else {k: c[k] for k in ("window", "ret", "trades", "dd", "carried")}
+    )
 
 
 def cmd_collect(args: argparse.Namespace) -> int:
@@ -146,7 +178,10 @@ def cmd_collect(args: argparse.Namespace) -> int:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     fee = float(FeeSchedule().taker_rate)
-    fwd = {t["sid"]: t["per_coin"] for t in json.loads((SWARM / "oos-analysis-fwd" / "forward.json").read_text())}
+    fwd = {
+        t["sid"]: t["per_coin"]
+        for t in json.loads((SWARM / "oos-analysis-fwd" / "forward.json").read_text())
+    }
 
     # round 2: 7,520 (preset, tf, coin) searches; re-run the test windows that can pass
     grid = preset_grid.read_rows(SWARM / "presets-grid" / "results.jsonl")
@@ -167,14 +202,28 @@ def cmd_collect(args: argparse.Namespace) -> int:
         s = search[(t["port"], t["preset"], t["tf"], t["coin"])]
         u = window_metrics(r, t["start"], t["end"], fee)
         mismatches += abs(r["ret"] - t["ledger_ret"]) > 1e-9
-        checked.append({
-            "round": 2, "port": t["port"], "tf": t["tf"], "coin": t["coin"], "tag": t["preset"],
-            "sid": t["sid"], "values": t["values"],
-            "search": {"window": f"{s['start']}..{s['end']}", "ret": s["ret"], "trades": s["trades"],
-                       "sharpe": s["sharpe"], "dd": s["dd"], "source": "presets-grid ledger"},
-            "unseen": u | {"engine_ret": r["ret"], "source": "re-run of the presets-grid test window"},
-            "forward": _fwd(fwd, t["sid"], t["coin"]),
-        })
+        checked.append(
+            {
+                "round": 2,
+                "port": t["port"],
+                "tf": t["tf"],
+                "coin": t["coin"],
+                "tag": t["preset"],
+                "sid": t["sid"],
+                "values": t["values"],
+                "search": {
+                    "window": f"{s['start']}..{s['end']}",
+                    "ret": s["ret"],
+                    "trades": s["trades"],
+                    "sharpe": s["sharpe"],
+                    "dd": s["dd"],
+                    "source": "presets-grid ledger",
+                },
+                "unseen": u
+                | {"engine_ret": r["ret"], "source": "re-run of the presets-grid test window"},
+                "forward": _fwd(fwd, t["sid"], t["coin"]),
+            }
+        )
     r2_search_pass = sum(1 for s in search.values() if not s["error"] and search_ok(s))
     r2_runs = sum(1 for s in search.values() if not s["error"])
 
@@ -184,7 +233,10 @@ def cmd_collect(args: argparse.Namespace) -> int:
     uid_of: dict[str, str] = {}
     for cand in json.loads((SWARM / "watchlist.json").read_text())["candidates"]:
         port = Path(cand["port"]).name
-        uid_of.setdefault(oa.setting_id(port, cand["timeframe"], oa._full_values(port, cand["values"])), cand["uid"])
+        uid_of.setdefault(
+            oa.setting_id(port, cand["timeframe"], oa._full_values(port, cand["values"])),
+            cand["uid"],
+        )
     r1_pairs = r1_search_pass = 0
     r1_unseen_pass_given_fail = 0
     for s in uni:
@@ -198,13 +250,20 @@ def cmd_collect(args: argparse.Namespace) -> int:
             r1_pairs += 1
             r1_search_pass += search_ok(sm)
             r1_unseen_pass_given_fail += (not search_ok(sm)) and unseen_ok(um)
-            checked.append({
-                "round": 1, "port": s["port"], "tf": s["tf"], "coin": coin, "tag": uid_of[s["sid"]],
-                "sid": s["sid"], "values": s["values"],
-                "search": sm | {"source": "oos-analysis continuous run, sliced"},
-                "unseen": um | {"source": "oos-analysis continuous run, sliced"},
-                "forward": _fwd(fwd, s["sid"], coin),
-            })
+            checked.append(
+                {
+                    "round": 1,
+                    "port": s["port"],
+                    "tf": s["tf"],
+                    "coin": coin,
+                    "tag": uid_of[s["sid"]],
+                    "sid": s["sid"],
+                    "values": s["values"],
+                    "search": sm | {"source": "oos-analysis continuous run, sliced"},
+                    "unseen": um | {"source": "oos-analysis continuous run, sliced"},
+                    "forward": _fwd(fwd, s["sid"], coin),
+                }
+            )
 
     for c in checked:
         c["keeper"] = search_ok(c["search"]) and unseen_ok(c["unseen"])
@@ -220,7 +279,11 @@ def cmd_collect(args: argparse.Namespace) -> int:
 
     # selection-free baseline: how often the unseen bar clears when the search bar FAILED
     r2_fail = r2_runs - r2_search_pass
-    r2_unseen_given_fail = sum(1 for c in checked if c["round"] == 2 and not search_ok(c["search"]) and unseen_ok(c["unseen"]))
+    r2_unseen_given_fail = sum(
+        1
+        for c in checked
+        if c["round"] == 2 and not search_ok(c["search"]) and unseen_ok(c["unseen"])
+    )
     rate2 = r2_unseen_given_fail / r2_fail if r2_fail else float("nan")
     r1_fail = r1_pairs - r1_search_pass
     rate1 = r1_unseen_pass_given_fail / r1_fail if r1_fail else float("nan")
@@ -245,7 +308,7 @@ isolated, funding on).
 
 ## Counts
 - round 2: {r2_runs:,} (preset, tf, coin) trials; {r2_search_pass:,} pass the search bar; keepers {k2}
-- round 1: 3,280 GA trials -> {sum(1 for s in uni if 'U1' in s['universes'])} distinct settings x 8 coins = {r1_pairs} pairs; {r1_search_pass} pass the search bar; keepers {k1}
+- round 1: 3,280 GA trials -> {sum(1 for s in uni if "U1" in s["universes"])} distinct settings x 8 coins = {r1_pairs} pairs; {r1_search_pass} pass the search bar; keepers {k1}
 - keepers total: {len(keepers)} (N = 3,280 + {r2_runs:,} = {3_280 + r2_runs:,} trials)
 - round-2 re-runs whose engine return differs from the ledger by > 1e-9: {mismatches}
 
@@ -275,10 +338,23 @@ def cmd_render(args: argparse.Namespace) -> int:
     out = Path(args.out)
     (out / "yaml").mkdir(exist_ok=True)
     for k in preset_grid.read_rows(out / "keepers.jsonl"):
-        cmd = [sys.executable, str(HERE / "tv.py"), "render", "--port", str(HERE / k["port"]),
-               "--timeframe", k["tf"], *[a for key, v in sorted(k["values"].items()) for a in ("--set", f"{key}={v}")]]
-        text = subprocess.run(cmd, check=True, capture_output=True, text=True,
-                              env={**os.environ, "PYTHONPATH": str(REPO_ROOT)}).stdout
+        cmd = [
+            sys.executable,
+            str(HERE / "tv.py"),
+            "render",
+            "--port",
+            str(HERE / k["port"]),
+            "--timeframe",
+            k["tf"],
+            *[a for key, v in sorted(k["values"].items()) for a in ("--set", f"{key}={v}")],
+        ]
+        text = subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+        ).stdout
         (out / "yaml" / f"{k['name']}.yaml").write_text(text)
     print(f"rendered {len(list((out / 'yaml').glob('*.yaml')))} YAML files")
     return 0
@@ -289,7 +365,9 @@ def cmd_render(args: argparse.Namespace) -> int:
 
 def _api(base: str, method: str, path: str, body: Mapping[str, Any] | None = None) -> Any:
     req = urllib.request.Request(
-        base + path, method=method, headers={"Content-Type": "application/json"},
+        base + path,
+        method=method,
+        headers={"Content-Type": "application/json"},
         data=None if body is None else json.dumps(body).encode(),
     )
     try:
@@ -307,8 +385,14 @@ def _dsl_name(name: str) -> str:
 
 def _screening_job(task: dict[str, Any]) -> dict[str, Any]:
     r = oa.run_task(task | {"kind": "scr"})
-    return {"name": task["name"], "error": r["error"], "ret": r.get("ret"), "trades": r.get("trades"),
-            "sharpe": r.get("sharpe"), "dd": r.get("dd")}
+    return {
+        "name": task["name"],
+        "error": r["error"],
+        "ret": r.get("ret"),
+        "trades": r.get("trades"),
+        "sharpe": r.get("sharpe"),
+        "dd": r.get("dd"),
+    }
 
 
 def cmd_persist(args: argparse.Namespace) -> int:
@@ -325,10 +409,16 @@ def cmd_persist(args: argparse.Namespace) -> int:
     spans = oa.coin_spans(sorted({k["coin"] for k in chosen}))
     log = out / "db_runs.jsonl"
     done = {r["name"]: r for r in preset_grid.read_rows(log)}
-    registered = {s["name"]: s["id"] for s in _api(args.api, "GET", "/api/strategies")["strategies"]}
+    registered = {
+        s["name"]: s["id"] for s in _api(args.api, "GET", "/api/strategies")["strategies"]
+    }
     pending: dict[int, dict[str, Any]] = {}
-    queue = [k for k in chosen if k["name"] not in done or done[k["name"]].get("status") != "completed"]
-    queue.sort(key=lambda k: k["name"] not in registered)  # adopt in-flight runs before launching new ones
+    queue = [
+        k for k in chosen if k["name"] not in done or done[k["name"]].get("status") != "completed"
+    ]
+    queue.sort(
+        key=lambda k: k["name"] not in registered
+    )  # adopt in-flight runs before launching new ones
     print(f"{len(chosen)} keepers to persist, {len(queue)} not yet completed", flush=True)
 
     def launch(k: Row) -> None:
@@ -337,17 +427,49 @@ def cmd_persist(args: argparse.Namespace) -> int:
         dsl["name"] = _dsl_name(k["name"])
         existing = registered.get(k["name"])
         if existing is None:
-            existing = _api(args.api, "POST", "/api/strategies", {
-                "name": k["name"], "dsl_config": dsl, "description": NOTE})["id"]
+            existing = _api(
+                args.api,
+                "POST",
+                "/api/strategies",
+                {"name": k["name"], "dsl_config": dsl, "description": NOTE},
+            )["id"]
         # resume: adopt this window's validation run if an earlier pass launched it
-        prior = [r for r in _api(args.api, "GET", f"/api/results/runs?strategy_id={existing}")["runs"]
-                 if r["run_mode"] == "validation" and r["start_date"] == start and r["end_date"] == end
-                 and r["status"] in ("pending", "running", "completed")]
-        run = prior[0] if prior else _api(args.api, "POST", "/api/backtest/validation", {
-            "strategy_id": existing, "symbols": [k["coin"]], "timeframe": k["tf"],
-            "start_date": start, "end_date": end, "parameters": dict(SIZING), "liquidation_mode": "isolated"})
-        pending[run["id"]] = {"name": k["name"], "strategy_id": existing, "run_id": run["id"],
-                              "coin": k["coin"], "tf": k["tf"], "start": start, "end": end, "keeper": k}
+        prior = [
+            r
+            for r in _api(args.api, "GET", f"/api/results/runs?strategy_id={existing}")["runs"]
+            if r["run_mode"] == "validation"
+            and r["start_date"] == start
+            and r["end_date"] == end
+            and r["status"] in ("pending", "running", "completed")
+        ]
+        run = (
+            prior[0]
+            if prior
+            else _api(
+                args.api,
+                "POST",
+                "/api/backtest/validation",
+                {
+                    "strategy_id": existing,
+                    "symbols": [k["coin"]],
+                    "timeframe": k["tf"],
+                    "start_date": start,
+                    "end_date": end,
+                    "parameters": dict(SIZING),
+                    "liquidation_mode": "isolated",
+                },
+            )
+        )
+        pending[run["id"]] = {
+            "name": k["name"],
+            "strategy_id": existing,
+            "run_id": run["id"],
+            "coin": k["coin"],
+            "tf": k["tf"],
+            "start": start,
+            "end": end,
+            "keeper": k,
+        }
         print(f"{'adopted' if prior else 'launched'} run {run['id']} {k['name']}", flush=True)
 
     def finish(rec: dict[str, Any], meta: Row) -> None:
@@ -356,12 +478,32 @@ def cmd_persist(args: argparse.Namespace) -> int:
         if meta["status"] == "completed":
             _api(args.api, "PUT", f"/api/results/runs/{rec['run_id']}/notes", {"notes": NOTE})
             res = _api(args.api, "GET", f"/api/results/runs/{rec['run_id']}")
-            row["validation"] = {f: res.get(f) for f in (
-                "total_return", "sharpe_ratio", "max_drawdown", "total_trades", "profit_factor",
-                "total_fees", "total_funding", "total_slippage")}
-            scr = _screening_job({"key": k["name"], "sid": k["sid"], "port": k["port"], "tf": k["tf"],
-                                  "values": k["values"], "coin": k["coin"], "start": rec["start"],
-                                  "end": rec["end"], "name": k["name"]})
+            row["validation"] = {
+                f: res.get(f)
+                for f in (
+                    "total_return",
+                    "sharpe_ratio",
+                    "max_drawdown",
+                    "total_trades",
+                    "profit_factor",
+                    "total_fees",
+                    "total_funding",
+                    "total_slippage",
+                )
+            }
+            scr = _screening_job(
+                {
+                    "key": k["name"],
+                    "sid": k["sid"],
+                    "port": k["port"],
+                    "tf": k["tf"],
+                    "values": k["values"],
+                    "coin": k["coin"],
+                    "start": rec["start"],
+                    "end": rec["end"],
+                    "name": k["name"],
+                }
+            )
             row["screening"] = scr
         preset_grid._append(log, row)
         print(f"run {rec['run_id']} {meta['status']} {k['name']}", flush=True)
@@ -371,7 +513,9 @@ def cmd_persist(args: argparse.Namespace) -> int:
             try:
                 launch(queue.pop(0))
             except RuntimeError as exc:
-                preset_grid._append(log, {"name": "?", "status": "launch_error", "error_message": str(exc)})
+                preset_grid._append(
+                    log, {"name": "?", "status": "launch_error", "error_message": str(exc)}
+                )
                 print(f"launch error: {exc}", flush=True)
         time.sleep(5)
         for rid in list(pending):
@@ -409,22 +553,33 @@ def cmd_summary(args: argparse.Namespace) -> int:
             latest[r["name"]] = r
     keep = {k["name"]: k for k in preset_grid.read_rows(out / "keepers.jsonl")}
     lines = [
-        "# Keepers: validation tier vs screening (PRIVATE)", "",
-        "Same coin, same full-history window, all-in 1x isolated. Single-coin keepers, not evidence.", "",
+        "# Keepers: validation tier vs screening (PRIVATE)",
+        "",
+        "Same coin, same full-history window, all-in 1x isolated. Single-coin keepers, not evidence.",
+        "",
         "| keeper | run id | window | unseen ret / Sh / PF / DD | screening ret / tr / Sh / DD | "
         "validation ret / tr / Sh / PF / DD | val - scr return |",
         "|---|---|---|---|---|---|---|",
     ]
     gaps: list[tuple[float, float]] = []
     sharpe_gaps: list[float] = []
-    for name, r in sorted(latest.items(), key=lambda kv: -_finite(keep[kv[0]]["unseen"]["sharpe"]) if kv[0] in keep else 0):
+    for name, r in sorted(
+        latest.items(),
+        key=lambda kv: -_finite(keep[kv[0]]["unseen"]["sharpe"]) if kv[0] in keep else 0,
+    ):
         k = keep.get(name)
         u = k["unseen"] if k else {}
         if r.get("status") != "completed":
-            lines.append(f"| {name} | {r.get('run_id')} | | | | {r.get('status')}: {str(r.get('error_message'))[:80]} | |")
+            lines.append(
+                f"| {name} | {r.get('run_id')} | | | | {r.get('status')}: {str(r.get('error_message'))[:80]} | |"
+            )
             continue
         v, s = r["validation"], r["screening"]
-        gap = (v["total_return"] - s["ret"]) if v["total_return"] is not None and s.get("ret") is not None else None
+        gap = (
+            (v["total_return"] - s["ret"])
+            if v["total_return"] is not None and s.get("ret") is not None
+            else None
+        )
         if gap is not None:
             gaps.append((v["total_return"], s["ret"]))
             if v["sharpe_ratio"] is not None and s.get("sharpe") is not None:
@@ -437,21 +592,31 @@ def cmd_summary(args: argparse.Namespace) -> int:
         )
     if gaps:
         diffs = [a - b for a, b in gaps]
-        lines += ["", f"Validation minus screening total return over {len(gaps)} runs: median {_p(statistics.median(diffs))}, "
-                  f"mean {_p(statistics.fmean(diffs))}; validation > 0 on {sum(a > 0 for a, _ in gaps)}, "
-                  f"screening > 0 on {sum(b > 0 for _, b in gaps)}; validation equity / screening equity "
-                  f"median {statistics.median((1 + a) / (1 + b) for a, b in gaps):.3f}; validation below "
-                  f"screening on {sum(a < b for a, b in gaps)}; Sharpe (val - scr) median "
-                  f"{_n(statistics.median(sharpe_gaps)) if sharpe_gaps else 'n/a'}."]
+        lines += [
+            "",
+            f"Validation minus screening total return over {len(gaps)} runs: median {_p(statistics.median(diffs))}, "
+            f"mean {_p(statistics.fmean(diffs))}; validation > 0 on {sum(a > 0 for a, _ in gaps)}, "
+            f"screening > 0 on {sum(b > 0 for _, b in gaps)}; validation equity / screening equity "
+            f"median {statistics.median((1 + a) / (1 + b) for a, b in gaps):.3f}; validation below "
+            f"screening on {sum(a < b for a, b in gaps)}; Sharpe (val - scr) median "
+            f"{_n(statistics.median(sharpe_gaps)) if sharpe_gaps else 'n/a'}.",
+        ]
     (out / "summary.md").write_text("\n".join(lines) + "\n")
     print("\n".join(lines[-3:]))
     return 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawTextHelpFormatter
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
-    for name, fn in (("collect", cmd_collect), ("render", cmd_render), ("persist", cmd_persist), ("summary", cmd_summary)):
+    for name, fn in (
+        ("collect", cmd_collect),
+        ("render", cmd_render),
+        ("persist", cmd_persist),
+        ("summary", cmd_summary),
+    ):
         p = sub.add_parser(name)
         p.add_argument("--out", required=True)
         p.set_defaults(fn=fn)

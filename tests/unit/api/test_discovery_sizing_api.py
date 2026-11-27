@@ -84,7 +84,9 @@ async def test_forwarding_and_storage(
     """S27: non-default sizing is forwarded as argv AND stored; defaults add neither."""
     ac, state, job_mgr = client
 
-    r, argv = await _launch(ac, job_mgr, {**_OK_BODY, "max_position_pct": 1.0, "risk_per_trade": 0.01})
+    r, argv = await _launch(
+        ac, job_mgr, {**_OK_BODY, "max_position_pct": 1.0, "risk_per_trade": 0.01}
+    )
     assert r.status_code == 201, r.text
     assert argv is not None
     assert argv[argv.index("--max-position-pct") + 1] == "1.0"
@@ -133,9 +135,7 @@ async def test_exposure_above_default_leverage_is_422(
     r = await ac.post("/api/discovery/launch", json={**_OK_BODY, "max_position_pct": 12.0})
     assert r.status_code == 422
     assert "Value error, max_position_pct (12.0) must not exceed leverage (10.0)" in r.text
-    assert (
-        int(state.conn.execute("SELECT COUNT(*) FROM backtest_runs").fetchone()[0]) == before
-    )
+    assert int(state.conn.execute("SELECT COUNT(*) FROM backtest_runs").fetchone()[0]) == before
 
 
 async def test_exposure_at_leverage_is_accepted(
@@ -289,12 +289,13 @@ async def test_atr_sizing_reaches_the_subprocess_spec_and_is_stored(
     r, argv = await _launch(ac, job_mgr, body)
     assert r.status_code == 201, r.text
     assert argv is not None
-    spec = DiscoveryRunSpec.from_argv(argv[argv.index("--run-id") + 2:])
+    spec = DiscoveryRunSpec.from_argv(argv[argv.index("--run-id") + 2 :])
     expected = SizingSettings(risk_per_trade=0.005, sizing_mode="atr", sizing_atr_period=5)
     assert spec.sizing_settings() == expected
     stored = _stored_params(state, r.json()["run_id"])
-    assert {k: stored[k] for k in ("sizing_mode", "sizing_atr_period", "sizing_atr_multiplier")} == {
-        "sizing_mode": "atr", "sizing_atr_period": 5, "sizing_atr_multiplier": 2.0}
+    assert {
+        k: stored[k] for k in ("sizing_mode", "sizing_atr_period", "sizing_atr_multiplier")
+    } == {"sizing_mode": "atr", "sizing_atr_period": 5, "sizing_atr_multiplier": 2.0}
 
 
 @pytest.mark.parametrize(
@@ -307,7 +308,8 @@ async def test_atr_sizing_reaches_the_subprocess_spec_and_is_stored(
 )
 async def test_bad_atr_sizing_is_422_and_launches_nothing(
     client: tuple[AsyncClient, StateManager, BacktestJobManager],
-    extra: dict[str, object], message: str,
+    extra: dict[str, object],
+    message: str,
 ) -> None:
     ac, _state, job_mgr = client
     r, argv = await _launch(ac, job_mgr, {**_OK_BODY, **extra})
@@ -322,8 +324,11 @@ def test_atr_sizing_with_a_bankroll_grid_is_forwarded() -> None:
     from vibe_quant.discovery.run_spec import DiscoveryRunSpec
 
     body = DiscoveryLaunchRequest(
-        symbols=["BTCUSDT"], sizing_mode="atr",
-        bankroll_grid=BankrollGridRequest(modes=["isolated"], leverages=[3.0], max_margin_pcts=[0.5]),
+        symbols=["BTCUSDT"],
+        sizing_mode="atr",
+        bankroll_grid=BankrollGridRequest(
+            modes=["isolated"], leverages=[3.0], max_margin_pcts=[0.5]
+        ),
     )
     argv = DiscoveryRunSpec.from_request(
         body, start_date="2024-01-01", end_date="2024-06-01"

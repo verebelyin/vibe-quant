@@ -67,9 +67,7 @@ def _naive_mention(worktree: Path, needles: set[str]) -> list[str]:
     ]
 
 
-def _naive_dynamic(
-    reached: set[str], worktree: Path, snapshot: Any = None
-) -> list[str]:
+def _naive_dynamic(reached: set[str], worktree: Path, snapshot: Any = None) -> list[str]:
     """The pre-index `dynamic_reference_test_files`, straight from each file's own strings.
 
     `snapshot` is accepted and ignored: the plain scan re-reads the tree it is asked about."""
@@ -116,6 +114,7 @@ class TestCachedSelectionEqualsUncached:
         assert plain.commands == cached.commands
         assert plain.full == cached.full
 
+
 class TestCacheInvalidation:
     """A cache that outlives an edit would gate the pre-edit tree: every one must re-key."""
 
@@ -152,6 +151,7 @@ class TestCacheInvalidation:
 
         (repo / "tests" / "unit" / "test_other.py").write_text("import vibe_quant.foo\n")
         assert _plan(repo, ["vibe_quant/foo.py"]).explicit == {"tests/unit/test_other.py"}
+
 
 # --------------------------------------------------------------------------- git spawns
 
@@ -220,7 +220,7 @@ def _repo(tmp_path: Path) -> Path:
 # The graph walk only has to look at statements: an import is a statement, and no expression
 # holds one. The tree-wide walk of every node of ~770 files was most of a cold graph build.
 
-_EVERY_STATEMENT_POSITION = '''\
+_EVERY_STATEMENT_POSITION = """\
 import vibe_quant.top
 if flag:
     import vibe_quant.if_body
@@ -271,7 +271,7 @@ if TYPE_CHECKING:
     import vibe_quant.type_checking_only
 x = lambda: [1, 2, 3]
 y = "import vibe_quant.in_a_string"
-'''
+"""
 
 
 _REPRESENTATIVE_SOURCES = (

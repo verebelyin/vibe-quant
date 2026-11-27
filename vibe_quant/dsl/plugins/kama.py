@@ -140,11 +140,7 @@ def _kama_port(df: pd.DataFrame, period: int) -> pd.Series:
         return np.array(out, dtype=np.float64), prev
 
     # m <= period: no recurrence step yet, nothing to extend
-    res = (
-        full((sc, c))[0]
-        if m <= period
-        else memo_run(("kama", period), (sc, c), full, _kama_step)
-    )
+    res = full((sc, c))[0] if m <= period else memo_run(("kama", period), (sc, c), full, _kama_step)
     if skipped:
         padded = np.full(full_c.size, np.nan)
         padded[finite] = res

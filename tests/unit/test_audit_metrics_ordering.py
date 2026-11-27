@@ -38,7 +38,9 @@ def _model() -> FillModel:
 def _adaptive() -> bool:
     """Ordering flag exactly as our venue factory configures it."""
     flags = {
-        create_backtest_venue_config(create_venue_config_for_screening()).bar_adaptive_high_low_ordering,
+        create_backtest_venue_config(
+            create_venue_config_for_screening()
+        ).bar_adaptive_high_low_ordering,
         create_backtest_venue_config(
             create_venue_config_for_validation()
         ).bar_adaptive_high_low_ordering,
@@ -87,10 +89,16 @@ def test_long_vs_mirrored_short_symmetric(
 
 def test_unambiguous_bars_unchanged_by_ordering() -> None:
     """Bars that only touch one of SL/TP fill identically under either ordering."""
-    only_tp = [_bar(P0, P0 + 5, P0 - 5, P0, 0), _bar(P0, 10_150.0, 9_950.0, 10_100.0, 1),
-               _bar(P0, P0 + 5, P0 - 5, P0, 2)]
-    only_sl = [_bar(P0, P0 + 5, P0 - 5, P0, 0), _bar(P0, 10_050.0, 9_850.0, 9_900.0, 1),
-               _bar(P0, P0 + 5, P0 - 5, P0, 2)]
+    only_tp = [
+        _bar(P0, P0 + 5, P0 - 5, P0, 0),
+        _bar(P0, 10_150.0, 9_950.0, 10_100.0, 1),
+        _bar(P0, P0 + 5, P0 - 5, P0, 2),
+    ]
+    only_sl = [
+        _bar(P0, P0 + 5, P0 - 5, P0, 0),
+        _bar(P0, 10_050.0, 9_850.0, 9_900.0, 1),
+        _bar(P0, P0 + 5, P0 - 5, P0, 2),
+    ]
     for bars in (only_tp, only_sl):
         fixed = _run(_model(), bars, tp=1.0, sl=1.0, adaptive=False)
         adaptive = _run(_model(), bars, tp=1.0, sl=1.0, adaptive=True)

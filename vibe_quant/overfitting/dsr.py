@@ -316,10 +316,9 @@ class DeflatedSharpeRatio:
         if num_trials <= 1:
             return 0.0
 
-        return (
-            (1.0 - EULER_MASCHERONI) * _NORM.inv_cdf(1.0 - 1.0 / num_trials)
-            + EULER_MASCHERONI * _NORM.inv_cdf(1.0 - _INV_E / num_trials)
-        )
+        return (1.0 - EULER_MASCHERONI) * _NORM.inv_cdf(
+            1.0 - 1.0 / num_trials
+        ) + EULER_MASCHERONI * _NORM.inv_cdf(1.0 - _INV_E / num_trials)
 
     @staticmethod
     def _sharpe_variance(

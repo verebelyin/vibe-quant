@@ -61,7 +61,7 @@ def _config(indicator: dict[str, Any], operand: str) -> dict[str, Any]:
 def _assert_resolves(indicator: dict[str, Any], operand: str) -> dict[str, Any]:
     out = translate_dsl_config(_config(indicator, operand), strategy_name="t_editor_operand")
     assert len(out["indicators"]) == 1
-    (name, cfg), = out["indicators"].items()
+    ((name, cfg),) = out["indicators"].items()
     # The operand became a reference to the one configured indicator (not left as raw text)
     assert out["entry_conditions"]["long"] == [f"close > {name}"], operand
     expected_type = "BBANDS" if indicator["type"] == "BB" else indicator["type"]
@@ -70,7 +70,9 @@ def _assert_resolves(indicator: dict[str, Any], operand: str) -> dict[str, Any]:
 
 
 def _assert_resolves_and_compiles(indicator: dict[str, Any], operand: str) -> None:
-    StrategyCompiler().compile_to_module(validate_strategy_dict(_assert_resolves(indicator, operand)))
+    StrategyCompiler().compile_to_module(
+        validate_strategy_dict(_assert_resolves(indicator, operand))
+    )
 
 
 def test_python_mirror_matches_the_frontend_operand_snapshot() -> None:

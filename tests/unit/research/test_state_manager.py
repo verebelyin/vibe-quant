@@ -152,7 +152,7 @@ def test_list_research_items_filters_by_source_and_status(sm: StateManager) -> N
             title=f"t{i}",
             body=None,
             author=None,
-            posted_at=f"2026-05-0{i+1}",
+            posted_at=f"2026-05-0{i + 1}",
             score=None,
         )
     sm.create_research_item(
@@ -490,9 +490,7 @@ def _seed_legacy_research_items_db(db_path: Path) -> None:
         posted_at=None,
         score=None,
     )
-    sm.conn.execute(
-        "INSERT INTO research_extractions (research_item_id) VALUES (1)"
-    )
+    sm.conn.execute("INSERT INTO research_extractions (research_item_id) VALUES (1)")
     sm.conn.commit()
     sm.close()
     # Then rewrite research_items into the pre-queued (no-CHECK) shape.
@@ -509,9 +507,7 @@ def test_migrate_allow_queued_succeeds_with_fk_referencing_items(tmp_path: Path)
     _ = sm.conn  # triggers init_schema → migration
 
     # CHECK constraint with 'queued' should now be present.
-    sql = sm.conn.execute(
-        "SELECT sql FROM sqlite_master WHERE name='research_items'"
-    ).fetchone()[0]
+    sql = sm.conn.execute("SELECT sql FROM sqlite_master WHERE name='research_items'").fetchone()[0]
     assert "'queued'" in sql
 
     # No orphan rebuild table left behind.
@@ -571,9 +567,7 @@ def test_migrate_allow_queued_cleans_up_orphan_rebuild_table(tmp_path: Path) -> 
         "SELECT name FROM sqlite_master WHERE name='research_items_new'"
     ).fetchone()
     assert orphan is None
-    sql = sm.conn.execute(
-        "SELECT sql FROM sqlite_master WHERE name='research_items'"
-    ).fetchone()[0]
+    sql = sm.conn.execute("SELECT sql FROM sqlite_master WHERE name='research_items'").fetchone()[0]
     assert "'queued'" in sql
     sm.close()
 

@@ -98,9 +98,17 @@ def _make_nt_backtest_fn(
     every pre-existing number byte-identical.
     """
     return NTBacktestFn(
-        symbols, timeframe, start_date, end_date, windows=windows, min_trades=min_trades,
-        symbol_agg=symbol_agg, fee_schedule=fee_schedule, entry_order=entry_order,
-        liquidation=liquidation, sizing=sizing,
+        symbols,
+        timeframe,
+        start_date,
+        end_date,
+        windows=windows,
+        min_trades=min_trades,
+        symbol_agg=symbol_agg,
+        fee_schedule=fee_schedule,
+        entry_order=entry_order,
+        liquidation=liquidation,
+        sizing=sizing,
     )
 
 
@@ -117,8 +125,7 @@ def _log_data_catalog_info(symbols: list[str], timeframe: str) -> None:
         for sym in symbols:
             instrument_id = f"{sym}-PERP.BINANCE"
             found_dirs = [
-                d.name for d in bar_dir.iterdir()
-                if d.is_dir() and instrument_id in d.name
+                d.name for d in bar_dir.iterdir() if d.is_dir() and instrument_id in d.name
             ]
             if found_dirs:
                 # Count parquet files to estimate data volume
@@ -216,9 +223,18 @@ def _make_cell_fns(
         from vibe_quant.fast_tier.backtest_fn import FastBacktestFn
 
         backtest_fn = FastBacktestFn(
-            symbols, timeframe, train_start, train_end, windows=eval_windows,
-            min_trades=min_trades, symbol_agg=symbol_agg, fee_schedule=fee_schedule,
-            entry_order=entry_order, liquidation=liquidation, sizing=sizing, nt_fallback=True,
+            symbols,
+            timeframe,
+            train_start,
+            train_end,
+            windows=eval_windows,
+            min_trades=min_trades,
+            symbol_agg=symbol_agg,
+            fee_schedule=fee_schedule,
+            entry_order=entry_order,
+            liquidation=liquidation,
+            sizing=sizing,
+            nt_fallback=True,
         )
     holdout_backtest_fn = (
         _make_nt_backtest_fn(
@@ -247,8 +263,15 @@ def _make_cell_fns(
 
         def backtest_fn_factory(s: str, e: str) -> NTBacktestFn:
             return NTBacktestFn(
-                _syms, _tf, s, e, symbol_agg=_agg, fee_schedule=_fee,
-                entry_order=_entry, liquidation=_liq, sizing=_sz,
+                _syms,
+                _tf,
+                s,
+                e,
+                symbol_agg=_agg,
+                fee_schedule=_fee,
+                entry_order=_entry,
+                liquidation=_liq,
+                sizing=_sz,
             )
 
     return _CellFns(backtest_fn, holdout_backtest_fn, backtest_fn_factory)
@@ -675,7 +698,11 @@ def run_discovery(
         if split_ratio > 0:
             logger.info(
                 "Train/test split: ratio=%.2f train=%s→%s holdout=%s→%s",
-                split_ratio, train_start, train_end, holdout_start, holdout_end,
+                split_ratio,
+                train_start,
+                train_end,
+                holdout_start,
+                holdout_end,
             )
 
         # Resolve timeframe-aware bootstrap_min_sharpe default.
@@ -683,7 +710,8 @@ def run_discovery(
         if spec.bootstrap_min_sharpe is None:
             logger.info(
                 "Bootstrap min t-stat default: %.1f (timeframe=%s)",
-                bootstrap_min_sharpe, spec.timeframe,
+                bootstrap_min_sharpe,
+                spec.timeframe,
             )
 
         cross_window_months = spec.cross_window_month_list()
@@ -739,7 +767,10 @@ def run_discovery(
         )
         logger.info(
             "Data range: %s to %s | symbols=%s | timeframe=%s",
-            spec.start_date, spec.end_date, symbols, spec.timeframe,
+            spec.start_date,
+            spec.end_date,
+            symbols,
+            spec.timeframe,
         )
         _log_data_catalog_info(symbols, spec.timeframe)
 
@@ -764,12 +795,12 @@ def run_discovery(
                     "--evaluator fast replays 1m single-symbol accounts only: with "
                     "timeframe=%s symbols=%d symbol_agg=%s every genome runs on NT "
                     "(use --symbol-agg worst for multi-symbol)",
-                    spec.timeframe, len(symbols), spec.symbol_agg,
+                    spec.timeframe,
+                    len(symbols),
+                    spec.symbol_agg,
                 )
         if split_ratio <= 0:
-            logger.warning(
-                "No holdout (--train-test-split 0): champions get NO out-of-sample gate"
-            )
+            logger.warning("No holdout (--train-test-split 0): champions get NO out-of-sample gate")
 
         # Train, holdout (when the train/test split is on) and the factory for
         # cross-window and/or WFA validation: one set per bankroll setup.
@@ -824,7 +855,8 @@ def run_discovery(
             if seed_chromosomes:
                 logger.info(
                     "Loaded %d seed chromosomes from run %d",
-                    len(seed_chromosomes), spec.seed_from_run,
+                    len(seed_chromosomes),
+                    spec.seed_from_run,
                 )
             else:
                 # An explicitly requested warm-start that can't be honored is
@@ -984,7 +1016,9 @@ def run_discovery(
             logger.info(
                 "Computing full-range headline for top-%d champions over %s..%s "
                 "(multi-window/split fitness != continuous replay; bd-rewru)",
-                len(result.top_strategies[:5]), spec.start_date, spec.end_date,
+                len(result.top_strategies[:5]),
+                spec.start_date,
+                spec.end_date,
             )
 
         top_dsls = []

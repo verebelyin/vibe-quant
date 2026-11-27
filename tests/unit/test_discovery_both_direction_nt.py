@@ -97,9 +97,7 @@ def _counting_sides(counts: dict[str, int]) -> Iterator[None]:
     """
     original = NTScreeningRunner._extract_metrics
 
-    def _spy(
-        self: Any, params: Any, bt_result: Any, engine: Any, *args: Any, **kwargs: Any
-    ) -> Any:
+    def _spy(self: Any, params: Any, bt_result: Any, engine: Any, *args: Any, **kwargs: Any) -> Any:
         for position in all_positions(engine):
             counts[position_direction(position)] += 1
         return original(self, params, bt_result, engine, *args, **kwargs)
@@ -308,7 +306,9 @@ def test_exported_dsl_replays_from_the_stored_chromosome() -> None:
         # key allowed to differ; every other key must match exactly.
         assert exported["name"] == f"genome_{chrom.uid}"
         assert _dsl_without_name(exported) == _dsl_without_name(rebuilt)
-        differing = {key for key in set(exported) | set(rebuilt) if exported.get(key) != rebuilt.get(key)}
+        differing = {
+            key for key in set(exported) | set(rebuilt) if exported.get(key) != rebuilt.get(key)
+        }
         assert differing == {"name"}, differing
         # teeth: the BOTH genome's own short side survives the replay, not the long one
         assert exported["entry_conditions"]["short"] == rebuilt["entry_conditions"]["short"]  # type: ignore[index]

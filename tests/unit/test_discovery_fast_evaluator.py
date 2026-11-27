@@ -56,10 +56,19 @@ def _scratch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
 def _config(max_workers: int | None = None) -> DiscoveryConfig:
     # top_k 1 < genomes keeping an MTM series: the confirm must cover more than the top-K
     return DiscoveryConfig(
-        population_size=4, max_generations=2, convergence_generations=2, top_k=1,
-        min_trades=5, max_workers=max_workers, symbols=["BTCUSDT"], timeframe="1m",
-        start_date=START, end_date=END, indicator_pool=["CCI", "WILLR", "RSI"],
-        direction="long", eval_windows=1,
+        population_size=4,
+        max_generations=2,
+        convergence_generations=2,
+        top_k=1,
+        min_trades=5,
+        max_workers=max_workers,
+        symbols=["BTCUSDT"],
+        timeframe="1m",
+        start_date=START,
+        end_date=END,
+        indicator_pool=["CCI", "WILLR", "RSI"],
+        direction="long",
+        eval_windows=1,
     )
 
 
@@ -111,7 +120,9 @@ def test_fast_evaluator_ends_with_the_production_nt_outcome() -> None:
         k: _fit(v) for k, v in nt_pipe.fitness_cache.items()
     }
     assert nt.fast_tier_confirm is None
-    series_keys = {k for k, fr in fast_pipe.fitness_cache.items() if fr.mtm_daily_returns is not None}
+    series_keys = {
+        k for k, fr in fast_pipe.fitness_cache.items() if fr.mtm_daily_returns is not None
+    }
     top_keys = {fast_pipe._dsl_key(c) for c, _ in fast.top_strategies}
     assert len(series_keys) > _config().top_k  # DSR effective-N rows beyond the top-K...
     assert fast.fast_tier_confirm is not None
@@ -127,11 +138,23 @@ def _multi_config() -> DiscoveryConfig:
     # axis of the comparison empty. The guardrails that survive (min trades, min return,
     # complexity) still run.
     return DiscoveryConfig(
-        population_size=4, max_generations=1, convergence_generations=1, top_k=2,
-        min_trades=2, max_workers=2, symbols=MULTI_SYMBOLS, timeframe="1m",
-        start_date=MULTI_START, end_date=MULTI_END, indicator_pool=["CCI", "WILLR", "RSI"],
-        direction="long", eval_windows=2, symbol_agg="worst",
-        require_dsr=False, require_buy_hold=False, require_bootstrap_ci=False,
+        population_size=4,
+        max_generations=1,
+        convergence_generations=1,
+        top_k=2,
+        min_trades=2,
+        max_workers=2,
+        symbols=MULTI_SYMBOLS,
+        timeframe="1m",
+        start_date=MULTI_START,
+        end_date=MULTI_END,
+        indicator_pool=["CCI", "WILLR", "RSI"],
+        direction="long",
+        eval_windows=2,
+        symbol_agg="worst",
+        require_dsr=False,
+        require_buy_hold=False,
+        require_bootstrap_ci=False,
         # top-K confirms a champion in every seed; under "all" (the default since 2026-11-23)
         # the confirm count below follows how many of the 4 genomes pass the train gate (it was
         # 1 < 2 on this window). test_gate_pool_all_confirms_every_pool_genome covers "all".
@@ -156,11 +179,21 @@ def _multi_run(evaluator: str, progress_file: Path) -> DiscoveryResult:
     from vibe_quant.sizing_settings import SizingSettings
 
     fns = _make_cell_fns(
-        use_mock=False, symbols=MULTI_SYMBOLS, timeframe="1m", symbol_agg="worst",
-        fee_schedule=FeeSchedule(), entry_order="market",
-        liquidation=LiquidationSettings(), sizing=SizingSettings(),
-        train_start=MULTI_START, train_end=MULTI_END, eval_windows=_multi_windows(),
-        min_trades=2, holdout=None, needs_factory=False, evaluator=evaluator,
+        use_mock=False,
+        symbols=MULTI_SYMBOLS,
+        timeframe="1m",
+        symbol_agg="worst",
+        fee_schedule=FeeSchedule(),
+        entry_order="market",
+        liquidation=LiquidationSettings(),
+        sizing=SizingSettings(),
+        train_start=MULTI_START,
+        train_end=MULTI_END,
+        eval_windows=_multi_windows(),
+        min_trades=2,
+        holdout=None,
+        needs_factory=False,
+        evaluator=evaluator,
     )
     return pooling._run_multi_seed(
         num_seeds=2,
@@ -204,9 +237,7 @@ def test_an_nt_discovery_run_logs_no_indicator_tail_memo(caplog: pytest.LogCaptu
     run must log none of them.
     """
     random.seed(5)
-    pipe = DiscoveryPipeline(
-        _small_config(), NTBacktestFn(["BTCUSDT"], "1m", START, END)
-    )
+    pipe = DiscoveryPipeline(_small_config(), NTBacktestFn(["BTCUSDT"], "1m", START, END))
 
     with caplog.at_level(logging.INFO):
         pipe.run()
@@ -298,8 +329,14 @@ def test_nt_twin_copies_every_setting_and_is_a_plain_nt_fn() -> None:
     from vibe_quant.liquidation_settings import LiquidationSettings
 
     fast = FastBacktestFn(
-        ["BTCUSDT"], "1m", START, END, windows=[(START, "2026-03-03"), ("2026-03-03", END)],
-        min_trades=7, liquidation=LiquidationSettings(mode="isolated", leverage=10), nt_fallback=True,
+        ["BTCUSDT"],
+        "1m",
+        START,
+        END,
+        windows=[(START, "2026-03-03"), ("2026-03-03", END)],
+        min_trades=7,
+        liquidation=LiquidationSettings(mode="isolated", leverage=10),
+        nt_fallback=True,
     )
     fast.collect_daily_returns = True  # what the pipeline sets after construction
     twin = fast.nt_twin()
@@ -318,11 +355,20 @@ def test_cell_fns_put_the_fast_tier_on_the_train_fn_only() -> None:
     from vibe_quant.sizing_settings import SizingSettings
 
     kw: dict[str, Any] = {
-        "use_mock": False, "symbols": ["BTCUSDT"], "timeframe": "1m", "symbol_agg": "worst",
-        "fee_schedule": FeeSchedule(), "entry_order": "market",
-        "liquidation": LiquidationSettings(mode="isolated", leverage=10), "sizing": SizingSettings(),
-        "train_start": START, "train_end": "2026-03-03", "eval_windows": None, "min_trades": 5,
-        "holdout": ("2026-03-03", END), "needs_factory": True,
+        "use_mock": False,
+        "symbols": ["BTCUSDT"],
+        "timeframe": "1m",
+        "symbol_agg": "worst",
+        "fee_schedule": FeeSchedule(),
+        "entry_order": "market",
+        "liquidation": LiquidationSettings(mode="isolated", leverage=10),
+        "sizing": SizingSettings(),
+        "train_start": START,
+        "train_end": "2026-03-03",
+        "eval_windows": None,
+        "min_trades": 5,
+        "holdout": ("2026-03-03", END),
+        "needs_factory": True,
     }
     fast = _make_cell_fns(**kw, evaluator="fast")
     nt = _make_cell_fns(**kw)
@@ -666,7 +712,9 @@ def test_pool_paths_record_worker_fallback_snapshots(
     # Sequential path: the same total without any pool transport.
     fallbacks.clear()
     recorded.clear()
-    fitness.evaluate_population(chroms, generic, None, max_workers=None, min_trades=10, timeframe="1m")
+    fitness.evaluate_population(
+        chroms, generic, None, max_workers=None, min_trades=10, timeframe="1m"
+    )
     assert fallbacks.summary() == {"total": len(chroms), "by_reason": {"time filters": len(chroms)}}
 
     # Split-by-symbol path: one task per chromosome x symbol.

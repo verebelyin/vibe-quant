@@ -36,9 +36,7 @@ def sm(tmp_path: Path) -> Generator[StateManager]:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_log_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> Generator[Path]:
+def _isolate_log_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[Path]:
     root = tmp_path / "research-logs"
     monkeypatch.setattr(extraction_log, "DEFAULT_LOG_ROOT", root)
     yield root
@@ -70,16 +68,14 @@ def _safe_body_for(prompt: str) -> str:
     fn_name = m.group(1) if m else "compute_x"
     return (
         f"def {fn_name}(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:\n"
-        f'    import pandas as pd\n'
+        f"    import pandas as pd\n"
         f'    period = int(params.get("period", 14) or 14)\n'
         f'    return df["close"].rolling(period).mean()\n'
     )
 
 
 @pytest.fixture
-def _stub_codegen(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> Generator[Path]:
+def _stub_codegen(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[Path]:
     """Pin claude-p + mypy + ruff + pytest + git + dirs for hermetic tests.
 
     The slice-3 endpoint flow is:
@@ -111,9 +107,7 @@ def _stub_codegen(
     )
     # reload_plugins() walks the real plugin dir — make it a no-op so
     # the tmp_path scaffolds aren't expected to be importable.
-    monkeypatch.setattr(
-        "vibe_quant.dsl.plugin_loader.reload_plugins", lambda: []
-    )
+    monkeypatch.setattr("vibe_quant.dsl.plugin_loader.reload_plugins", lambda: [])
     yield plugins
 
 
@@ -125,9 +119,7 @@ def client(sm: StateManager) -> Generator[TestClient]:
         yield c
 
 
-def _seed_extraction_with_proposals(
-    sm: StateManager, proposals: list[dict] | None
-) -> int:
+def _seed_extraction_with_proposals(sm: StateManager, proposals: list[dict] | None) -> int:
     item_id = sm.create_research_item(
         source="reddit",
         external_id="abc",
@@ -149,9 +141,7 @@ def _seed_extraction_with_proposals(
         dsl_yaml="name: x\n",
         parsed_dsl_json=None,
         parse_error=None,
-        proposed_indicators_json=(
-            json.dumps(proposals) if proposals is not None else None
-        ),
+        proposed_indicators_json=(json.dumps(proposals) if proposals is not None else None),
     )
 
 
@@ -172,18 +162,14 @@ def test_scaffold_unknown_extraction_404(client: TestClient) -> None:
     assert out["status_code"] == 404
 
 
-def test_scaffold_extraction_without_proposals_404(
-    client: TestClient, sm: StateManager
-) -> None:
+def test_scaffold_extraction_without_proposals_404(client: TestClient, sm: StateManager) -> None:
     ext_id = _seed_extraction_with_proposals(sm, proposals=None)
     out = _scaffold(client, ext_id, 0)
     assert out["status_code"] == 404
 
 
 def test_scaffold_idx_out_of_range_404(client: TestClient, sm: StateManager) -> None:
-    ext_id = _seed_extraction_with_proposals(
-        sm, proposals=[{"name": "x", "formula": "f"}]
-    )
+    ext_id = _seed_extraction_with_proposals(sm, proposals=[{"name": "x", "formula": "f"}])
     out = _scaffold(client, ext_id, 5)
     assert out["status_code"] == 404
 
@@ -191,11 +177,10 @@ def test_scaffold_idx_out_of_range_404(client: TestClient, sm: StateManager) -> 
 # ---------- status=invalid_input ----------
 
 
-def test_scaffold_missing_formula_invalid_input(
-    client: TestClient, sm: StateManager
-) -> None:
+def test_scaffold_missing_formula_invalid_input(client: TestClient, sm: StateManager) -> None:
     ext_id = _seed_extraction_with_proposals(
-        sm, proposals=[{"name": "x"}]  # no formula
+        sm,
+        proposals=[{"name": "x"}],  # no formula
     )
     out = _scaffold(client, ext_id, 0)
     assert out["status_code"] == 400
@@ -207,9 +192,7 @@ def test_scaffold_missing_formula_invalid_input(
 # ---------- status=name_collision ----------
 
 
-def test_scaffold_name_collision_returns_suggested(
-    client: TestClient, sm: StateManager
-) -> None:
+def test_scaffold_name_collision_returns_suggested(client: TestClient, sm: StateManager) -> None:
     # RSI is a built-in spec.
     ext_id = _seed_extraction_with_proposals(
         sm, proposals=[{"name": "rsi", "formula": "100 - 100/(1+RS)"}]
@@ -254,12 +237,8 @@ def test_scaffold_happy_path_writes_plugin_and_caches_ok(
     cached = sm.get_indicator_scaffold(ext_id, 0)
     assert cached is not None
     assert cached["status"] == "ok"
-    assert cached["plugin_path"] and cached["plugin_path"].endswith(
-        "proposed_my_novel.py"
-    )
-    assert cached["test_path"] and cached["test_path"].endswith(
-        "test_proposed_my_novel.py"
-    )
+    assert cached["plugin_path"] and cached["plugin_path"].endswith("proposed_my_novel.py")
+    assert cached["test_path"] and cached["test_path"].endswith("test_proposed_my_novel.py")
     assert cached["commit_sha"] == "a" * 40
 
 
@@ -361,9 +340,7 @@ def test_scaffold_mypy_failure_returns_codegen_failed(
     _stub_codegen: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        indicator_scaffold, "run_mypy", lambda _p: (False, "incompatible types")
-    )
+    monkeypatch.setattr(indicator_scaffold, "run_mypy", lambda _p: (False, "incompatible types"))
     ext_id = _seed_extraction_with_proposals(
         sm, proposals=[{"name": "bad_b", "formula": "ema(close, period)"}]
     )
@@ -381,12 +358,8 @@ def test_scaffold_syntax_error_returns_codegen_failed(
     _stub_codegen: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        indicator_scaffold, "_run_claude_codegen", lambda _p: "def x(:\n"
-    )
-    ext_id = _seed_extraction_with_proposals(
-        sm, proposals=[{"name": "bad_c", "formula": "f"}]
-    )
+    monkeypatch.setattr(indicator_scaffold, "_run_claude_codegen", lambda _p: "def x(:\n")
+    ext_id = _seed_extraction_with_proposals(sm, proposals=[{"name": "bad_c", "formula": "f"}])
     out = _scaffold(client, ext_id, 0)
     assert out["status_code"] == 422
     detail = out["body"]["detail"]
@@ -471,9 +444,7 @@ def test_scaffold_failed_cache_does_not_short_circuit(
 
 
 def test_state_manager_scaffold_round_trip(sm: StateManager) -> None:
-    ext_id = _seed_extraction_with_proposals(
-        sm, proposals=[{"name": "x", "formula": "f"}]
-    )
+    ext_id = _seed_extraction_with_proposals(sm, proposals=[{"name": "x", "formula": "f"}])
     assert sm.get_indicator_scaffold(ext_id, 0) is None
 
     row = sm.upsert_indicator_scaffold(

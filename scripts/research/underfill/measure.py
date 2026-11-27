@@ -54,7 +54,10 @@ SAMPLE_IDS = (245, 244, 243, 229, 16, 223, 219, 2)
 def _find_state_db() -> Path:
     common = subprocess.run(
         ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-        capture_output=True, text=True, check=True, cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=REPO_ROOT,
     ).stdout.strip()
     return Path(common).parent / "data/state/vibe_quant.db"
 
@@ -86,8 +89,16 @@ def _load_sample(db: Path, only: set[int] | None) -> list[dict[str, Any]]:
                 symbols = json.loads(r[0])
                 start, end = _capped_window(r[1], r[2])
                 params = json.loads(r[3] or "{}")
-            out.append({"sid": sid, "dsl": dsl, "symbols": symbols, "start": start,
-                        "end": end, "params": params})
+            out.append(
+                {
+                    "sid": sid,
+                    "dsl": dsl,
+                    "symbols": symbols,
+                    "start": start,
+                    "end": end,
+                    "params": params,
+                }
+            )
     finally:
         conn.close()
     return out
@@ -112,16 +123,18 @@ def _collect(engine: Any) -> dict[str, Any]:
         if o.order_type != OrderType.MARKET:
             continue
         pos = pos_of_order.get(str(o.client_order_id))
-        orders.append({
-            "id": str(o.client_order_id),
-            "symbol": str(o.instrument_id.symbol),
-            "exit": bool(o.is_reduce_only),
-            "qty": float(o.quantity),
-            "filled": float(o.filled_qty),
-            "status": o.status_string(),
-            "pos": None if pos is None else pos_key[id(pos)],
-            "pos_open": None if pos is None else bool(pos.is_open),
-        })
+        orders.append(
+            {
+                "id": str(o.client_order_id),
+                "symbol": str(o.instrument_id.symbol),
+                "exit": bool(o.is_reduce_only),
+                "qty": float(o.quantity),
+                "filled": float(o.filled_qty),
+                "status": o.status_string(),
+                "pos": None if pos is None else pos_key[id(pos)],
+                "pos_open": None if pos is None else bool(pos.is_open),
+            }
+        )
     pos_pnl = {
         pos_key[id(p)]: (str(p.instrument_id.symbol), float(p.realized_pnl.as_double()))
         for p in positions
@@ -139,7 +152,9 @@ def _min(xs: list[float]) -> str:
 
 def _summarise(label: str, balance: int, tier: str, cap: dict[str, Any]) -> list[dict[str, Any]]:
     rows = []
-    symbols = sorted({o["symbol"] for o in cap["orders"]} | {s for s, _ in cap["positions"].values()})
+    symbols = sorted(
+        {o["symbol"] for o in cap["orders"]} | {s for s, _ in cap["positions"].values()}
+    )
     for sym in symbols:
         orders = [o for o in cap["orders"] if o["symbol"] == sym]
         ents = [o for o in orders if not o["exit"]]
@@ -152,17 +167,26 @@ def _summarise(label: str, balance: int, tier: str, cap: dict[str, Any]) -> list
         total = sum(abs(v) for v in pnl.values())
         carried = sum(abs(v) for pid, v in pnl.items() if pid in bad_pos)
         ratios = [o["filled"] / o["qty"] for o in orders]
-        rows.append({
-            "strategy": label, "symbol": sym, "tier": tier, "balance": balance,
-            "entries": len(ents), "entries_under": len(under_ent),
-            "exits": len(exits), "exits_under": len(under_exit),
-            "ratio_median_all": _med(ratios), "ratio_min_all": _min(ratios),
-            "ratio_median_under": _med([o["filled"] / o["qty"] for o in under]),
-            "abs_pnl_total": round(total, 4), "abs_pnl_underfilled": round(carried, 4),
-            "pnl_share": f"{carried / total:.4f}" if total else "-",
-            "residual_exits_open_at_end": sum(1 for o in under_exit if o["pos_open"]),
-            "residual_qty": round(sum(o["qty"] - o["filled"] for o in under_exit), 8),
-        })
+        rows.append(
+            {
+                "strategy": label,
+                "symbol": sym,
+                "tier": tier,
+                "balance": balance,
+                "entries": len(ents),
+                "entries_under": len(under_ent),
+                "exits": len(exits),
+                "exits_under": len(under_exit),
+                "ratio_median_all": _med(ratios),
+                "ratio_min_all": _min(ratios),
+                "ratio_median_under": _med([o["filled"] / o["qty"] for o in under]),
+                "abs_pnl_total": round(total, 4),
+                "abs_pnl_underfilled": round(carried, 4),
+                "pnl_share": f"{carried / total:.4f}" if total else "-",
+                "residual_exits_open_at_end": sum(1 for o in under_exit if o["pos_open"]),
+                "residual_qty": round(sum(o["qty"] - o["filled"] for o in under_exit), 8),
+            }
+        )
     return rows
 
 
@@ -171,11 +195,16 @@ def _screen(item: dict[str, Any], balance: int) -> dict[str, Any]:
     liq = LiquidationSettings.from_params(params)
     sizing = SizingSettings.from_params(params)
     runner = NTScreeningRunner(
-        _dsl_to_dict(item["dsl"]), item["symbols"], item["start"], item["end"],
-        catalog_path=str(CATALOG_PATH), funding_archive_path=str(ARCHIVE_DB_PATH),
+        _dsl_to_dict(item["dsl"]),
+        item["symbols"],
+        item["start"],
+        item["end"],
+        catalog_path=str(CATALOG_PATH),
+        funding_archive_path=str(ARCHIVE_DB_PATH),
         launch=LaunchSettings(
             fee_schedule=FeeSchedule.from_params(params),
-            liquidation=liq, sizing=sizing,
+            liquidation=liq,
+            sizing=sizing,
             starting_balance=parse_initial_balance(params),
         ),
     )
@@ -206,8 +235,15 @@ def _validate(db: Path, item: dict[str, Any], balance: int) -> dict[str, Any]:
         run_id = conn.execute(
             "INSERT INTO backtest_runs(strategy_id, run_mode, symbols, timeframe, "
             "start_date, end_date, parameters) VALUES (?,?,?,?,?,?,?)",
-            (item["sid"], "validation", json.dumps(item["symbols"]), item["dsl"].timeframe,
-             item["start"], item["end"], json.dumps({"initial_balance": balance})),
+            (
+                item["sid"],
+                "validation",
+                json.dumps(item["symbols"]),
+                item["dsl"].timeframe,
+                item["start"],
+                item["end"],
+                json.dumps({"initial_balance": balance}),
+            ),
         ).lastrowid
         conn.commit()
         conn.close()
@@ -234,19 +270,31 @@ def _validate(db: Path, item: dict[str, Any], balance: int) -> dict[str, Any]:
 
 
 COLS = [
-    ("strategy", "strat"), ("symbol", "symbol"), ("tier", "tier"), ("balance", "bal"),
-    ("entries", "ent"), ("entries_under", "ent_u"), ("exits", "exit"), ("exits_under", "exit_u"),
-    ("ratio_median_all", "ratio_med"), ("ratio_min_all", "ratio_min"),
-    ("ratio_median_under", "ratio_med_u"), ("abs_pnl_total", "|pnl|"),
-    ("abs_pnl_underfilled", "|pnl|_u"), ("pnl_share", "share"),
-    ("residual_exits_open_at_end", "res_open"), ("residual_qty", "res_qty"),
+    ("strategy", "strat"),
+    ("symbol", "symbol"),
+    ("tier", "tier"),
+    ("balance", "bal"),
+    ("entries", "ent"),
+    ("entries_under", "ent_u"),
+    ("exits", "exit"),
+    ("exits_under", "exit_u"),
+    ("ratio_median_all", "ratio_med"),
+    ("ratio_min_all", "ratio_min"),
+    ("ratio_median_under", "ratio_med_u"),
+    ("abs_pnl_total", "|pnl|"),
+    ("abs_pnl_underfilled", "|pnl|_u"),
+    ("pnl_share", "share"),
+    ("residual_exits_open_at_end", "res_open"),
+    ("residual_qty", "res_qty"),
 ]
 
 
 def _table(rows: list[dict[str, Any]]) -> str:
     cells = [[h for _, h in COLS]] + [[str(r[k]) for k, _ in COLS] for r in rows]
     widths = [max(len(c[i]) for c in cells) for i in range(len(COLS))]
-    return "\n".join("  ".join(c.ljust(w) for c, w in zip(line, widths, strict=True)) for line in cells)
+    return "\n".join(
+        "  ".join(c.ljust(w) for c, w in zip(line, widths, strict=True)) for line in cells
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -256,8 +304,8 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     only = {int(x) for x in args.only.split(",")} if args.only else None
     db = _find_state_db()
-    out = Path(args.out) if args.out else (
-        db.parents[2] / "data/swarm/20261017-easy3/underfill.json"
+    out = (
+        Path(args.out) if args.out else (db.parents[2] / "data/swarm/20261017-easy3/underfill.json")
     )
     rows: list[dict[str, Any]] = []
     raw: dict[str, Any] = {}
@@ -268,14 +316,19 @@ def main(argv: list[str] | None = None) -> int:
             cap = _screen(item, balance)
             raw[f"{label}/screening/{balance}"] = cap
             rows += _summarise(label, balance, "screening", cap)
-            print(f"[{time.time() - t0:5.1f}s] {label} {item['symbols']} {item['start']}..{item['end']} "
-                  f"bal={balance} screening", file=sys.stderr)
+            print(
+                f"[{time.time() - t0:5.1f}s] {label} {item['symbols']} {item['start']}..{item['end']} "
+                f"bal={balance} screening",
+                file=sys.stderr,
+            )
             if item["sid"] == FIXED_239[0]:
                 t0 = time.time()
                 cap = _validate(db, item, balance)
                 raw[f"{label}/validation/{balance}"] = cap
                 rows += _summarise(label, balance, "validation", cap)
-                print(f"[{time.time() - t0:5.1f}s] {label} bal={balance} validation", file=sys.stderr)
+                print(
+                    f"[{time.time() - t0:5.1f}s] {label} bal={balance} validation", file=sys.stderr
+                )
     table = _table(rows)
     print(table)
     out.parent.mkdir(parents=True, exist_ok=True)

@@ -28,10 +28,14 @@ def _out(tmp_path: Path) -> Path:
 
 def _cli(tmp_path: Path) -> list[str]:
     return [
-        "--out", str(_out(tmp_path)),
-        "--data-root", str(tmp_path / "data"),
-        "--real-db", str(tmp_path / "none.db"),
-        "--archive", str(tmp_path / "src.db"),
+        "--out",
+        str(_out(tmp_path)),
+        "--data-root",
+        str(tmp_path / "data"),
+        "--real-db",
+        str(tmp_path / "none.db"),
+        "--archive",
+        str(tmp_path / "src.db"),
     ]
 
 
@@ -54,12 +58,26 @@ def _accept(out: Path, variant: str, tmp_path: Path, k: int = 1) -> Path:
 
 
 def _run_rec(
-    variant: str, rung: str, seed: int, *, status: str = "completed", m1: bool = False,
-    m2: bool = False, champions: int = 0, probe: bool = False, reruns: int = 0, sha: str = "sha0",
+    variant: str,
+    rung: str,
+    seed: int,
+    *,
+    status: str = "completed",
+    m1: bool = False,
+    m2: bool = False,
+    champions: int = 0,
+    probe: bool = False,
+    reruns: int = 0,
+    sha: str = "sha0",
 ) -> dict[str, Any]:
     rec: dict[str, Any] = {
-        "variant": variant, "rung": rung, "seed": seed, "status": status, "probe": probe,
-        "reruns": reruns, "sha": sha,
+        "variant": variant,
+        "rung": rung,
+        "seed": seed,
+        "status": status,
+        "probe": probe,
+        "reruns": reruns,
+        "sha": sha,
     }
     if status == "completed":
         rec["score"] = {"M1": m1, "M2": m2}
@@ -104,9 +122,7 @@ def test_m1_m2_decision_edges() -> None:
 # --- Build accept -----------------------------------------------------------------------
 
 
-def test_build_accept_edges_and_cli_status(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_build_accept_edges_and_cli_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The accept band and the build CLI's three terminal statuses/exit codes."""
     ok = {"converged": True, "price_ratio_gt_3": False, "train_S": 3.29}
     assert budget.accepts("4h-s3", ok) is True
@@ -128,8 +144,16 @@ def test_build_accept_edges_and_cli_status(
 
     # never accepted -> exactly MAX_BUILDS builds, then not_calibrated (exit 2)
     out2 = tmp_path / "o2" / "budget.json"
-    base2 = ["--out", str(out2), "--data-root", str(tmp_path / "data"),
-             "--real-db", str(tmp_path / "n.db"), "--archive", str(tmp_path / "src.db")]
+    base2 = [
+        "--out",
+        str(out2),
+        "--data-root",
+        str(tmp_path / "data"),
+        "--real-db",
+        str(tmp_path / "n.db"),
+        "--archive",
+        str(tmp_path / "src.db"),
+    ]
     deltas2 = _stub_builder(monkeypatch, trains=[3.31] * 4)
     assert budget.main([*base2, "build", "--variant", "4h-s4"]) == 2
     assert len(deltas2) == budget.MAX_BUILDS
@@ -137,8 +161,16 @@ def test_build_accept_edges_and_cli_status(
 
     # a price ratio over 3x fails closed on the FIRST build (exit 2)
     out3 = tmp_path / "o3" / "budget.json"
-    base3 = ["--out", str(out3), "--data-root", str(tmp_path / "data"),
-             "--real-db", str(tmp_path / "n.db"), "--archive", str(tmp_path / "src.db")]
+    base3 = [
+        "--out",
+        str(out3),
+        "--data-root",
+        str(tmp_path / "data"),
+        "--real-db",
+        str(tmp_path / "n.db"),
+        "--archive",
+        str(tmp_path / "src.db"),
+    ]
     deltas3 = _stub_builder(monkeypatch, trains=[3.0] * 4, ratio=3.01)
     assert budget.main([*base3, "build", "--variant", "4h-s2"]) == 2
     assert len(deltas3) == 1
@@ -154,16 +186,30 @@ def _stub_builder(
         return object()
 
     def fake_build(
-        variant: str, k: int, delta: float, _klines: object, _archive: Path, scratch: Path,
-        _db: Path, profile: layer2.Profile = layer2.P4H,
+        variant: str,
+        k: int,
+        delta: float,
+        _klines: object,
+        _archive: Path,
+        scratch: Path,
+        _db: Path,
+        profile: layer2.Profile = layer2.P4H,
     ) -> dict[str, Any]:
         deltas.append(delta)
         root = budget.build_root(scratch, variant, k)
         (root / "data" / "catalog").mkdir(parents=True, exist_ok=True)
         return {
-            "k": k, "root": str(root), "delta": delta, "kappa": 0.0, "l_end": 0.0,
-            "converged": True, "n_triggers": 9, "price_ratio": ratio,
-            "price_ratio_gt_3": ratio > 3.0, "train_S": trains[k - 1], "full_S": 0.0,
+            "k": k,
+            "root": str(root),
+            "delta": delta,
+            "kappa": 0.0,
+            "l_end": 0.0,
+            "converged": True,
+            "n_triggers": 9,
+            "price_ratio": ratio,
+            "price_ratio_gt_3": ratio > 3.0,
+            "train_S": trains[k - 1],
+            "full_S": 0.0,
         }
 
     monkeypatch.setattr(layer2, "build_one", fake_build)
@@ -212,9 +258,7 @@ def test_argv_is_the_design_command_and_pins_the_dsr_rule() -> None:
     assert effective(q95) == "q95"
 
 
-def test_dsr_rule_recorded_and_forwarded(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_dsr_rule_recorded_and_forwarded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """T3: ``discover --dsr-rule`` forwards one literal pair and records the rule; absent -> None.
 
     Two unrelated inputs: an untagged 4h seed 1 and a q95 1d seed 3.
@@ -234,10 +278,22 @@ def test_dsr_rule_recorded_and_forwarded(
     cases = [("4h-s0", 1, None), ("1d-s0", 3, "q95")]
     for variant, seed, rule in cases:
         extra = [] if rule is None else ["--dsr-rule", rule]
-        assert budget.main([
-            *_cli(tmp_path), "discover", "--variant", variant, "--rung", "B1",
-            "--seed", str(seed), *extra,
-        ]) == 0
+        assert (
+            budget.main(
+                [
+                    *_cli(tmp_path),
+                    "discover",
+                    "--variant",
+                    variant,
+                    "--rung",
+                    "B1",
+                    "--seed",
+                    str(seed),
+                    *extra,
+                ]
+            )
+            == 0
+        )
         argv = argvs[f"{variant[:2]}|{seed}"]
         rec = budget.load_state(out)["runs"][budget.run_key(variant, "B1", seed)]
         if rule is None:
@@ -274,9 +330,7 @@ def test_check_btc0_fidelity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 # --- LONG only --------------------------------------------------------------------------
 
 
-def test_both_timeframes_run_long_only(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_both_timeframes_run_long_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Every budget profile is LONG on both timeframes and the argv/worker carry it."""
     assert budget.profile_for({}, "4h").direction == "long"
     assert budget.profile_for({}, "1d").direction == "long"
@@ -286,12 +340,21 @@ def test_both_timeframes_run_long_only(
     assert argv.count("--direction") == 1
     assert argv[argv.index("--direction") + 1] == "long"
 
-    assert budget.is_long_dsl(
-        {"entry_conditions": {"long": ["a"]}, "exit_conditions": {"long": ["b"]}}
-    ) is True
-    assert budget.is_long_dsl(
-        {"entry_conditions": {"long": ["a"], "short": ["b"]}, "exit_conditions": {"long": ["b"]}}
-    ) is False
+    assert (
+        budget.is_long_dsl(
+            {"entry_conditions": {"long": ["a"]}, "exit_conditions": {"long": ["b"]}}
+        )
+        is True
+    )
+    assert (
+        budget.is_long_dsl(
+            {
+                "entry_conditions": {"long": ["a"], "short": ["b"]},
+                "exit_conditions": {"long": ["b"]},
+            }
+        )
+        is False
+    )
     assert budget.is_long_dsl({}) is False
 
     out = _out(tmp_path)
@@ -313,10 +376,18 @@ def test_both_timeframes_run_long_only(
     monkeypatch.setattr(layer2, "run_discovery", fake_discovery)
     monkeypatch.setattr(layer2, "run_worker", worker)
     for variant in ("4h-s0", "1d-s0"):
-        assert budget.main([*_cli(tmp_path), "discover", "--variant", variant, "--rung", "B1", "--seed", "1"]) == 0
+        assert (
+            budget.main(
+                [*_cli(tmp_path), "discover", "--variant", variant, "--rung", "B1", "--seed", "1"]
+            )
+            == 0
+        )
         tf = variant[:2]
         assert argvs[tf][argvs[tf].index("--direction") + 1] == "long"
-        assert budget.main([*_cli(tmp_path), "null-corr", "--tf", tf, "--m", "2", "--shards", "1"]) == 0
+        assert (
+            budget.main([*_cli(tmp_path), "null-corr", "--tf", tf, "--m", "2", "--shards", "1"])
+            == 0
+        )
         assert payloads[tf]["profile"]["direction"] == "long"
 
 
@@ -328,12 +399,18 @@ def test_non_long_harvested_candidate_exit_3(
     rec = _run_rec("4h-s0", "B1", 1, champions=1)
     rec.update(db=str(tmp_path / "r.db"), run_id=1)
     _seed_runs(out, [rec])
-    short = {"entry_conditions": {"long": ["a"], "short": ["b"]}, "exit_conditions": {"long": ["b"]}}
+    short = {
+        "entry_conditions": {"long": ["a"], "short": ["b"]},
+        "exit_conditions": {"long": ["b"]},
+    }
 
     def fake_harvest(db: Path, rid: int) -> dict[str, Any]:
-        return {"r31": {"ok": True}, "dsr_trials": {"n_rule": layer2.N_RULE_EFFECTIVE}, "candidates": [
-            {"uid": "u", "source": "champion", "dsl": short}
-        ], "champions": 1}
+        return {
+            "r31": {"ok": True},
+            "dsr_trials": {"n_rule": layer2.N_RULE_EFFECTIVE},
+            "candidates": [{"uid": "u", "source": "champion", "dsl": short}],
+            "champions": 1,
+        }
 
     monkeypatch.setattr(layer2, "harvest_run", fake_harvest)
     monkeypatch.setattr(layer2, "_harvest_one", lambda *a, **k: True)
@@ -376,20 +453,31 @@ def test_k_requires_evaluated_and_fits_the_null_pool() -> None:
 
 
 def test_c_k_needs_same_tf_same_budget_s0() -> None:
-    state: dict[str, Any] = {"runs": {
-        budget.run_key("4h-s0", "B1", 1): {
-            "variant": "4h-s0", "rung": "B1", "seed": 1, "status": "completed",
-            "harvest": {"candidates": [{"corr": 0.3}]},
-        },
-        budget.run_key("1d-s0", "B1", 1): {
-            "variant": "1d-s0", "rung": "B1", "seed": 1, "status": "completed",
-            "harvest": {"candidates": [{"corr": 0.9}]},
-        },
-        budget.run_key("4h-s4", "B1", 1): {
-            "variant": "4h-s4", "rung": "B1", "seed": 1, "status": "completed",
-            "harvest": {"candidates": [{"corr": 0.99}]},
-        },
-    }}
+    state: dict[str, Any] = {
+        "runs": {
+            budget.run_key("4h-s0", "B1", 1): {
+                "variant": "4h-s0",
+                "rung": "B1",
+                "seed": 1,
+                "status": "completed",
+                "harvest": {"candidates": [{"corr": 0.3}]},
+            },
+            budget.run_key("1d-s0", "B1", 1): {
+                "variant": "1d-s0",
+                "rung": "B1",
+                "seed": 1,
+                "status": "completed",
+                "harvest": {"candidates": [{"corr": 0.9}]},
+            },
+            budget.run_key("4h-s4", "B1", 1): {
+                "variant": "4h-s4",
+                "rung": "B1",
+                "seed": 1,
+                "status": "completed",
+                "harvest": {"candidates": [{"corr": 0.99}]},
+            },
+        }
+    }
     assert budget.s0_max_signed_corr(state, "4h", 16, 6) == 0.3  # other tf + non-s0 ignored
     assert layer2.corr_threshold(0.5, budget.s0_max_signed_corr(state, "4h", 16, 6)) == 0.5
     with pytest.raises(layer2.Layer2Error):
@@ -398,15 +486,21 @@ def test_c_k_needs_same_tf_same_budget_s0() -> None:
     # a probe-tagged s0 run never enters C_K: only the untagged records count
     def s0(seed: int, corr: float, probe: bool) -> dict[str, Any]:
         return {
-            "variant": "4h-s0", "rung": "B1", "seed": seed, "status": "completed", "probe": probe,
+            "variant": "4h-s0",
+            "rung": "B1",
+            "seed": seed,
+            "status": "completed",
+            "probe": probe,
             "harvest": {"candidates": [{"corr": corr}]},
         }
 
-    probe_state: dict[str, Any] = {"runs": {
-        budget.run_key("4h-s0", "B1", 1): s0(1, 0.31, False),
-        budget.run_key("4h-s0", "B1", 2): s0(2, 0.44, False),
-        budget.run_key("4h-s0", "B1", 3, True): s0(3, 0.95, True),
-    }}
+    probe_state: dict[str, Any] = {
+        "runs": {
+            budget.run_key("4h-s0", "B1", 1): s0(1, 0.31, False),
+            budget.run_key("4h-s0", "B1", 2): s0(2, 0.44, False),
+            budget.run_key("4h-s0", "B1", 3, True): s0(3, 0.95, True),
+        }
+    }
     assert budget.s0_max_signed_corr(probe_state, "4h", 16, 6) == 0.44
 
 
@@ -418,7 +512,9 @@ def test_failed_run_is_missing_then_incomplete(
 ) -> None:
     out = _out(tmp_path)
     recs = [
-        _run_rec("4h-s0", "B1", 1), _run_rec("4h-s0", "B1", 2), _run_rec("4h-s0", "B1", 3),
+        _run_rec("4h-s0", "B1", 1),
+        _run_rec("4h-s0", "B1", 2),
+        _run_rec("4h-s0", "B1", 3),
         _run_rec("4h-s3", "B1", 1, m1=True, m2=True),
         _run_rec("4h-s3", "B1", 3, m1=True, m2=True),
         _run_rec("4h-s3", "B1", 2, status="failed", reruns=0),
@@ -440,7 +536,9 @@ def test_failed_run_is_missing_then_incomplete(
 # --- Stop rule -------------------------------------------------------------------------
 
 
-def test_stop_rule_both_seed_modes_and_the_wave(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_stop_rule_both_seed_modes_and_the_wave(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """2 of 3 (or 2 of 2) stops a cell; a stopped cell leaves the wave; an empty
     state offers the whole 15-run B1 wave."""
     # an empty state offers the 15 4h B1 runs (5 variants x 3 seeds)
@@ -449,7 +547,11 @@ def test_stop_rule_both_seed_modes_and_the_wave(tmp_path: Path, capsys: pytest.C
     assert len(lines) == 15
     assert all("--rung B1" in ln and "discover --variant 4h-" in ln for ln in lines)
     assert {ln.split("--variant ")[1].split()[0] for ln in lines} == {
-        "4h-s0", "4h-s2", "4h-s3", "4h-s4", "4h-s5"
+        "4h-s0",
+        "4h-s2",
+        "4h-s3",
+        "4h-s4",
+        "4h-s5",
     }
 
     out = _out(tmp_path)
@@ -457,10 +559,14 @@ def test_stop_rule_both_seed_modes_and_the_wave(tmp_path: Path, capsys: pytest.C
     for s in (1, 2, 3):
         recs += [_run_rec("4h-s0", "B1", s), _run_rec("4h-s0", "B2", s)]
         recs += [_run_rec("4h-s2", "B1", s), _run_rec("4h-s2", "B2", s)]
-        recs += [_run_rec("4h-s3", "B1", s, m1=s == 1, m2=s == 1),
-                 _run_rec("4h-s3", "B2", s, m1=s == 1, m2=s == 1)]
-        recs += [_run_rec("4h-s4", "B1", s, m1=s == 1, m2=s == 1),
-                 _run_rec("4h-s4", "B2", s, m1=s in (1, 2), m2=s in (1, 2))]
+        recs += [
+            _run_rec("4h-s3", "B1", s, m1=s == 1, m2=s == 1),
+            _run_rec("4h-s3", "B2", s, m1=s == 1, m2=s == 1),
+        ]
+        recs += [
+            _run_rec("4h-s4", "B1", s, m1=s == 1, m2=s == 1),
+            _run_rec("4h-s4", "B2", s, m1=s in (1, 2), m2=s in (1, 2)),
+        ]
         recs += [_run_rec("4h-s5", "B1", s, m1=s in (1, 2), m2=s in (1, 2))]
     _seed_runs(out, recs)
     st = budget.load_state(out)
@@ -496,10 +602,13 @@ def test_s0_champion_stops_the_tf_and_reports_gate_leak(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     out = _out(tmp_path)
-    _seed_runs(out, [
-        _run_rec("4h-s0", "B1", 1, champions=1),
-        _run_rec("4h-s4", "B1", 1),
-    ])
+    _seed_runs(
+        out,
+        [
+            _run_rec("4h-s0", "B1", 1, champions=1),
+            _run_rec("4h-s4", "B1", 1),
+        ],
+    )
     st = budget.load_state(out)
     assert budget.gate_leak(st, "4h") is True
     assert budget.next_wave(st, "4h") == []
@@ -525,8 +634,16 @@ def test_pick_rule_trades_window_and_ga_ranges(
     def worker(kind: str, r: Path, payload: dict[str, Any], db: Path, **kw: Any) -> Any:
         seen.append([j["tag"] for j in payload["jobs"]])
         return [
-            {"tag": j["tag"], "trades": trades[i], "sharpe": 0.0, "return": 0.0,
-             "profit_factor": 0.0, "max_drawdown": 0.0, "mtm": None, "bh_daily_sharpe": None}
+            {
+                "tag": j["tag"],
+                "trades": trades[i],
+                "sharpe": 0.0,
+                "return": 0.0,
+                "profit_factor": 0.0,
+                "max_drawdown": 0.0,
+                "mtm": None,
+                "bh_daily_sharpe": None,
+            }
             for i, j in enumerate(payload["jobs"])
         ]
 
@@ -550,13 +667,31 @@ def test_pick_rule_trades_window_and_ga_ranges(
     monkeypatch.setattr(budget, "PICK_RULES", [bad])
 
     def worker2(kind: str, r: Path, payload: dict[str, Any], db: Path, **kw: Any) -> Any:
-        return [{"tag": j["tag"], "trades": 120, "sharpe": 0.0, "return": 0.0,
-                 "profit_factor": 0.0, "max_drawdown": 0.0, "mtm": None, "bh_daily_sharpe": None}
-                for j in payload["jobs"]]
+        return [
+            {
+                "tag": j["tag"],
+                "trades": 120,
+                "sharpe": 0.0,
+                "return": 0.0,
+                "profit_factor": 0.0,
+                "max_drawdown": 0.0,
+                "mtm": None,
+                "bh_daily_sharpe": None,
+            }
+            for j in payload["jobs"]
+        ]
 
     monkeypatch.setattr(layer2, "run_worker", worker2)
-    base2 = ["--out", str(out2), "--data-root", str(tmp_path / "data"),
-             "--real-db", str(tmp_path / "n.db"), "--archive", str(tmp_path / "src.db")]
+    base2 = [
+        "--out",
+        str(out2),
+        "--data-root",
+        str(tmp_path / "data"),
+        "--real-db",
+        str(tmp_path / "n.db"),
+        "--archive",
+        str(tmp_path / "src.db"),
+    ]
     assert budget.main([*base2, "pick-rule", "--tf", "1d"]) == 2
     assert "no rule" in capsys.readouterr().out
 
@@ -574,9 +709,9 @@ def test_probe_runs_never_enter_bstar_or_c_k(tmp_path: Path) -> None:
     assert budget.m2_count(st, "4h-s4", "B1") == 0  # the probe's M2 is not counted
     assert st["cells"]["4h-s4"]["B_star"] is None
     # a probe candidate never becomes the s0 comparator either
-    assert budget.is_probe_run(
-        {"variant": "4h-s4", "probe": True}
-    ) and not budget.is_probe_run({"variant": "4h-s4"})
+    assert budget.is_probe_run({"variant": "4h-s4", "probe": True}) and not budget.is_probe_run(
+        {"variant": "4h-s4"}
+    )
 
 
 # --- Report ----------------------------------------------------------------------------
@@ -621,7 +756,13 @@ def test_printed_retry_command_reruns_then_goes_incomplete(
 
     def fake_discovery(root: Path, run_dir: Path, seed: int, **kw: Any) -> dict[str, Any]:
         launches.append(seed)
-        return {"status": "failed", "run_id": 1, "db": str(run_dir / "s.db"), "wall_s": 0.1, "error": "boom"}
+        return {
+            "status": "failed",
+            "run_id": 1,
+            "db": str(run_dir / "s.db"),
+            "wall_s": 0.1,
+            "error": "boom",
+        }
 
     monkeypatch.setattr(layer2, "run_discovery", fake_discovery)
 
@@ -629,7 +770,11 @@ def test_printed_retry_command_reruns_then_goes_incomplete(
         capsys.readouterr()
         assert budget.main([*_cli(tmp_path), "next-wave", "--tf", "4h"]) == 0
         lines = capsys.readouterr().out.splitlines()
-        return {ln.split("--variant ")[1].split()[0] + ln.split("--seed ")[1].split()[0]: ln for ln in lines if ln.strip()}
+        return {
+            ln.split("--variant ")[1].split()[0] + ln.split("--seed ")[1].split()[0]: ln
+            for ln in lines
+            if ln.strip()
+        }
 
     cmds = printed()
     retry = cmds["4h-s32"]
@@ -669,7 +814,9 @@ def _notes_db(path: Path, notes: dict[str, Any]) -> None:
     ],
 )
 def test_harvest_refuses_missing_or_invalid_effective_n_marker(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
     notes: dict[str, Any],
 ) -> None:
     out = _out(tmp_path)
@@ -692,7 +839,13 @@ def test_harvest_accepts_the_effective_n_marker(
     out = _out(tmp_path)
     _accept(out, "4h-s0", tmp_path)
     db = tmp_path / "r.db"
-    trials = {"prior_n": 0, "gate_n": 5, "run_n_eff": 5, "n_rule": layer2.N_RULE_EFFECTIVE, "dsr_rule": "emax"}
+    trials = {
+        "prior_n": 0,
+        "gate_n": 5,
+        "run_n_eff": 5,
+        "n_rule": layer2.N_RULE_EFFECTIVE,
+        "dsr_rule": "emax",
+    }
     _notes_db(db, {"dsr_trials": trials, "evaluated": 5})
     rec = _run_rec("4h-s0", "B1", 1)
     rec.update(db=str(db), run_id=1)
@@ -770,15 +923,22 @@ def test_harvest_refuses_a_run_from_another_build(
         s["variants"]["4h-s4"]["build_id"] = "b1"  # rebuilt since the runs were made
 
     budget.update_state(out, stale)
-    budget.update_state(out, lambda s: s["runs"].update(
-        {k: {**r, "db": str(tmp_path / "r.db"), "run_id": 1} for k, r in s["runs"].items()}
-    ))
+    budget.update_state(
+        out,
+        lambda s: s["runs"].update(
+            {k: {**r, "db": str(tmp_path / "r.db"), "run_id": 1} for k, r in s["runs"].items()}
+        ),
+    )
     called: list[int] = []
     monkeypatch.setattr(layer2, "_harvest_one", lambda *a, **k: called.append(1) or True)
     monkeypatch.setattr(
-        layer2, "harvest_run",
-        lambda db, rid: {"r31": {"ok": True}, "dsr_trials": {"n_rule": layer2.N_RULE_EFFECTIVE},
-                         "candidates": []},
+        layer2,
+        "harvest_run",
+        lambda db, rid: {
+            "r31": {"ok": True},
+            "dsr_trials": {"n_rule": layer2.N_RULE_EFFECTIVE},
+            "candidates": [],
+        },
     )
     assert budget.main([*_cli(tmp_path), "harvest", "--tf", "4h"]) == 3
     assert called == []
@@ -791,8 +951,16 @@ def test_harvest_refuses_a_run_from_another_build(
 def _rule_worker(trades: dict[int, int]) -> Any:
     def worker(kind: str, r: Path, payload: dict[str, Any], db: Path, **kw: Any) -> Any:
         return [
-            {"tag": j["tag"], "trades": trades[i], "sharpe": 0.0, "return": 0.0,
-             "profit_factor": 0.0, "max_drawdown": 0.0, "mtm": None, "bh_daily_sharpe": None}
+            {
+                "tag": j["tag"],
+                "trades": trades[i],
+                "sharpe": 0.0,
+                "return": 0.0,
+                "profit_factor": 0.0,
+                "max_drawdown": 0.0,
+                "mtm": None,
+                "bh_daily_sharpe": None,
+            }
             for i, j in enumerate(payload["jobs"])
         ]
 
@@ -839,9 +1007,7 @@ def test_changed_pick_rule_invalidates_planted_1d_builds(
     assert "1d" not in (st.get("check_btc0") or {})
 
 
-def test_unchanged_pick_rule_drops_nothing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_unchanged_pick_rule_drops_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out = _seed_1d(tmp_path, budget.PICK_RULES[0]["name"])
     monkeypatch.setattr(layer2, "run_worker", _rule_worker({0: 120, 1: 120, 2: 120, 3: 120}))
     assert budget.main([*_cli(tmp_path), "--force", "pick-rule", "--tf", "1d"]) == 0
@@ -852,9 +1018,7 @@ def test_unchanged_pick_rule_drops_nothing(
     assert "1d" in st["null"]
 
 
-def test_build_records_the_picked_rule(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_build_records_the_picked_rule(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """An accepted build AND a not_calibrated build record the rule they were planted for."""
     out = _out(tmp_path)
     budget.update_state(out, lambda s: s.__setitem__("picked_rule", {**budget.PICK_RULES[2]}))
@@ -865,11 +1029,24 @@ def test_build_records_the_picked_rule(
     out2 = tmp_path / "o2" / "budget.json"
     budget.update_state(out2, lambda s: s.__setitem__("picked_rule", {**budget.PICK_RULES[1]}))
     _stub_builder(monkeypatch, trains=[1.0] * 4)
-    assert budget.main([
-        "--out", str(out2), "--data-root", str(tmp_path / "data"),
-        "--real-db", str(tmp_path / "n.db"), "--archive", str(tmp_path / "src.db"),
-        "build", "--variant", "1d-s4",
-    ]) == 2
+    assert (
+        budget.main(
+            [
+                "--out",
+                str(out2),
+                "--data-root",
+                str(tmp_path / "data"),
+                "--real-db",
+                str(tmp_path / "n.db"),
+                "--archive",
+                str(tmp_path / "src.db"),
+                "build",
+                "--variant",
+                "1d-s4",
+            ]
+        )
+        == 2
+    )
     assert budget.load_state(out2)["variants"]["1d-s4"]["rule"] == budget.PICK_RULES[1]["name"]
 
 
@@ -879,21 +1056,31 @@ def test_discover_and_harvest_refuse_a_build_from_another_rule(
     out = _seed_1d(tmp_path, "some_old_rule")
     launched: list[int] = []
     monkeypatch.setattr(layer2, "run_discovery", lambda *a, **k: launched.append(1) or {})
-    assert budget.main(
-        [*_cli(tmp_path), "discover", "--variant", "1d-s4", "--rung", "B1", "--seed", "9"]
-    ) == 2
+    assert (
+        budget.main(
+            [*_cli(tmp_path), "discover", "--variant", "1d-s4", "--rung", "B1", "--seed", "9"]
+        )
+        == 2
+    )
     assert launched == [] and "rule" in capsys.readouterr().out
 
     db = tmp_path / "r.db"
-    budget.update_state(out, lambda s: s["runs"].update(
-        {k: {**r, "db": str(db), "run_id": 1, "build_id": "b0"} for k, r in s["runs"].items()}
-    ))
+    budget.update_state(
+        out,
+        lambda s: s["runs"].update(
+            {k: {**r, "db": str(db), "run_id": 1, "build_id": "b0"} for k, r in s["runs"].items()}
+        ),
+    )
     called: list[int] = []
     monkeypatch.setattr(layer2, "_harvest_one", lambda *a, **k: called.append(1) or True)
     monkeypatch.setattr(
-        layer2, "harvest_run",
-        lambda d, rid: {"r31": {"ok": True}, "dsr_trials": {"n_rule": layer2.N_RULE_EFFECTIVE},
-                        "candidates": []},
+        layer2,
+        "harvest_run",
+        lambda d, rid: {
+            "r31": {"ok": True},
+            "dsr_trials": {"n_rule": layer2.N_RULE_EFFECTIVE},
+            "candidates": [],
+        },
     )
     assert budget.main([*_cli(tmp_path), "harvest", "--tf", "1d"]) == 3
     assert called == [] and "rule" in capsys.readouterr().out
@@ -908,9 +1095,12 @@ def test_discover_of_an_existing_seed_still_checks_the_rule(
     _seed_1d(tmp_path, "some_old_rule")  # 1d-s4 B1 seeds 1-3 already recorded
     launched: list[int] = []
     monkeypatch.setattr(layer2, "run_discovery", lambda *a, **k: launched.append(1) or {})
-    assert budget.main(
-        [*_cli(tmp_path), "discover", "--variant", "1d-s4", "--rung", "B1", "--seed", "1"]
-    ) == 2
+    assert (
+        budget.main(
+            [*_cli(tmp_path), "discover", "--variant", "1d-s4", "--rung", "B1", "--seed", "1"]
+        )
+        == 2
+    )
     assert launched == [] and "rule" in capsys.readouterr().out
 
 
@@ -951,18 +1141,23 @@ def test_pick_rule_change_resets_calibration_history(
 
 
 def _stub_discovery(status: str) -> Any:
-    def fake_discovery(
-        root: Path, run_dir: Path, seed: int, **kw: Any
-    ) -> dict[str, Any]:
-        return {"status": status, "run_id": 7, "db": str(run_dir / "s.db"), "wall_s": 0.1,
-                "error": "killed at the timeout" if status != "completed" else ""}
+    def fake_discovery(root: Path, run_dir: Path, seed: int, **kw: Any) -> dict[str, Any]:
+        return {
+            "status": status,
+            "run_id": 7,
+            "db": str(run_dir / "s.db"),
+            "wall_s": 0.1,
+            "error": "killed at the timeout" if status != "completed" else "",
+        }
 
     return fake_discovery
 
 
 @pytest.mark.parametrize("status", ["timeout", "failed"])
 def test_discover_exits_nonzero_on_a_non_completed_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
     status: str,
 ) -> None:
     """A wave runner keyed off exit codes saw 0 while 5/6 runs were killed.
@@ -972,9 +1167,18 @@ def test_discover_exits_nonzero_on_a_non_completed_run(
     out = _out(tmp_path)
     _accept(out, "4h-s4", tmp_path)
     monkeypatch.setattr(layer2, "run_discovery", _stub_discovery(status))
-    rc = budget.main([
-        *_cli(tmp_path), "discover", "--variant", "4h-s4", "--rung", "B1", "--seed", "2",
-    ])
+    rc = budget.main(
+        [
+            *_cli(tmp_path),
+            "discover",
+            "--variant",
+            "4h-s4",
+            "--rung",
+            "B1",
+            "--seed",
+            "2",
+        ]
+    )
     assert rc == budget.EXIT_RUN_NOT_COMPLETED == 4
     text = capsys.readouterr().out
     assert "RUN NOT COMPLETED" in text and status in text
@@ -986,16 +1190,35 @@ def test_discover_exits_nonzero_on_a_non_completed_run(
     out2 = tmp_path / "o2" / "budget.json"
     _accept(out2, "4h-s4", tmp_path)
     monkeypatch.setattr(layer2, "run_discovery", _stub_discovery("completed"))
-    assert budget.main([
-        "--out", str(out2), "--data-root", str(tmp_path / "data"),
-        "--real-db", str(tmp_path / "n.db"), "--archive", str(tmp_path / "src.db"),
-        "discover", "--variant", "4h-s4", "--rung", "B1", "--seed", "2",
-    ]) == 0
+    assert (
+        budget.main(
+            [
+                "--out",
+                str(out2),
+                "--data-root",
+                str(tmp_path / "data"),
+                "--real-db",
+                str(tmp_path / "n.db"),
+                "--archive",
+                str(tmp_path / "src.db"),
+                "discover",
+                "--variant",
+                "4h-s4",
+                "--rung",
+                "B1",
+                "--seed",
+                "2",
+            ]
+        )
+        == 0
+    )
 
 
 @pytest.mark.parametrize("status", ["timeout", "failed"])
 def test_discover_of_an_already_recorded_non_completed_run_exits_nonzero(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
     status: str,
 ) -> None:
     """The idempotent "already recorded" path must not report success for a failed run."""
@@ -1004,18 +1227,39 @@ def test_discover_of_an_already_recorded_non_completed_run_exits_nonzero(
     _seed_runs(out, [_run_rec("4h-s4", "B1", 2, status=status, reruns=1)])
     launched: list[int] = []
     monkeypatch.setattr(layer2, "run_discovery", lambda *a, **k: launched.append(1) or {})
-    rc = budget.main([
-        *_cli(tmp_path), "discover", "--variant", "4h-s4", "--rung", "B1", "--seed", "2",
-    ])
+    rc = budget.main(
+        [
+            *_cli(tmp_path),
+            "discover",
+            "--variant",
+            "4h-s4",
+            "--rung",
+            "B1",
+            "--seed",
+            "2",
+        ]
+    )
     assert rc == budget.EXIT_RUN_NOT_COMPLETED
     assert launched == []  # nothing relaunched without --force
     assert "RUN NOT COMPLETED" in capsys.readouterr().out
 
     # a recorded completed run is still the idempotent exit 0
     _seed_runs(out, [_run_rec("4h-s4", "B1", 3, status="completed")])
-    assert budget.main([
-        *_cli(tmp_path), "discover", "--variant", "4h-s4", "--rung", "B1", "--seed", "3",
-    ]) == 0
+    assert (
+        budget.main(
+            [
+                *_cli(tmp_path),
+                "discover",
+                "--variant",
+                "4h-s4",
+                "--rung",
+                "B1",
+                "--seed",
+                "3",
+            ]
+        )
+        == 0
+    )
     assert launched == []
 
 
@@ -1030,10 +1274,14 @@ def _null_pool(tmp_path: Path, tf: str, corrs: list[float]) -> Path:
     chrom = chromosome_to_serializable(layer2.planted_chromosome())
     path = tmp_path / "o" / "scratch" / f"null-pool-{tf}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps([
-        {"seed": i, "score": float(len(corrs) - i), "corr": corr, "chromosome": chrom}
-        for i, corr in enumerate(corrs)
-    ]))
+    path.write_text(
+        json.dumps(
+            [
+                {"seed": i, "score": float(len(corrs) - i), "corr": corr, "chromosome": chrom}
+                for i, corr in enumerate(corrs)
+            ]
+        )
+    )
     return path
 
 
@@ -1069,15 +1317,9 @@ def test_report_prints_the_per_s0_run_max_corr_prereg_check(
     budget.update_state(out, seed)
     assert budget.main([*_cli(tmp_path), "report"]) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert (
-        "  s0 4h-s0 B1 seed 1: K=2 max corr 0.8000 vs C95 0.7000: ABOVE C95" in lines
-    )
-    assert (
-        "  s0 4h-s0 B1 seed 2: K=2 max corr 0.7000 vs C95 0.7000: below C95" in lines
-    )
-    assert (
-        "  s0 1d-s0 B1 seed 1: K=2 max corr 0.5000 vs C95 0.7000: below C95" in lines
-    )
+    assert "  s0 4h-s0 B1 seed 1: K=2 max corr 0.8000 vs C95 0.7000: ABOVE C95" in lines
+    assert "  s0 4h-s0 B1 seed 2: K=2 max corr 0.7000 vs C95 0.7000: below C95" in lines
+    assert "  s0 1d-s0 B1 seed 1: K=2 max corr 0.5000 vs C95 0.7000: below C95" in lines
 
     # a missing evaluated count, then a missing null pool: both degrade loudly, never crash
     degraded = tmp_path / "deg" / "o" / "budget.json"
@@ -1088,19 +1330,23 @@ def test_report_prints_the_per_s0_run_max_corr_prereg_check(
         recs2.append(rec)
     _seed_runs(degraded, recs2)
     degraded_cli = [
-        "--out", str(degraded), "--data-root", str(tmp_path / "data"),
-        "--real-db", str(tmp_path / "none.db"), "--archive", str(tmp_path / "src.db"),
+        "--out",
+        str(degraded),
+        "--data-root",
+        str(tmp_path / "data"),
+        "--real-db",
+        str(tmp_path / "none.db"),
+        "--archive",
+        str(tmp_path / "src.db"),
     ]
     assert budget.main([*degraded_cli, "report"]) == 0
     lines = capsys.readouterr().out.splitlines()
     assert any(
-        ln.startswith("  s0 4h-s0 B1 seed 1: max corr 0.8000")
-        and "no evaluated count" in ln
+        ln.startswith("  s0 4h-s0 B1 seed 1: max corr 0.8000") and "no evaluated count" in ln
         for ln in lines
     )
     assert any(
-        ln.startswith("  s0 4h-s0 B1 seed 2: max corr 0.8000")
-        and "no null pool for 4h" in ln
+        ln.startswith("  s0 4h-s0 B1 seed 2: max corr 0.8000") and "no null pool for 4h" in ln
         for ln in lines
     )
 
@@ -1111,15 +1357,27 @@ def test_report_prints_the_per_s0_run_max_corr_prereg_check(
     failed = _run_rec("4h-s0", "B1", 4, status="timeout")
     _seed_runs(skipped, [probe, failed])
     budget.update_state(
-        skipped, lambda s: s.__setitem__(
+        skipped,
+        lambda s: s.__setitem__(
             "null", {"4h": {"status": "completed", "m": 2, "reps": 5, "pool_path": str(pool_4h)}}
         ),
     )
-    assert budget.main([
-        "--out", str(skipped), "--data-root", str(tmp_path / "data"),
-        "--real-db", str(tmp_path / "none.db"), "--archive", str(tmp_path / "src.db"),
-        "report",
-    ]) == 0
+    assert (
+        budget.main(
+            [
+                "--out",
+                str(skipped),
+                "--data-root",
+                str(tmp_path / "data"),
+                "--real-db",
+                str(tmp_path / "none.db"),
+                "--archive",
+                str(tmp_path / "src.db"),
+                "report",
+            ]
+        )
+        == 0
+    )
     assert "s0 4h-s0" not in capsys.readouterr().out
 
 
@@ -1137,7 +1395,12 @@ def test_harvest_exit_3_when_a_run_used_another_dsr_rule(
     monkeypatch.setattr(
         layer2,
         "harvest_run",
-        lambda db, rid: {"r31": {"ok": True}, "dsr_trials": trials, "candidates": [], "champions": 0},
+        lambda db, rid: {
+            "r31": {"ok": True},
+            "dsr_trials": trials,
+            "candidates": [],
+            "champions": 0,
+        },
     )
     monkeypatch.setattr(layer2, "_harvest_one", lambda *a, **k: True)
     assert budget.main([*_cli(tmp_path), "harvest", "--tf", "4h"]) == 3
@@ -1159,7 +1422,9 @@ def test_status_reports_gen_eta_complete_and_starting(
     )
     for name, lines in {"4h-s2-B1-seed1": [gen], "4h-s2-B1-seed2": [gen, done]}.items():
         (runs / name / "logs").mkdir(parents=True)
-        (runs / name / "logs" / "discovery_1_20261019_213000.log").write_text("\n".join(lines) + "\n")
+        (runs / name / "logs" / "discovery_1_20261019_213000.log").write_text(
+            "\n".join(lines) + "\n"
+        )
     (runs / "1d-s3-B2-seed1").mkdir(parents=True)
     assert budget.main([*_cli(tmp_path), "status"]) == 0
     out = capsys.readouterr().out.splitlines()
@@ -1185,8 +1450,9 @@ def test_rebuild_drift_edges_fail_closed() -> None:
     assert layer2.rebuild_drift(rec, {"train_S": None}, ("train_S",)) != []
     assert layer2.rebuild_drift({}, {"train_S": 2.5}, ("train_S",)) != []
     assert layer2.rebuild_drift(rec, {"train_S": float("nan")}, ("train_S",)) != []
-    both = layer2.rebuild_drift({"train_S": 5.0, "full_S": 2.0}, {"train_S": 5.0, "full_S": 1.0},
-                                ("train_S", "full_S"))
+    both = layer2.rebuild_drift(
+        {"train_S": 5.0, "full_S": 2.0}, {"train_S": 5.0, "full_S": 1.0}, ("train_S", "full_S")
+    )
     assert both == ["full_S: recorded 2.0 rebuilt 1.0"]
 
 
@@ -1216,7 +1482,9 @@ def test_build_refuses_a_rebuilt_plant_whose_train_s_drifted(
     assert (v["accepted"], v["build_id"]) == (acc, build_id)  # recorded build untouched
     assert budget.run_key("4h-s4", "B2", 1) in state["runs"]  # its runs too
     assert not Path(acc["root"]).exists()  # the drifted copy is not left behind
-    assert "train_S: recorded 4.0051275240499375 rebuilt 0.4754906810539179" in capsys.readouterr().out
+    assert (
+        "train_S: recorded 4.0051275240499375 rebuilt 0.4754906810539179" in capsys.readouterr().out
+    )
 
     # within 10%: the rebuild becomes the accepted build (runs of the old copy dropped)
     deltas = _stub_builder(monkeypatch, trains=[4.2])
@@ -1241,12 +1509,21 @@ def test_build_refuses_a_rebuilt_plant_whose_train_s_drifted(
 
 def _seed_accepted(out: Path, variant: str, root: Path, train_s: object) -> dict[str, Any]:
     """A recorded accepted build whose copy at ``root`` is gone (the guarded-rebuild case)."""
-    acc = {"k": 1, "delta": 1e-5, "root": str(root), "train_S": train_s, "full_S": 2.0,
-           "accepted": True}
+    acc = {
+        "k": 1,
+        "delta": 1e-5,
+        "root": str(root),
+        "train_S": train_s,
+        "full_S": 2.0,
+        "accepted": True,
+    }
 
     def seed(s: dict[str, Any]) -> None:
         s.setdefault("variants", {})[variant] = {
-            "accepted": acc, "status": "accepted", "build_id": "historical", "builds": [acc],
+            "accepted": acc,
+            "status": "accepted",
+            "build_id": "historical",
+            "builds": [acc],
         }
 
     budget.update_state(out, seed)
@@ -1254,7 +1531,11 @@ def _seed_accepted(out: Path, variant: str, root: Path, train_s: object) -> dict
 
 
 def _rebuild_stub(
-    monkeypatch: pytest.MonkeyPatch, train: float, ratio: float = 1.2, *, fail: bool = False,
+    monkeypatch: pytest.MonkeyPatch,
+    train: float,
+    ratio: float = 1.2,
+    *,
+    fail: bool = False,
     during: Any = None,
 ) -> list[Path]:
     """Every attempted build returns the same numbers (or fails after writing its catalog);
@@ -1262,8 +1543,14 @@ def _rebuild_stub(
     calls: list[Path] = []
 
     def fake_build(
-        variant: str, k: int, delta: float, _klines: object, _archive: Path, scratch: Path,
-        _db: Path, profile: layer2.Profile = layer2.P4H,
+        variant: str,
+        k: int,
+        delta: float,
+        _klines: object,
+        _archive: Path,
+        scratch: Path,
+        _db: Path,
+        profile: layer2.Profile = layer2.P4H,
     ) -> dict[str, Any]:
         calls.append(scratch)
         root = budget.build_root(scratch, variant, k)
@@ -1273,9 +1560,19 @@ def _rebuild_stub(
         if fail:
             msg = "injected failure after catalog publication"
             raise layer2.Layer2Error(msg)
-        return {"k": k, "root": str(root), "delta": delta, "kappa": 0.0, "l_end": 0.0,
-                "converged": True, "n_triggers": 9, "price_ratio": ratio,
-                "price_ratio_gt_3": ratio > 3.0, "train_S": train, "full_S": 2.0}
+        return {
+            "k": k,
+            "root": str(root),
+            "delta": delta,
+            "kappa": 0.0,
+            "l_end": 0.0,
+            "converged": True,
+            "n_triggers": 9,
+            "price_ratio": ratio,
+            "price_ratio_gt_3": ratio > 3.0,
+            "train_S": train,
+            "full_S": 2.0,
+        }
 
     monkeypatch.setattr(layer2, "build_one", fake_build)
     monkeypatch.setattr(budget.plant, "load_klines", lambda *_a, **_kw: object())
@@ -1325,7 +1622,9 @@ def test_non_finite_baseline_is_refused_on_every_attempt(
     assert budget.main(args) == 3
     v = budget.load_state(out)["variants"]["4h-s4"]
     assert v["status"] == "drifted" and (v["accepted"], v["build_id"]) == (
-        before["accepted"], "historical")
+        before["accepted"],
+        "historical",
+    )
     assert budget.main(args) == 3
     assert len(calls) == 2 and _catalogs(tmp_path) == []
 
@@ -1367,8 +1666,9 @@ def test_rebuild_never_overwrites_a_concurrently_changed_accepted_build(
     newer = {"k": 2, "delta": 2e-5, "root": "elsewhere", "train_S": 3.9}
 
     def concurrent_force() -> None:
-        budget.update_state(out, lambda s: s["variants"]["4h-s4"].update(
-            accepted=newer, build_id="concurrent"))
+        budget.update_state(
+            out, lambda s: s["variants"]["4h-s4"].update(accepted=newer, build_id="concurrent")
+        )
 
     _rebuild_stub(monkeypatch, 4.0, during=concurrent_force)
     assert budget.main([*_cli(tmp_path), "build", "--variant", "4h-s4"]) == 2
@@ -1427,8 +1727,14 @@ budget.plant.load_klines = lambda *a, **kw: object()
 budget.main({[*_cli(tmp_path), "build", "--variant", "4h-s4"]!r})
 """
     env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(power.parents[2]), str(power)])}
-    proc = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True,
-                          text=True, timeout=300, check=False)
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
     assert proc.returncode == -signal.SIGKILL, proc.stderr
     assert out.read_bytes() == before
     assert not root.exists()

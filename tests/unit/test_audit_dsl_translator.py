@@ -225,7 +225,10 @@ def test_registry_param_spellings_not_dropped() -> None:
     )
     ind = translate_dsl_config(cfg, strategy_name="t_params")["indicators"]
     assert ind["macd"] == {
-        "type": "MACD", "fast_period": 8, "slow_period": 30, "signal_period": 5,
+        "type": "MACD",
+        "fast_period": 8,
+        "slow_period": 30,
+        "signal_period": 5,
     }
     assert ind["stoch"] == {"type": "STOCH", "period": 10, "d_period": 4}
 
@@ -257,7 +260,9 @@ def test_native_bbands_ref_wins_over_bb_alias(native_first: bool) -> None:
     assert out["indicators"]["bbands_20"]["type"] == out["indicators"]["bb_20"]["type"] == "BBANDS"
     # the native one is the daily indicator iff it was configured first (timeframe tags the pair)
     tf = {n: c.get("timeframe") for n, c in out["indicators"].items()}
-    assert tf == ({"bbands_20": "1d", "bb_20": None} if native_first else {"bb_20": "1d", "bbands_20": None})
+    assert tf == (
+        {"bbands_20": "1d", "bb_20": None} if native_first else {"bb_20": "1d", "bbands_20": None}
+    )
 
 
 def test_bb_alias_still_answers_to_bbands_when_no_native_bbands() -> None:
@@ -381,8 +386,10 @@ def test_numeric_operand_args_compare_numerically(alpha: float, operand: str) ->
 
 
 def test_numeric_operand_args_do_not_merge_different_values() -> None:
-    cfg = _ambig_cfg([{"type": "ADAPTIVE_RSI", "params": {"period": 14, "alpha": 0.000001}}],
-                     "ADAPTIVE_RSI(14,0.00001)")
+    cfg = _ambig_cfg(
+        [{"type": "ADAPTIVE_RSI", "params": {"period": 14, "alpha": 0.000001}}],
+        "ADAPTIVE_RSI(14,0.00001)",
+    )
     out = translate_dsl_config(cfg, strategy_name="t_sci2")
     # different value: stays unresolved text, never silently mapped to the configured indicator
     assert out["entry_conditions"]["long"] == ["close > ADAPTIVE_RSI(14,0.00001)"]
@@ -464,4 +471,3 @@ def test_absent_or_null_new_fields_stay_out_of_the_output() -> None:
     )
     assert _TVP_KEYS.isdisjoint(nulled)
     assert nulled == plain
-

@@ -92,9 +92,7 @@ def _strategy(symbol: str, indicator: str, params: dict[str, object], cap: int) 
     module = StrategyCompiler().compile_to_module(dsl)
     cls = next(v for k, v in vars(module).items() if k.endswith("Strategy") and k != "Strategy")
     config_cls = getattr(module, cls.__name__.removesuffix("Strategy") + "Config")
-    harness = type(
-        "Wired", (cls,), {"config": config_cls(instrument_id=_instrument_id(symbol))}
-    )
+    harness = type("Wired", (cls,), {"config": config_cls(instrument_id=_instrument_id(symbol))})
     inst: Any = harness.__new__(harness)
     effective = {k: v for k, v in indicators["ind"].items() if k != "type"}
     inst._pta_values = {}
@@ -114,7 +112,10 @@ def _bars(symbol: str, start: str, end: str) -> list[Bar]:
 
 def _frame(bars: list[Bar]) -> pd.DataFrame:
     return pd.DataFrame(
-        {c: [float(getattr(b, c)) for b in bars] for c in ("open", "high", "low", "close", "volume")}
+        {
+            c: [float(getattr(b, c)) for b in bars]
+            for c in ("open", "high", "low", "close", "volume")
+        }
     )
 
 

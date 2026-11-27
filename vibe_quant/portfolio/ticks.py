@@ -271,9 +271,7 @@ def release_tick(
     return first
 
 
-def _settlements(
-    calc: FundingCalculator, symbol: str
-) -> tuple[tuple[int, ...], tuple[float, ...]]:
+def _settlements(calc: FundingCalculator, symbol: str) -> tuple[tuple[int, ...], tuple[float, ...]]:
     """The calculator's archived ``(times_ns, rates)`` for a symbol."""
     return calc.settlements(symbol)
 
@@ -377,12 +375,8 @@ def load_carry_inputs(
     vol_boundaries = range(
         spec.start_ns - spec.vol_lookback_days * DAY_NS, spec.end_ns + DAY_NS, DAY_NS
     )
-    vol_closes: dict[str, dict[int, float]] | None = (
-        {} if spec.weighting == "inverse_vol" else None
-    )
-    quote_volume: dict[str, dict[int, float]] | None = (
-        None if spec.min_quote_volume is None else {}
-    )
+    vol_closes: dict[str, dict[int, float]] | None = {} if spec.weighting == "inverse_vol" else None
+    quote_volume: dict[str, dict[int, float]] | None = None if spec.min_quote_volume is None else {}
     trend = spec.signal == "trend"
     closes: dict[str, dict[int, float]] | None = {} if trend else None
     listings: dict[str, int] | None = {} if trend else None

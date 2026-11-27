@@ -234,7 +234,10 @@ def test_screening_and_validation_drawdown_agree(
 ) -> None:
     bt_result = excursion_engine.get_result()
     runner = NTScreeningRunner(
-        dsl_dict={}, symbols=["BTCUSDT"], start_date="", end_date="",
+        dsl_dict={},
+        symbols=["BTCUSDT"],
+        start_date="",
+        end_date="",
         funding_archive_path=str(empty_archive(tmp_path / "empty.db")),
     )
     runner._all_timeframes = {"1m"}
@@ -243,7 +246,12 @@ def test_screening_and_validation_drawdown_agree(
     # engine slippage "on" disables post-fill SPEC slippage: same costs as screening
     venue.fill_config = SimpleNamespace(impact_coefficient=0.1, prob_slippage=1.0)  # type: ignore[assignment]
     validation = extract_results(
-        1, "x", bt_result, excursion_engine, venue, primary_timeframe="1m",
+        1,
+        "x",
+        bt_result,
+        excursion_engine,
+        venue,
+        primary_timeframe="1m",
         execution_timeframe="1m",
     )
     assert screening.max_drawdown == pytest.approx(0.200_5, abs=1e-3)

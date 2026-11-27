@@ -33,8 +33,9 @@ def _make_bars(prices: list[float], spread: float = 0.5) -> list[OHLCBar]:
 def _daily_bars(n: int, price: float = 100.0) -> list[OHLCBar]:
     """One bar per UTC day (ts in ms) so daily-return Sharpe has a series."""
     return [
-        OHLCBar(ts=1_735_689_600_000 + i * 86_400_000, open=price, high=price, low=price,
-                close=price)
+        OHLCBar(
+            ts=1_735_689_600_000 + i * 86_400_000, open=price, high=price, low=price, close=price
+        )
         for i in range(n)
     ]
 
@@ -98,11 +99,35 @@ class TestComputeMetrics:
         from vibe_quant.validation.random_baseline import TradeResult
 
         trades = [
-            TradeResult(entry_idx=i, exit_idx=i + 1, entry_price=100, exit_price=95, pnl_pct=4.0 + i * 0.1, hit_tp=True, hit_sl=False)
+            TradeResult(
+                entry_idx=i,
+                exit_idx=i + 1,
+                entry_price=100,
+                exit_price=95,
+                pnl_pct=4.0 + i * 0.1,
+                hit_tp=True,
+                hit_sl=False,
+            )
             for i in range(18)
         ] + [
-            TradeResult(entry_idx=18, exit_idx=19, entry_price=100, exit_price=101, pnl_pct=-1.1, hit_tp=False, hit_sl=True),
-            TradeResult(entry_idx=20, exit_idx=21, entry_price=100, exit_price=101, pnl_pct=-1.1, hit_tp=False, hit_sl=True),
+            TradeResult(
+                entry_idx=18,
+                exit_idx=19,
+                entry_price=100,
+                exit_price=101,
+                pnl_pct=-1.1,
+                hit_tp=False,
+                hit_sl=True,
+            ),
+            TradeResult(
+                entry_idx=20,
+                exit_idx=21,
+                entry_price=100,
+                exit_price=101,
+                pnl_pct=-1.1,
+                hit_tp=False,
+                hit_sl=True,
+            ),
         ]
         metrics = _compute_metrics(trades, taker_fee=0.0005, bars=_daily_bars(30))
         assert metrics.win_rate == 0.9
@@ -121,7 +146,15 @@ class TestComputeMetrics:
         from vibe_quant.validation.random_baseline import TradeResult
 
         trades = [
-            TradeResult(entry_idx=i, exit_idx=i + 1, entry_price=100, exit_price=95, pnl_pct=5.0, hit_tp=True, hit_sl=False)
+            TradeResult(
+                entry_idx=i,
+                exit_idx=i + 1,
+                entry_price=100,
+                exit_price=95,
+                pnl_pct=5.0,
+                hit_tp=True,
+                hit_sl=False,
+            )
             for i in range(10)
         ]
         metrics = _compute_metrics(trades, taker_fee=0.0, bars=_daily_bars(15))
@@ -176,8 +209,15 @@ class TestAnnualizedSharpeAndPValue:
         bars = _daily_bars(10)
         pnls = [2.0, -1.0, 3.0, -0.5]
         trades = [
-            TradeResult(entry_idx=2 * i, exit_idx=2 * i + 1, entry_price=100, exit_price=100,
-                        pnl_pct=p, hit_tp=p > 0, hit_sl=p < 0)
+            TradeResult(
+                entry_idx=2 * i,
+                exit_idx=2 * i + 1,
+                entry_price=100,
+                exit_price=100,
+                pnl_pct=p,
+                hit_tp=p > 0,
+                hit_sl=p < 0,
+            )
             for i, p in enumerate(pnls)
         ]
         metrics = _compute_metrics(trades, taker_fee=0.0, bars=bars)
@@ -197,10 +237,14 @@ class TestAnnualizedSharpeAndPValue:
     def test_p_value(self):
         rng = np.random.default_rng(1)
         prices = 100.0 + np.cumsum(rng.normal(-0.01, 0.1, 3000))
-        bars = [OHLCBar(ts=i * 3_600_000, open=p, high=p + 0.2, low=p - 0.2, close=p)
-                for i, p in enumerate(np.maximum(prices, 50.0))]
+        bars = [
+            OHLCBar(ts=i * 3_600_000, open=p, high=p + 0.2, low=p - 0.2, close=p)
+            for i, p in enumerate(np.maximum(prices, 50.0))
+        ]
         result = run_random_short_baseline(
-            bars, BaselineConfig(sl_pct=1.0, tp_pct=2.0, target_trades=30), n_simulations=40,
+            bars,
+            BaselineConfig(sl_pct=1.0, tp_pct=2.0, target_trades=30),
+            n_simulations=40,
             seed=3,
         )
         sharpes = sorted(m.sharpe for m in result.metrics)

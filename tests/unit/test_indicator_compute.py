@@ -353,9 +353,7 @@ def test_chart_overlay_equals_runtime_stream_bar_for_bar(
     df = _frame_from_bars(bars)
 
     _, cls = compile_indicators({"ind": {"type": indicator_type, **params}})
-    snapshots = run_stream(
-        cls, bars, memo=False, specs={"ind": (indicator_type, params, "1h")}
-    )
+    snapshots = run_stream(cls, bars, memo=False, specs={"ind": (indicator_type, params, "1h")})
     runtime = np.array([snap.get("ind", np.nan) for snap in snapshots], dtype=np.float64)
 
     out = compute_indicators(df, [{"type": indicator_type, **params}])
@@ -420,9 +418,7 @@ def test_hardcoded_pta_overlay_equals_runtime_stream_bar_for_bar(
     outputs = spec.output_names
 
     _, cls = compile_indicators({"ind": {"type": indicator_type, **params}})
-    snapshots = run_stream(
-        cls, bars, memo=False, specs={"ind": (indicator_type, params, "1h")}
-    )
+    snapshots = run_stream(cls, bars, memo=False, specs={"ind": (indicator_type, params, "1h")})
 
     out = compute_indicators(df, [{"type": indicator_type, **params}])
     assert [s.output_name for s in out] == list(outputs), (
@@ -461,6 +457,7 @@ def _pta_candidates() -> list[str]:
 
 
 _PTA_CANDIDATES = _pta_candidates()
+
 
 def test_purity_candidates_are_not_vacuous() -> None:
     """A candidate list that silently empties would run both purity checks zero times."""
@@ -670,9 +667,8 @@ def test_chart_reports_alpha_floor_refusal_beside_valid_series(
     assert arsi.indicator_type == "ADAPTIVE_RSI"
     assert arsi.unsupported is True
     assert arsi.data == []
-    assert (
-        f"ADAPTIVE_RSI alpha must be between 0.7 and 1.0 (got {shown})"
-        in (arsi.unsupported_reason or "")
+    assert f"ADAPTIVE_RSI alpha must be between 0.7 and 1.0 (got {shown})" in (
+        arsi.unsupported_reason or ""
     )
     assert rsi.indicator_type == "RSI"
     assert len(rsi.data) == 1500

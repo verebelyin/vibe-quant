@@ -75,7 +75,10 @@ def _git_env() -> dict[str, str]:
 
 def _git(repo: Path, *args: str) -> None:
     subprocess.run(
-        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True,
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+        check=True,
         env=_git_env(),
     )
 

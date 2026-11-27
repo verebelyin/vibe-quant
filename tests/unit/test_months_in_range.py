@@ -47,9 +47,7 @@ def test_months_in_range_contract_rows(end: datetime, expected_last: tuple[int, 
 
 def test_naive_endpoints_are_supported() -> None:
     end = datetime(2025, 6, 30, 23, 59)
-    assert get_months_in_range(datetime(2025, 1, 1), end, now=ROW_NOW) == _months_through(
-        (2025, 6)
-    )
+    assert get_months_in_range(datetime(2025, 1, 1), end, now=ROW_NOW) == _months_through((2025, 6))
 
 
 def test_start_after_end_is_empty() -> None:

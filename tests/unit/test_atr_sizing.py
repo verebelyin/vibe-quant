@@ -30,16 +30,21 @@ class _ATR:
         self.initialized = initialized
 
 
-def _atr_sizer(
-    balance: float, *, atr: _ATR | None, max_pos: float = 0.5
-) -> types.SimpleNamespace:
+def _atr_sizer(balance: float, *, atr: _ATR | None, max_pos: float = 0.5) -> types.SimpleNamespace:
     cfg = types.SimpleNamespace(
-        risk_per_trade=0.02, max_position_pct=max_pos, stop_loss_type="fixed_pct",
-        stop_loss_percent=1.0, sizing_mode="atr", sizing_atr_period=14,
+        risk_per_trade=0.02,
+        max_position_pct=max_pos,
+        stop_loss_type="fixed_pct",
+        stop_loss_percent=1.0,
+        sizing_mode="atr",
+        sizing_atr_period=14,
         sizing_atr_multiplier=2.0,
     )
     return _fake(
-        config=cfg, instrument=_BTC, instrument_id=_BTC.id, _sizing_atr=atr,
+        config=cfg,
+        instrument=_BTC,
+        instrument_id=_BTC.id,
+        _sizing_atr=atr,
         cache=types.SimpleNamespace(account_for_venue=lambda venue: _Acct({USDT: balance})),
     )
 
@@ -101,8 +106,12 @@ def test_zero_atr_skips_the_entry_never_a_fallback_size() -> None:
 # (the first is 0). Always-long 1h strategy, 50% SL / 10% TP (only a spike reaches the TP).
 # risk 0.05 of 1000 = 50; cap 0.5 * 1000 / 100 = 5 BTC.
 
-_ATR_SIZING = {"max_position_pct": 0.5, "risk_per_trade": 0.05, "sizing_mode": "atr",
-               "sizing_atr_period": 5}
+_ATR_SIZING = {
+    "max_position_pct": 0.5,
+    "risk_per_trade": 0.05,
+    "sizing_mode": "atr",
+    "sizing_atr_period": 5,
+}
 
 
 def _oscillating(spike_minute: int | None = None) -> Any:
@@ -114,13 +123,22 @@ def _oscillating(spike_minute: int | None = None) -> Any:
     return price
 
 
-def _first_buy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sizing: dict[str, Any],
-               spike_minute: int | None = None) -> tuple[tuple[Any, ...], dict[str, int]]:
-    catalog = _write_catalog(tmp_path / f"cat-{spike_minute}", _oscillating(spike_minute),
-                             n_min=2 * 1440)
+def _first_buy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sizing: dict[str, Any],
+    spike_minute: int | None = None,
+) -> tuple[tuple[Any, ...], dict[str, int]]:
+    catalog = _write_catalog(
+        tmp_path / f"cat-{spike_minute}", _oscillating(spike_minute), n_min=2 * 1440
+    )
     run = run_screening(
-        monkeypatch, catalog, _archive(tmp_path, rate=0.0), _dsl(),
-        launch=LaunchSettings(sizing=SizingSettings.from_params(sizing)), end="2024-01-03",
+        monkeypatch,
+        catalog,
+        _archive(tmp_path, rate=0.0),
+        _dsl(),
+        launch=LaunchSettings(sizing=SizingSettings.from_params(sizing)),
+        end="2024-01-03",
     )
     buys = [f for f in run.fills if f[1] == "BUY"]
     assert buys
@@ -138,8 +156,9 @@ def test_screening_atr_warmup_skips_entries_then_sizes_on_atr(
     is not ready on the 03:00 and 04:00 dispatches (2 skips); the 05:00 dispatch sizes on
     Wilder ATR(5) of hours 0-4 (alpha 1/5 from TR 0, 10, 10, 10, 10) = 0, 2, 3.6, 4.88,
     5.904 -> 50 / (2 * 5.904) = 4.234 BTC."""
-    risk, risk_skips = _first_buy(tmp_path, monkeypatch, {"max_position_pct": 0.5,
-                                                          "risk_per_trade": 0.05})
+    risk, risk_skips = _first_buy(
+        tmp_path, monkeypatch, {"max_position_pct": 0.5, "risk_per_trade": 0.05}
+    )
     assert (risk[2], risk[4]) == (1.0, _DAY0_NS + 181 * _MINUTE_NS - 1_000_000)
     assert risk_skips == {}
     atr, atr_skips = _first_buy(tmp_path, monkeypatch, _ATR_SIZING)
@@ -179,8 +198,12 @@ def test_validation_sizes_the_atr_entry_like_screening(
     state = StateManager(db)
     run_id = state.create_backtest_run(
         strategy_id=state.create_strategy(name=str(dsl["name"]), dsl_config=dsl),
-        run_mode="validation", symbols=["BTCUSDT"], timeframe="1h",
-        start_date="2024-01-01", end_date="2024-01-03", parameters=dict(_ATR_SIZING),
+        run_mode="validation",
+        symbols=["BTCUSDT"],
+        timeframe="1h",
+        start_date="2024-01-01",
+        end_date="2024-01-03",
+        parameters=dict(_ATR_SIZING),
     )
     state.close()
     buys: list[tuple[float, int]] = []
@@ -189,7 +212,8 @@ def test_validation_sizes_the_atr_entry_like_screening(
     def spy(self: ValidationRunner, **kwargs: Any) -> Any:
         for order in kwargs["engine"].kernel.cache.orders():
             buys.extend(
-                (float(ev.last_qty), int(ev.ts_event)) for ev in order.events
+                (float(ev.last_qty), int(ev.ts_event))
+                for ev in order.events
                 if isinstance(ev, OrderFilled) and ev.order_side.name == "BUY"
             )
         return orig(self, **kwargs)
@@ -200,8 +224,10 @@ def test_validation_sizes_the_atr_entry_like_screening(
         runner.run(run_id=run_id)
     finally:
         runner.close()
-    assert sorted(buys, key=lambda b: b[1])[0] == (screening[2], screening[4]) == (
-        4.234, _DAY0_NS + 301 * _MINUTE_NS - 1_000_000
+    assert (
+        sorted(buys, key=lambda b: b[1])[0]
+        == (screening[2], screening[4])
+        == (4.234, _DAY0_NS + 301 * _MINUTE_NS - 1_000_000)
     )
 
 
@@ -249,8 +275,12 @@ def test_an_indicator_whose_field_collides_with_a_sizing_setting_is_refused() ->
     from vibe_quant.dsl.compiler import CompilerError, StrategyCompiler
     from vibe_quant.dsl.parser import validate_strategy_dict
 
-    dsl = {**_dsl(), "name": "collide", "indicators": {"sizing_atr": {"type": "EMA", "period": 3}},
-           "entry_conditions": {"long": ["sizing_atr > 0"]}}
+    dsl = {
+        **_dsl(),
+        "name": "collide",
+        "indicators": {"sizing_atr": {"type": "EMA", "period": 3}},
+        "entry_conditions": {"long": ["sizing_atr > 0"]},
+    }
     with pytest.raises(CompilerError) as excinfo:
         StrategyCompiler().compile(validate_strategy_dict(dsl))
     assert str(excinfo.value) == (

@@ -47,7 +47,10 @@ def test_selection_follows_the_triggers(tmp_path: Path) -> None:
         "test_discovery_liquidation",
         "test_swarm_check_loaders",
     ]
-    assert picked("scripts/research/rsi_2026.py") == ["test_script_exec_bits", "test_scripts_import_smoke"]
+    assert picked("scripts/research/rsi_2026.py") == [
+        "test_script_exec_bits",
+        "test_scripts_import_smoke",
+    ]
     # its own file and the gate itself always trigger; None (no diff given) = all
     assert picked("tests/unit/test_script_exec_bits.py") == ["test_script_exec_bits"]
     assert len(picked("scripts/agents/swarm_check.py")) == len(swarm_check.POLICY_TESTS)

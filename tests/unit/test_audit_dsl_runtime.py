@@ -202,7 +202,10 @@ class TestPositionModeReachesCodegen:
         return strat.opened_sides
 
     def test_reverse_opens_the_other_side(self) -> None:
-        assert self._opened_sides(position_mode="reverse") == [PositionSide.LONG, PositionSide.SHORT]
+        assert self._opened_sides(position_mode="reverse") == [
+            PositionSide.LONG,
+            PositionSide.SHORT,
+        ]
 
     @pytest.mark.parametrize("mode", [None, "absent"])
     def test_without_the_key_the_long_stays_long(self, mode: str | None) -> None:
@@ -239,7 +242,9 @@ class TestSignalLevelReachesCodegen:
                     self.pair = sorted(
                         (
                             o.order_type.name,
-                            float(o.trigger_price) if o.order_type == OrderType.STOP_MARKET else float(o.price),
+                            float(o.trigger_price)
+                            if o.order_type == OrderType.STOP_MARKET
+                            else float(o.price),
                         )
                         for o in self.cache.orders_open(instrument_id=self.instrument_id)
                         if o.is_reduce_only
@@ -363,7 +368,9 @@ _NS: dict[str, Any] = {
 }
 exec("\n".join(ORDER_METHODS_LINES), _NS)  # noqa: S102
 
-_BTC = TestInstrumentProvider.btcusdt_perp_binance()  # size inc 0.001, min qty 0.001, min notional 10
+_BTC = (
+    TestInstrumentProvider.btcusdt_perp_binance()
+)  # size inc 0.001, min qty 0.001, min notional 10
 
 
 class _Log:
@@ -439,7 +446,9 @@ class TestSizing:
     def test_above_min_notional_sizes(self) -> None:
         cheap = types.SimpleNamespace(close=Price.from_str("5000.0"))
         # equity 30 -> cap 15/5000 = 0.003 BTC, notional 15 >= 10 so the size survives
-        assert _sizer(_Acct({USDT: 30.0}))._calculate_position_size(cheap, True) == Quantity.from_str("0.003")
+        assert _sizer(_Acct({USDT: 30.0}))._calculate_position_size(
+            cheap, True
+        ) == Quantity.from_str("0.003")
 
     def test_size_is_the_min_of_risk_and_cap(self) -> None:
         """S16/S17: ``min(risk, cap)`` from both sides.
@@ -516,7 +525,9 @@ def _trail_fake() -> tuple[types.SimpleNamespace, list[dict[str, Any]]]:
         _get_indicator_value=lambda n: 2.0,
         instrument_id=iid,
         instrument=types.SimpleNamespace(make_price=lambda p: p),
-        cache=types.SimpleNamespace(orders_open=lambda venue: [], positions_open=lambda venue: [pos]),
+        cache=types.SimpleNamespace(
+            orders_open=lambda venue: [], positions_open=lambda venue: [pos]
+        ),
         order_factory=types.SimpleNamespace(stop_market=lambda **kw: kw, limit=lambda **kw: kw),
         submit_order=submitted.append,
         cancel_order=lambda o: None,
@@ -556,7 +567,9 @@ class TestTrailingStop:
 
 
 class TestRestartRecovery:
-    def _fake_with_position(self, protective: list[Any], ready: bool, sl_type: str = "fixed_pct") -> Any:
+    def _fake_with_position(
+        self, protective: list[Any], ready: bool, sl_type: str = "fixed_pct"
+    ) -> Any:
         submitted: list[dict[str, Any]] = []
         iid = _BTC.id
         pos = types.SimpleNamespace(
@@ -587,7 +600,9 @@ class TestRestartRecovery:
             _get_indicator_value=lambda n: 100.0,
             cache=types.SimpleNamespace(
                 positions_open=lambda venue=None, instrument_id=None: [pos],
-                orders_open=lambda instrument_id=None, strategy_id=None, venue=None: list(protective),
+                orders_open=lambda instrument_id=None, strategy_id=None, venue=None: list(
+                    protective
+                ),
                 orders_inflight=lambda instrument_id=None, strategy_id=None: [],
             ),
             order_factory=types.SimpleNamespace(stop_market=lambda **kw: kw, limit=lambda **kw: kw),
@@ -611,7 +626,9 @@ class TestRestartRecovery:
         assert fake._position_open and fake._position_side == OrderSide.BUY
         prices = sorted(float(o.get("trigger_price", o.get("price"))) for o in fake.submitted)
         assert prices == [59400.0, 61200.0]  # SL -1%, TP +2% on avg_px_open
-        assert all(o["quantity"] == Quantity.from_str("0.010") and o["reduce_only"] for o in fake.submitted)
+        assert all(
+            o["quantity"] == Quantity.from_str("0.010") and o["reduce_only"] for o in fake.submitted
+        )
         assert not fake._rearm_protection
 
     def test_atr_levels_wait_for_indicators(self) -> None:

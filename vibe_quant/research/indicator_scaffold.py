@@ -259,9 +259,7 @@ def proposed_to_spec_args(proposed: dict[str, Any]) -> IndicatorSpecArgs:
     name = normalize_name(proposed.get("name"))
     display = proposed.get("display_name")
     desc = proposed.get("description")
-    defaults, schema, ranges, provenance = _map_parameters(
-        proposed.get("parameters")
-    )
+    defaults, schema, ranges, provenance = _map_parameters(proposed.get("parameters"))
     threshold_range = _map_output_range(proposed.get("output_range"))
     output_names = _map_outputs(proposed.get("outputs"))
 
@@ -303,9 +301,7 @@ CODEGEN_MODEL = os.getenv("VQ_CODEGEN_MODEL", "claude-sonnet-5")
 # constant evaluated at function call time) so tests can monkeypatch
 # ``indicator_scaffold.PLUGINS_DIR`` to a tmp_path without touching the
 # real plugins directory.
-PLUGINS_DIR: Path = (
-    Path(__file__).resolve().parent.parent / "dsl" / "plugins"
-)
+PLUGINS_DIR: Path = Path(__file__).resolve().parent.parent / "dsl" / "plugins"
 
 # Banned top-level identifiers / call names. ``ast.walk`` over the body
 # catches them no matter where they're hidden (inside a string-only
@@ -330,9 +326,7 @@ class CodegenError(Exception):
         self.detail = detail
 
 
-def _build_codegen_prompt(
-    spec: IndicatorSpecArgs, formula: str, source_quote: str | None
-) -> str:
+def _build_codegen_prompt(spec: IndicatorSpecArgs, formula: str, source_quote: str | None) -> str:
     """Build the locked-down prompt for claude-p compute_fn synthesis.
 
     The prompt has three jobs: pin the function signature, ban imports
@@ -383,9 +377,7 @@ def _build_codegen_prompt(
     )
 
 
-def _run_claude_codegen(
-    prompt: str, *, timeout_seconds: int = CODEGEN_TIMEOUT_SECONDS
-) -> str:
+def _run_claude_codegen(prompt: str, *, timeout_seconds: int = CODEGEN_TIMEOUT_SECONDS) -> str:
     """Shell out to ``claude -p --output-format json`` for a compute_fn body.
 
     Returns the unwrapped ``result`` text. Raises ``CodegenError`` for
@@ -412,9 +404,7 @@ def _run_claude_codegen(
     except subprocess.TimeoutExpired as e:
         raise CodegenError("timeout", f"{timeout_seconds}s") from e
     if proc.returncode != 0:
-        raise CodegenError(
-            "claude_exit", f"rc={proc.returncode} stderr={proc.stderr[:200]}"
-        )
+        raise CodegenError("claude_exit", f"rc={proc.returncode} stderr={proc.stderr[:200]}")
     raw = proc.stdout
     try:
         outer = json.loads(raw)
@@ -438,7 +428,7 @@ def _strip_code_fence(text: str) -> str:
         return text
     body = s[first_nl + 1 :]
     if body.endswith("```"):
-        body = body[: -3]
+        body = body[:-3]
     return body.strip()
 
 
@@ -516,9 +506,9 @@ def _strip_inner_imports_and_detect_np(body: str) -> tuple[str, bool]:
     func = tree.body[0]
     if not isinstance(func, ast.FunctionDef):
         return body, False
-    func.body = [
-        s for s in func.body if not isinstance(s, (ast.Import, ast.ImportFrom))
-    ] or [ast.Pass()]
+    func.body = [s for s in func.body if not isinstance(s, (ast.Import, ast.ImportFrom))] or [
+        ast.Pass()
+    ]
     uses_np = any(
         isinstance(node, ast.Name) and node.id == "np"
         for stmt in func.body
@@ -564,31 +554,22 @@ def render_plugin_file(
     ts = (now or datetime.now(UTC)).isoformat(timespec="seconds")
     ranges_line = (
         ", ".join(
-            f"{k}={spec.range_provenance.get(k, 'unknown')}"
-            for k in sorted(spec.param_ranges)
+            f"{k}={spec.range_provenance.get(k, 'unknown')}" for k in sorted(spec.param_ranges)
         )
         or "(no GA ranges)"
     )
 
     defaults_src = (
         "{"
-        + ", ".join(
-            f"{k!r}: {_format_literal(v)}" for k, v in spec.default_params.items()
-        )
+        + ", ".join(f"{k!r}: {_format_literal(v)}" for k, v in spec.default_params.items())
         + "}"
     )
     schema_src = (
-        "{"
-        + ", ".join(
-            f"{k!r}: {_format_type(t)}" for k, t in spec.param_schema.items()
-        )
-        + "}"
+        "{" + ", ".join(f"{k!r}: {_format_type(t)}" for k, t in spec.param_schema.items()) + "}"
     )
     ranges_src = (
         "{"
-        + ", ".join(
-            f"{k!r}: ({lo!r}, {hi!r})" for k, (lo, hi) in spec.param_ranges.items()
-        )
+        + ", ".join(f"{k!r}: ({lo!r}, {hi!r})" for k, (lo, hi) in spec.param_ranges.items())
         + "}"
     )
     threshold_src = (
@@ -616,40 +597,40 @@ def render_plugin_file(
 
     return (
         f'"""AUTO-GENERATED FROM EXTRACTION {extraction_id} ON {ts} '
-        f'— review before promoting.\n'
-        f'\n'
-        f'RANGES: {ranges_line}\n'
-        f'Display: {spec.display_name}\n'
-        f'Description: {spec.description}\n'
-        f'{quote_block}'
+        f"— review before promoting.\n"
+        f"\n"
+        f"RANGES: {ranges_line}\n"
+        f"Display: {spec.display_name}\n"
+        f"Description: {spec.description}\n"
+        f"{quote_block}"
         f'"""\n'
-        f'\n'
-        f'from __future__ import annotations\n'
-        f'\n'
-        f'{np_line}'
-        f'import pandas as pd  # noqa: TC002\n'
-        f'\n'
-        f'from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry\n'
-        f'\n'
-        f'\n'
-        f'{cleaned_body.rstrip()}\n'
-        f'\n'
-        f'\n'
-        f'indicator_registry.register_spec(\n'
-        f'    IndicatorSpec(\n'
-        f'        name={spec.name!r},\n'
-        f'        nt_class=None,\n'
-        f'        pandas_ta_func=None,\n'
-        f'        default_params={defaults_src},\n'
-        f'        param_schema={schema_src},\n'
-        f'        compute_fn={fn_name},\n'
-        f'        display_name={spec.display_name!r},\n'
-        f'        description={spec.description!r},\n'
-        f'        category={spec.category!r},\n'
-        f'        param_ranges={ranges_src},\n'
-        f'        threshold_range={threshold_src},\n'
-        f'    )\n'
-        f')\n'
+        f"\n"
+        f"from __future__ import annotations\n"
+        f"\n"
+        f"{np_line}"
+        f"import pandas as pd  # noqa: TC002\n"
+        f"\n"
+        f"from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry\n"
+        f"\n"
+        f"\n"
+        f"{cleaned_body.rstrip()}\n"
+        f"\n"
+        f"\n"
+        f"indicator_registry.register_spec(\n"
+        f"    IndicatorSpec(\n"
+        f"        name={spec.name!r},\n"
+        f"        nt_class=None,\n"
+        f"        pandas_ta_func=None,\n"
+        f"        default_params={defaults_src},\n"
+        f"        param_schema={schema_src},\n"
+        f"        compute_fn={fn_name},\n"
+        f"        display_name={spec.display_name!r},\n"
+        f"        description={spec.description!r},\n"
+        f"        category={spec.category!r},\n"
+        f"        param_ranges={ranges_src},\n"
+        f"        threshold_range={threshold_src},\n"
+        f"    )\n"
+        f")\n"
     )
 
 
@@ -745,12 +726,7 @@ def synthesize_and_write(
 # ---------------------------------------------------------------------------
 
 
-TESTS_DIR: Path = (
-    Path(__file__).resolve().parent.parent.parent
-    / "tests"
-    / "unit"
-    / "test_plugins"
-)
+TESTS_DIR: Path = Path(__file__).resolve().parent.parent.parent / "tests" / "unit" / "test_plugins"
 
 PYTEST_TIMEOUT_SECONDS = 30
 COMMIT_MESSAGE_TEMPLATE = "chore: scaffold proposed indicator {name} (bd-3p1k)"
@@ -923,9 +899,7 @@ def render_contract_test(spec: IndicatorSpecArgs) -> str:
             name_lower=name_lower,
             outputs_tuple=outputs_tuple,
         )
-    return _CONTRACT_TEST_SINGLE.format(
-        name_upper=spec.name, name_lower=name_lower
-    )
+    return _CONTRACT_TEST_SINGLE.format(name_upper=spec.name, name_lower=name_lower)
 
 
 def run_contract_test(
@@ -1061,9 +1035,7 @@ def strip_auto_generated_header(source: str) -> str:
     return body
 
 
-def write_promoted_plugin(
-    *, name: str, force: bool = False
-) -> tuple[Path, Path]:
+def write_promoted_plugin(*, name: str, force: bool = False) -> tuple[Path, Path]:
     """Atomically rename the proposed plugin file, stripping the header.
 
     Sequence:
@@ -1262,14 +1234,10 @@ def scaffold_full(
         ok, output = run_contract_test(test_path)
         if not ok:
             raise ScaffoldError("test_failed", output)
-        sha = git_commit_scaffold(
-            plugin_path, test_path, name=spec.name, repo_root=repo_root
-        )
+        sha = git_commit_scaffold(plugin_path, test_path, name=spec.name, repo_root=repo_root)
     except ScaffoldError:
         plugin_path.unlink(missing_ok=True)
         test_path.unlink(missing_ok=True)
         raise
 
-    return ScaffoldResult(
-        plugin_path=plugin_path, test_path=test_path, commit_sha=sha
-    )
+    return ScaffoldResult(plugin_path=plugin_path, test_path=test_path, commit_sha=sha)

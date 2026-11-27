@@ -75,26 +75,38 @@ def _persisted_notes(db: Path, run_id: int) -> dict[str, Any]:
     return dict(parsed) if isinstance(parsed, dict) else {}
 
 
-def _discovery_argv(
-    args: argparse.Namespace, run_id: int, db: Path
-) -> list[str]:
+def _discovery_argv(args: argparse.Namespace, run_id: int, db: Path) -> list[str]:
     """The discovery CLI argv of one seeded run (phase.py's window split + gates)."""
     argv = [
         "discovery",
-        "--run-id", str(run_id),
-        "--db", str(db),
-        "--symbols", SYMBOL,
-        "--timeframe", args.timeframe,
-        "--start-date", args.start,
-        "--end-date", args.end,
-        "--population-size", str(args.pop),
-        "--max-generations", str(args.gens),
-        "--convergence-generations", "10",
-        "--eval-windows", "2",
-        "--train-test-split", "0.8",
-        "--direction", "long",
-        "--max-workers", str(args.workers),
-        "--seed", str(args.seed),
+        "--run-id",
+        str(run_id),
+        "--db",
+        str(db),
+        "--symbols",
+        SYMBOL,
+        "--timeframe",
+        args.timeframe,
+        "--start-date",
+        args.start,
+        "--end-date",
+        args.end,
+        "--population-size",
+        str(args.pop),
+        "--max-generations",
+        str(args.gens),
+        "--convergence-generations",
+        "10",
+        "--eval-windows",
+        "2",
+        "--train-test-split",
+        "0.8",
+        "--direction",
+        "long",
+        "--max-workers",
+        str(args.workers),
+        "--seed",
+        str(args.seed),
     ]
     if args.pool != "full":
         argv += ["--indicator-pool", args.pool]
@@ -104,7 +116,9 @@ def _discovery_argv(
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--timeframe", required=True)
-    ap.add_argument("--pool", default="full", help="'full' or a comma list (discovery --indicator-pool)")
+    ap.add_argument(
+        "--pool", default="full", help="'full' or a comma list (discovery --indicator-pool)"
+    )
     ap.add_argument("--start", required=True)
     ap.add_argument("--end", required=True)
     ap.add_argument("--pop", type=int, default=16)

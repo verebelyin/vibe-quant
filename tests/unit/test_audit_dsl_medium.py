@@ -162,8 +162,12 @@ class TestWma:
         }
         strat = _run(dsl, _hour_bars(closes))
         s = pd.Series(closes)
-        assert strat._get_indicator_value("wma") == pytest.approx(float(ta.wma(s, 10).iloc[-1]), rel=1e-12)
-        assert strat._get_indicator_value("wma") != pytest.approx(float(s.tail(10).mean()), rel=1e-6)
+        assert strat._get_indicator_value("wma") == pytest.approx(
+            float(ta.wma(s, 10).iloc[-1]), rel=1e-12
+        )
+        assert strat._get_indicator_value("wma") != pytest.approx(
+            float(s.tail(10).mean()), rel=1e-6
+        )
 
 
 class TestIchimoku:

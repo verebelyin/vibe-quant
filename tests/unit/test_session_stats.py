@@ -41,4 +41,6 @@ def test_counts_prompts_tools_errors_big_results_and_peak_context(tmp_path: Path
     assert len(st["large"]) == 1 and st["large"][0][1] == "Bash: cat huge.log"
     assert st["span"] == "2026-10-18T08:00 -> 2026-10-18T08:02"
     lines = stats.report(path, 20_000)
-    assert lines[0].startswith("== s1 2026-10-18T08:00 -> 2026-10-18T08:02 prompts=1 peak_context=400,015")
+    assert lines[0].startswith(
+        "== s1 2026-10-18T08:00 -> 2026-10-18T08:02 prompts=1 peak_context=400,015"
+    )

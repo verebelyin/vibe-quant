@@ -120,9 +120,7 @@ def test_all_8h_equivalence_property() -> None:
         count = rng.randint(0, 40)
         start = T0_NS - rng.randint(0, 8) * step
         kept = [
-            start + i * step + rng.randint(0, TOL_NS)
-            for i in range(count)
-            if rng.random() > 0.25
+            start + i * step + rng.randint(0, TOL_NS) for i in range(count) if rng.random() > 0.25
         ]
         lo = T0_NS + rng.randint(-6, 6) * step
         hi = lo + rng.randint(0, 6) * step
@@ -182,9 +180,7 @@ def test_2h_hole_spanning_window_uses_neighbour_interval(tmp_path: Path) -> None
     hours = [2, 2, 2]
 
     narrow_lo, narrow_hi = T0_NS + 9 * HOUR_NS, T0_NS + 11 * HOUR_NS
-    assert missing_settlements(times_ns, hours, narrow_lo, narrow_hi) == [
-        (T0_NS + 10 * HOUR_NS, 2)
-    ]
+    assert missing_settlements(times_ns, hours, narrow_lo, narrow_hi) == [(T0_NS + 10 * HOUR_NS, 2)]
     narrow = calc.accrue(INSTRUMENT, "LONG", NOTIONAL, narrow_lo, narrow_hi)
     assert narrow.fallback_settlements == 1
     assert narrow.total == pytest.approx(RATE * (2 / 8) * NOTIONAL)  # 0.0375
@@ -253,7 +249,9 @@ def test_switch_4_to_2_no_false_hole(tmp_path: Path) -> None:
 def test_switch_2_to_8_no_false_hole(tmp_path: Path) -> None:
     """08:00 h=2 -> 16:00 h=8 does NOT flag 10:00/12:00/14:00 (min(h) would)."""
     times_ms = _rows(T0_MS, [0, 2, 4, 6, 8, 16])
-    calc = _archive(tmp_path / "a.db", times_ms, dict(zip(times_ms, [2, 2, 2, 2, 2, 8], strict=True)))
+    calc = _archive(
+        tmp_path / "a.db", times_ms, dict(zip(times_ms, [2, 2, 2, 2, 2, 8], strict=True))
+    )
     lo, hi = T0_NS + 9 * HOUR_NS, T0_NS + 15 * HOUR_NS
 
     assert missing_settlements(_ns(times_ms), [2, 2, 2, 2, 2, 8], lo, hi) == []
@@ -272,7 +270,9 @@ def test_unknown_interval_inherits_previous(
         assert calc.settlement_hours(SYMBOL) == hours  # cached: no second warning
 
     assert hours == (8, 2, 2, 2, 2)
-    messages = [r.getMessage() for r in caplog.records if "have no Vision interval" in r.getMessage()]
+    messages = [
+        r.getMessage() for r in caplog.records if "have no Vision interval" in r.getMessage()
+    ]
     assert len(messages) == 1
     assert "SOLUSDT: 2 of 5 archived funding rows have no Vision interval" in messages[0]
 
@@ -283,9 +283,7 @@ def test_symbol_absent_uses_8h_grid(tmp_path: Path) -> None:
     lo, hi = T0_NS - HOUR_NS, T0_NS + 31 * HOUR_NS
 
     assert calc.settlement_hours("BTCUSDT") == ()
-    assert missing_settlements((), (), lo, hi) == [
-        (T0_NS + h * HOUR_NS, 8) for h in (0, 8, 16, 24)
-    ]
+    assert missing_settlements((), (), lo, hi) == [(T0_NS + h * HOUR_NS, 8) for h in (0, 8, 16, 24)]
 
     acc = calc.accrue("BTCUSDT-PERP.BINANCE", "LONG", 40_000.0, lo, hi)
 
@@ -402,7 +400,11 @@ def test_last_row_exactly_tol_before_boundary(tmp_path: Path) -> None:
 
 def test_coverage_ignores_window_edge(tmp_path: Path) -> None:
     """A row 30 s after B but 20 s after the exit covers B and is itself uncharged."""
-    times_ms = [*_rows(T0_MS, [-8, 0, 8]), T0_MS + 16 * MS_PER_HOUR + 30_000, *_rows(T0_MS, [24, 32])]
+    times_ms = [
+        *_rows(T0_MS, [-8, 0, 8]),
+        T0_MS + 16 * MS_PER_HOUR + 30_000,
+        *_rows(T0_MS, [24, 32]),
+    ]
     calc = _archive(tmp_path / "a.db", times_ms, dict.fromkeys(times_ms, 8))
     lo, hi = T0_NS - HOUR_NS, T0_NS + 16 * HOUR_NS + 10_000_000_000
     times_ns = _ns(times_ms)

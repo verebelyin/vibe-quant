@@ -67,18 +67,27 @@ def _mark(prices: dict[int, float]):  # noqa: ANN202 - test helper
 
 def test_resized_leg_pays_on_quantity_held_before_each_settlement(tmp_path: Path) -> None:
     calc = _archive(tmp_path / "a.db", {1: 0.001, 2: 0.002})
-    fills = [(_BASE_NS + _HOUR_NS, 1.0), (_settle_ns(1) + _HOUR_NS, 2.0)]  # 1 -> 3 after settlement 1
-    acc = calc.accrue_book(_INST, fills, _mark({1: 100.0, 2: 110.0}), end_ns=_settle_ns(2) + _HOUR_NS)
+    fills = [
+        (_BASE_NS + _HOUR_NS, 1.0),
+        (_settle_ns(1) + _HOUR_NS, 2.0),
+    ]  # 1 -> 3 after settlement 1
+    acc = calc.accrue_book(
+        _INST, fills, _mark({1: 100.0, 2: 110.0}), end_ns=_settle_ns(2) + _HOUR_NS
+    )
     # settlement 1: 1 x 100 x 0.001 = 0.1 ; settlement 2: 3 x 110 x 0.002 = 0.66
-    assert acc.payments == [(_settle_ns(1) + 3_000_000, pytest.approx(0.1)),
-                            (_settle_ns(2) + 3_000_000, pytest.approx(0.66))]
+    assert acc.payments == [
+        (_settle_ns(1) + 3_000_000, pytest.approx(0.1)),
+        (_settle_ns(2) + 3_000_000, pytest.approx(0.66)),
+    ]
     assert acc.total == pytest.approx(0.76)
     assert acc.fallback_settlements == 0
 
 
 def test_short_leg_receives_positive_rate(tmp_path: Path) -> None:
     calc = _archive(tmp_path / "a.db", {1: 0.001})
-    acc = calc.accrue_book(_INST, [(_BASE_NS, -2.0)], _mark({1: 100.0}), end_ns=_settle_ns(1) + _HOUR_NS)
+    acc = calc.accrue_book(
+        _INST, [(_BASE_NS, -2.0)], _mark({1: 100.0}), end_ns=_settle_ns(1) + _HOUR_NS
+    )
     assert acc.total == pytest.approx(-0.2)  # negative = received
 
 
@@ -95,7 +104,9 @@ def test_flat_leg_pays_nothing_and_hole_fallback_counts_only_while_held(tmp_path
     # archive has settlement 1 only; 2 and 3 are a hole. Leg closes before 3.
     calc = _archive(tmp_path / "a.db", {1: 0.001})
     fills = [(_BASE_NS, 1.0), (_settle_ns(2) + _HOUR_NS, -1.0)]
-    acc = calc.accrue_book(_INST, fills, _mark({1: 100.0, 2: 100.0}), end_ns=_settle_ns(3) + _HOUR_NS)
+    acc = calc.accrue_book(
+        _INST, fills, _mark({1: 100.0, 2: 100.0}), end_ns=_settle_ns(3) + _HOUR_NS
+    )
     assert acc.fallback_settlements == 1  # settlement 2 held and uncovered; 3 is flat
     assert acc.total == pytest.approx(0.1 + DEFAULT_FUNDING_RATE_PER_PERIOD * 100.0)
 
@@ -114,5 +125,7 @@ def test_fill_exactly_at_settlement_time_is_not_charged_for_it(tmp_path: Path) -
     calc = _archive(tmp_path / "a.db", {1: 0.001, 2: 0.001})
     # 1 held before settlement 1; resized +4 at the same ns as its archived time
     fills = [(_BASE_NS, 1.0), (_settle_ns(1) + 3_000_000, 4.0)]
-    acc = calc.accrue_book(_INST, fills, _mark({1: 100.0, 2: 100.0}), end_ns=_settle_ns(2) + _HOUR_NS)
+    acc = calc.accrue_book(
+        _INST, fills, _mark({1: 100.0, 2: 100.0}), end_ns=_settle_ns(2) + _HOUR_NS
+    )
     assert [amount for _, amount in acc.payments] == [pytest.approx(0.1), pytest.approx(0.5)]

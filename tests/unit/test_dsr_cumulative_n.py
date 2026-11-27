@@ -130,32 +130,71 @@ THIS_WINDOW = ("2024-03-01", "2024-09-01")
 def _rows() -> list[tuple[Any, ...]]:
     return [
         # same tf, train window overlaps THIS_WINDOW, new rule -> counted (79)
-        (1, "discovery", "4h", "2024-01-01", "2024-06-01",
-         {"evaluated": 79, "dsr_trials": _new_rule(79)}),
+        (
+            1,
+            "discovery",
+            "4h",
+            "2024-01-01",
+            "2024-06-01",
+            {"evaluated": 79, "dsr_trials": _new_rule(79)},
+        ),
         # same tf, disjoint window (all before) -> not counted
         (2, "discovery", "4h", "2022-01-01", "2022-02-01", {"evaluated": 500}),
         # other timeframe -> not counted here, but counted for a 1h lookup (40)
-        (3, "discovery", "1h", "2024-01-01", "2024-06-01",
-         {"evaluated": 40, "dsr_trials": _new_rule(40)}),
+        (
+            3,
+            "discovery",
+            "1h",
+            "2024-01-01",
+            "2024-06-01",
+            {"evaluated": 40, "dsr_trials": _new_rule(40)},
+        ),
         # mock -> not a real trial
         (4, "discovery", "4h", "2024-01-01", "2024-06-01", {"evaluated": 500, "mock": True}),
         # not discovery -> not counted
         (5, "screening", "4h", "2024-01-01", "2024-06-01", {"evaluated": 77}),
         # same tf, overlaps, new rule -> counted (21)
-        (6, "discovery", "4h", "2024-04-01", "2024-10-01",
-         {"evaluated": 21, "dsr_trials": _new_rule(21)}),
+        (
+            6,
+            "discovery",
+            "4h",
+            "2024-04-01",
+            "2024-10-01",
+            {"evaluated": 21, "dsr_trials": _new_rule(21)},
+        ),
         # garbled notes -> skip
         (7, "discovery", "4h", "2024-01-01", "2024-06-01", "not json"),
         # notes carry train_dates: b window disjoint but train_dates overlap, new rule -> 5
-        (8, "discovery", "4h", "2022-01-01", "2022-02-01",
-         {"evaluated": 5, "train_dates": ["2024-02-01", "2024-04-01"],
-          "dsr_trials": _new_rule(5)}),
+        (
+            8,
+            "discovery",
+            "4h",
+            "2022-01-01",
+            "2022-02-01",
+            {
+                "evaluated": 5,
+                "train_dates": ["2024-02-01", "2024-04-01"],
+                "dsr_trials": _new_rule(5),
+            },
+        ),
         # train_dates present and DISJOINT even though b window overlaps -> not counted
-        (9, "discovery", "4h", "2024-04-01", "2024-08-01",
-         {"evaluated": 999, "train_dates": ["2022-01-01", "2022-02-01"]}),
+        (
+            9,
+            "discovery",
+            "4h",
+            "2024-04-01",
+            "2024-08-01",
+            {"evaluated": 999, "train_dates": ["2022-01-01", "2022-02-01"]},
+        ),
         # malformed train_dates -> garbled, skip
-        (10, "discovery", "4h", "2024-01-01", "2024-06-01",
-         {"evaluated": 3, "train_dates": "oops"}),
+        (
+            10,
+            "discovery",
+            "4h",
+            "2024-01-01",
+            "2024-06-01",
+            {"evaluated": 3, "train_dates": "oops"},
+        ),
         # later id (this run and beyond) -> excluded
         (11, "discovery", "4h", "2024-01-01", "2024-06-01", {"evaluated": 12345}),
     ]
@@ -178,8 +217,16 @@ def test_prior_trials_default_timeframe_and_symbol_agnostic() -> None:
 
     # A prior run with a DIFFERENT symbol set still counts (symbols not filtered).
     conn = _conn(
-        [(1, "discovery", "4h", "2024-01-01", "2024-06-01",
-          {"evaluated": 12, "dsr_trials": _new_rule(12)})]
+        [
+            (
+                1,
+                "discovery",
+                "4h",
+                "2024-01-01",
+                "2024-06-01",
+                {"evaluated": 12, "dsr_trials": _new_rule(12)},
+            )
+        ]
     )
     n, run_ids, _lr, _lraw = prior_discovery_trials(_state(conn), 2, "4h", THIS_WINDOW)
     assert n == 12 and run_ids == [1]
@@ -211,8 +258,16 @@ def test_prior_trials_window_boundaries_not_overlapping(
     from vibe_quant.discovery.record import prior_discovery_trials
 
     conn = _conn(
-        [(1, "discovery", "4h", prior_window[0], prior_window[1],
-          {"evaluated": 7, "dsr_trials": _new_rule(7)})]
+        [
+            (
+                1,
+                "discovery",
+                "4h",
+                prior_window[0],
+                prior_window[1],
+                {"evaluated": 7, "dsr_trials": _new_rule(7)},
+            )
+        ]
     )
     n, run_ids, legacy_runs, legacy_raw = prior_discovery_trials(_state(conn), 2, "4h", THIS_WINDOW)
     assert (n, run_ids, legacy_runs, legacy_raw) == (0, [], 0, 0), why
@@ -224,10 +279,22 @@ def test_prior_trials_one_day_overlap_counts() -> None:
 
     conn = _conn(
         [
-            (1, "discovery", "4h", "2024-01-01", "2024-03-02",
-             {"evaluated": 3, "dsr_trials": _new_rule(3)}),
-            (2, "discovery", "4h", "2024-08-31", "2024-12-01",
-             {"evaluated": 4, "dsr_trials": _new_rule(4)}),
+            (
+                1,
+                "discovery",
+                "4h",
+                "2024-01-01",
+                "2024-03-02",
+                {"evaluated": 3, "dsr_trials": _new_rule(3)},
+            ),
+            (
+                2,
+                "discovery",
+                "4h",
+                "2024-08-31",
+                "2024-12-01",
+                {"evaluated": 4, "dsr_trials": _new_rule(4)},
+            ),
         ]
     )
     n, run_ids, _lr, _lraw = prior_discovery_trials(_state(conn), 3, "4h", THIS_WINDOW)
@@ -240,13 +307,25 @@ def test_prior_trials_garbled_evaluated_skips_only_that_row() -> None:
 
     conn = _conn(
         [
-            (1, "discovery", "4h", "2024-01-01", "2024-06-01",
-             {"evaluated": 10, "dsr_trials": _new_rule(10)}),
+            (
+                1,
+                "discovery",
+                "4h",
+                "2024-01-01",
+                "2024-06-01",
+                {"evaluated": 10, "dsr_trials": _new_rule(10)},
+            ),
             (2, "discovery", "4h", "2024-01-01", "2024-06-01", {"evaluated": "n/a"}),
             (3, "discovery", "4h", "2024-01-01", "2024-06-01", {"evaluated": [1, 2]}),
             (4, "discovery", "4h", "2024-01-01", "2024-06-01", {"evaluated": {"x": 1}}),
-            (5, "discovery", "4h", "2024-01-01", "2024-06-01",
-             {"evaluated": 5, "dsr_trials": _new_rule(5)}),
+            (
+                5,
+                "discovery",
+                "4h",
+                "2024-01-01",
+                "2024-06-01",
+                {"evaluated": 5, "dsr_trials": _new_rule(5)},
+            ),
         ]
     )
     n, run_ids, _lr, _lraw = prior_discovery_trials(_state(conn), 6, "4h", THIS_WINDOW)
@@ -261,8 +340,14 @@ def test_prior_trials_garbled_rows_warn_and_do_not_change_n(
 
     conn = _conn(
         [
-            (1, "discovery", "4h", "2024-01-01", "2024-06-01",
-             {"evaluated": 10, "dsr_trials": _new_rule(10)}),
+            (
+                1,
+                "discovery",
+                "4h",
+                "2024-01-01",
+                "2024-06-01",
+                {"evaluated": 10, "dsr_trials": _new_rule(10)},
+            ),
             # garbled notes JSON -> skipped, logged
             (2, "discovery", "4h", "2024-01-01", "2024-06-01", "not json"),
             # overlapping window but non-integer evaluated -> skipped, logged
@@ -280,8 +365,7 @@ def test_prior_trials_garbled_rows_warn_and_do_not_change_n(
         "prior trial count" in m and "run 2" in m and "garbled notes" in m for m in messages
     ), messages
     assert any(
-        "prior trial count" in m and "run 3" in m and "garbled evaluated" in m
-        for m in messages
+        "prior trial count" in m and "run 3" in m and "garbled evaluated" in m for m in messages
     ), messages
 
 
@@ -340,9 +424,7 @@ def test_gate_rejects_candidate_that_fails_at_cumulative_n() -> None:
     # SR 1.6 annualized clears DSR at N=10 but not at N=1010.
     chrom = _chrom()
     only = _pipeline()
-    assert only.gates.screen(
-        [(chrom, _fit(mtm_daily_returns=_series(1.6)))], TrialBudget(10, {})
-    )
+    assert only.gates.screen([(chrom, _fit(mtm_daily_returns=_series(1.6)))], TrialBudget(10, {}))
     cumulative = _pipeline(prior_trials_fn=lambda s, e: 1000)
     kept = cumulative.gates.screen(
         [(chrom, _fit(mtm_daily_returns=_series(1.6)))], TrialBudget(10, {})
@@ -429,15 +511,31 @@ def test_prior_counts_effective_rule_runs_only() -> None:
     conn = _conn(
         [
             # new rule: charged at run_n_eff 12 though evaluated is 40
-            (1, "discovery", "4h", "2024-01-01", "2024-06-01",
-             {"evaluated": 40, "dsr_trials": _new_rule(12)}),
+            (
+                1,
+                "discovery",
+                "4h",
+                "2024-01-01",
+                "2024-06-01",
+                {"evaluated": 40, "dsr_trials": _new_rule(12)},
+            ),
             # legacy (no dsr_trials): evaluated 127 is NOT charged, only tallied
             (2, "discovery", "4h", "2024-01-01", "2024-06-01", {"evaluated": 127}),
             # pre-switch rows carry the OLD n_rule: also legacy, never charged
-            (3, "discovery", "4h", "2024-01-01", "2024-06-01",
-             {"evaluated": 9,
-              "dsr_trials": {"n_rule": "cumulative_same_tf_overlapping_train",
-                             "run_n_eff": 9}}),
+            (
+                3,
+                "discovery",
+                "4h",
+                "2024-01-01",
+                "2024-06-01",
+                {
+                    "evaluated": 9,
+                    "dsr_trials": {
+                        "n_rule": "cumulative_same_tf_overlapping_train",
+                        "run_n_eff": 9,
+                    },
+                },
+            ),
         ]
     )
     n, ids, legacy_runs, legacy_raw = prior_discovery_trials(_state(conn), 4, "4h", THIS_WINDOW)
@@ -451,21 +549,27 @@ def test_prior_counts_effective_rule_runs_only() -> None:
     [None, True, "12", 12.5, 0, 41],
     ids=["null", "true", "str", "float", "zero", "over-evaluated"],
 )
-def test_prior_bad_run_n_eff_counts_evaluated(
-    bad: Any, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_prior_bad_run_n_eff_counts_evaluated(bad: Any, caplog: pytest.LogCaptureFixture) -> None:
     """A new-rule run_n_eff that is absent/null/bool/str/float/0/>evaluated fails closed."""
     from vibe_quant.discovery.record import prior_discovery_trials
 
     payload: dict[str, Any] = {"n_rule": N_RULE_EFFECTIVE}
     if bad is not None:
         payload["run_n_eff"] = bad
-    conn = _conn([(1, "discovery", "4h", "2024-01-01", "2024-06-01",
-                   {"evaluated": 40, "dsr_trials": payload})])
+    conn = _conn(
+        [
+            (
+                1,
+                "discovery",
+                "4h",
+                "2024-01-01",
+                "2024-06-01",
+                {"evaluated": 40, "dsr_trials": payload},
+            )
+        ]
+    )
     with caplog.at_level(logging.WARNING, logger="vibe_quant.discovery.__main__"):
-        n, ids, legacy_runs, legacy_raw = prior_discovery_trials(
-            _state(conn), 2, "4h", THIS_WINDOW
-        )
+        n, ids, legacy_runs, legacy_raw = prior_discovery_trials(_state(conn), 2, "4h", THIS_WINDOW)
     assert n == 40 and ids == [1]
     assert legacy_runs == 0 and legacy_raw == 0
     warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
@@ -570,9 +674,7 @@ def test_multi_seed_result_carries_dsr_trials(monkeypatch: pytest.MonkeyPatch) -
     assert note["prior_run_ids"] == [4, 9] and note["gate_n"] == 1230
 
 
-def _multi_seed_result(
-    monkeypatch: pytest.MonkeyPatch, champ: tuple[Any, Any]
-) -> tuple[Any, Any]:
+def _multi_seed_result(monkeypatch: pytest.MonkeyPatch, champ: tuple[Any, Any]) -> tuple[Any, Any]:
     """Run the 3x400 mock multi-seed path with ``champ`` returned by every seed."""
     from vibe_quant.discovery import __main__ as cli
     from vibe_quant.discovery import pooling
@@ -700,11 +802,25 @@ def test_main_persists_cumulative_dsr_trials(
     trials = notes["dsr_trials"]
     # The exact persisted key set of a new-rule run (mock -> no series).
     assert set(trials) == {
-        "raw", "non_flat", "neff_mean_corr", "neff_eig_pr", "neff_subsampled_from",
-        "neff_ev", "neff_ev_q95_spread", "run_n_eff", "neff_ev_source",
-        "neff_fallback_reason", "neff_ev_draws", "neff_ev_seed", "dsr_rule",
-        "prior_n", "prior_run_ids", "prior_legacy_runs", "prior_legacy_raw",
-        "gate_n", "n_rule",
+        "raw",
+        "non_flat",
+        "neff_mean_corr",
+        "neff_eig_pr",
+        "neff_subsampled_from",
+        "neff_ev",
+        "neff_ev_q95_spread",
+        "run_n_eff",
+        "neff_ev_source",
+        "neff_fallback_reason",
+        "neff_ev_draws",
+        "neff_ev_seed",
+        "dsr_rule",
+        "prior_n",
+        "prior_run_ids",
+        "prior_legacy_runs",
+        "prior_legacy_raw",
+        "gate_n",
+        "n_rule",
     }, trials
     assert trials["raw"] == notes["evaluated"]
     assert trials["run_n_eff"] == trials["raw"]  # fallback: no retained series
@@ -734,9 +850,7 @@ def test_neff_eig_capped_at_500_deterministic() -> None:
     m = 600
     for i in range(m):
         x = common + rng.normal(0.0, 0.001, 1264)
-        pool[f"k{i:04d}"] = _fit(
-            mtm_daily_returns=DailyReturns(19_000, array("d", x.tobytes()))
-        )
+        pool[f"k{i:04d}"] = _fit(mtm_daily_returns=DailyReturns(19_000, array("d", x.tobytes())))
 
     trials = pipe.gates.trial_counts(TrialBudget(600, pool))
     assert trials["raw"] == 600
@@ -768,9 +882,7 @@ def test_neff_eig_uncapped_below_limit() -> None:
     pool: dict[str, FitnessResult] = {}
     for i in range(10):
         x = rng.normal(0.0005, 0.01, 1264)
-        pool[f"k{i:04d}"] = _fit(
-            mtm_daily_returns=DailyReturns(19_000, array("d", x.tobytes()))
-        )
+        pool[f"k{i:04d}"] = _fit(mtm_daily_returns=DailyReturns(19_000, array("d", x.tobytes())))
     trials = pipe.gates.trial_counts(TrialBudget(10, pool))
     assert trials["neff_subsampled_from"] is None
     assert trials["non_flat"] == 10

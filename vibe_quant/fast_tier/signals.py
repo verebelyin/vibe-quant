@@ -435,7 +435,13 @@ def _tf_pta_columns(
     def memoised_replay(
         spec: Any, ohlcv: pd.DataFrame, params: dict[str, object], cap: int
     ) -> dict[str, np.ndarray]:
-        key = ("replay", spec.name, tuple(sorted((k, repr(v)) for k, v in params.items())), cap, *source)
+        key = (
+            "replay",
+            spec.name,
+            tuple(sorted((k, repr(v)) for k, v in params.items())),
+            cap,
+            *source,
+        )
         out = _memo_get(key)
         if out is None:
             out = replay_pta_series(spec, ohlcv, params, cap)
@@ -525,7 +531,13 @@ def compute_signals(
     """
     if extra_bars or record or timeframe != "1m":
         return _compute_signals_merged(
-            strategy, bars, indicator_types, extra_bars or {}, timeframe, tuple(record), coarse_first
+            strategy,
+            bars,
+            indicator_types,
+            extra_bars or {},
+            timeframe,
+            tuple(record),
+            coarse_first,
         )
     n = len(bars)
     ready = np.zeros(n, dtype=bool)
@@ -596,7 +608,9 @@ def _compute_signals_merged(
     indicator readings kept after every event (:class:`EventLog`).
     """
     tf_bars: dict[str, list[Bar]] = {timeframe: bars, **extra_bars}
-    ranked = sorted(tf_bars, key=lambda tf: -_TF_MINUTES.get(tf, 0)) if coarse_first else sorted(tf_bars)
+    ranked = (
+        sorted(tf_bars, key=lambda tf: -_TF_MINUTES.get(tf, 0)) if coarse_first else sorted(tf_bars)
+    )
     order = {tf: k for k, tf in enumerate(ranked)}
     pta_tfs = list(getattr(strategy, "_pta_bufs", {}) or {})
     missing = [tf for tf in pta_tfs if tf not in tf_bars]
@@ -639,7 +653,9 @@ def _compute_signals_merged(
     ev_ts: list[int] = []
     ev_primary: list[int] = []
     ev_values: dict[str, list[float]] = {name: [] for name in record}
-    for ts, _k, tf, i, bar in heapq.merge(*(stream(tf) for tf in tf_bars), key=lambda e: (e[0], e[1])):
+    for ts, _k, tf, i, bar in heapq.merge(
+        *(stream(tf) for tf in tf_bars), key=lambda e: (e[0], e[1])
+    ):
         for indicator in by_bar_type.get(str(bar.bar_type), ()):
             indicator.handle_bar(bar)
         if tf in pta:
@@ -707,7 +723,11 @@ def level_indicator_names(strategy: Any) -> tuple[str, ...]:
 
 
 def signals_for_runner(
-    runner: NTScreeningRunner, symbol: str, *, record_levels: bool = False, coarse_first: bool = False
+    runner: NTScreeningRunner,
+    symbol: str,
+    *,
+    record_levels: bool = False,
+    coarse_first: bool = False,
 ) -> RunSignals:
     """Replay ``runner``'s compiled strategy over its catalog window on ``symbol``.
 
@@ -753,7 +773,9 @@ def signals_for_runner(
         any_timeframe=True,
     )
     raw = runner._dsl_dict.get("indicators") or {}
-    indicator_types = {str(k): str(v["type"]) for k, v in raw.items()} if isinstance(raw, dict) else {}
+    indicator_types = (
+        {str(k): str(v["type"]) for k, v in raw.items()} if isinstance(raw, dict) else {}
+    )
     record = level_indicator_names(strategy) if record_levels else ()
     signals = compute_signals(
         strategy,

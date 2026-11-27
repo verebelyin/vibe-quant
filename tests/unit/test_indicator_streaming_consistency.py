@@ -130,9 +130,7 @@ def _assert_compute_fn_causal(
 def test_compute_fn_has_no_look_ahead(name: str, ohlcv_df: pd.DataFrame) -> None:
     spec = indicator_registry.get(name)
     assert spec is not None and spec.compute_fn is not None
-    compared = _assert_compute_fn_causal(
-        spec.compute_fn, dict(spec.default_params), ohlcv_df
-    )
+    compared = _assert_compute_fn_causal(spec.compute_fn, dict(spec.default_params), ohlcv_df)
     assert compared > 0, (
         f"{name}: no comparable historical-label outputs -- the causality "
         "assertion never ran (all outputs warm-up-NaN or forward-projected?)"
@@ -162,9 +160,7 @@ def _leaky_next_bar_peek(df: pd.DataFrame, params: dict[str, object]) -> pd.Seri
     return df["close"].shift(-1)
 
 
-@pytest.mark.parametrize(
-    "leaky_fn", [_leaky_full_series_normalize, _leaky_next_bar_peek]
-)
+@pytest.mark.parametrize("leaky_fn", [_leaky_full_series_normalize, _leaky_next_bar_peek])
 def test_guard_rejects_forward_peeking_compute_fn(
     leaky_fn: Callable[[pd.DataFrame, dict[str, object]], pd.Series],
     ohlcv_df: pd.DataFrame,

@@ -128,9 +128,7 @@ def test_price_position_not_all_nan_past_warmup() -> None:
 @pytest.mark.parametrize("walk", _WALKS)
 @pytest.mark.parametrize("size_kind", _SIZE_KINDS)
 @pytest.mark.parametrize("period", _PERIODS)
-def test_price_position_bit_identical_to_pandas(
-    period: int, size_kind: str, walk: str
-) -> None:
+def test_price_position_bit_identical_to_pandas(period: int, size_kind: str, walk: str) -> None:
     n = _buffer_size(size_kind, period)
     df = _walk_ohlcv(walk, n, seed=period * 1009 + n)
     params: dict[str, object] = {"period": period}

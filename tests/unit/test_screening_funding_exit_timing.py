@@ -219,9 +219,7 @@ def test_1d_limit_exit_strict_penetration(tmp_path: Path) -> None:
     penetrate = flat_bars({470: (40000.0, 40600.0, 40000.0, 40000.0)})
     catalog = last_bars_catalog(tmp_path, penetrate)
     runner = d1_runner(tmp_path, "off", catalog)
-    orders = {
-        "TP-1": limit_order("TP-1", 40500.0, accepted_at=at(60), side=OrderSide.SELL)
-    }
+    orders = {"TP-1": limit_order("TP-1", 40500.0, accepted_at=at(60), side=OrderSide.SELL)}
     pos = d1_position(order_id="TP-1", order_type=OrderType.LIMIT, exit_px=40500.0)
     m = extract(runner, [pos], penetrate, orders)
     assert m.total_funding == 0.0
@@ -420,7 +418,9 @@ def test_1d_mode_off_missing_1m_fails_closed(tmp_path: Path) -> None:
         extract(runner, [d1_position()], flat_bars(), sl_orders())
 
 
-def test_1d_mode_off_missing_1m_call_reraises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_1d_mode_off_missing_1m_call_reraises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The DataUnavailableError a failed refinement raises is
     re-raised, never masked as a -inf row."""
     runner = d1_runner(tmp_path, "off", None)
@@ -479,9 +479,7 @@ def test_1d_mode_on_identity_equals_mode_off(tmp_path: Path) -> None:
     refines the same exit) equals the mode-off run field for field; both pay 0.0."""
     bars = BEFORE_0800
     catalog = marks_and_last(tmp_path, bars)
-    off = extract(
-        d1_runner(tmp_path, "off", catalog), [d1_position()], bars, sl_orders(), BALANCE
-    )
+    off = extract(d1_runner(tmp_path, "off", catalog), [d1_position()], bars, sl_orders(), BALANCE)
     on = extract(
         d1_runner(tmp_path, "isolated", catalog), [d1_position()], bars, sl_orders(), BALANCE
     )
@@ -537,9 +535,7 @@ def test_1d_mode_on_scan_funding_stops_at_refined_close(
     assert m.liquidation_count == 1
     assert ledgers_calls and ledgers_calls[0] is not None
     assert ledger_net(ledgers_calls[0]) == pytest.approx(m.total_return * BALANCE, abs=1e-9)
-    assert m.gross_pnl == pytest.approx(
-        m.total_return * BALANCE + m.total_fees + m.total_funding
-    )
+    assert m.gross_pnl == pytest.approx(m.total_return * BALANCE + m.total_fees + m.total_funding)
 
 
 # ------------------------------------------------- Scope and records
@@ -566,9 +562,7 @@ def test_realized_cash_keeps_nt_ts(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     n = int(pos.ts_closed)
     assert (n, 0.0) in captured[0]  # realized cash at the NT ts
     assert all(ts <= at(471) - ONE_MS for ts, _amt in captured[0] if ts != n)
-    assert m.gross_pnl == pytest.approx(
-        m.total_return * BALANCE + m.total_fees + m.total_funding
-    )
+    assert m.gross_pnl == pytest.approx(m.total_return * BALANCE + m.total_fees + m.total_funding)
 
 
 def test_mode_off_refinement_records_no_exit_timing(tmp_path: Path) -> None:
@@ -612,7 +606,9 @@ def test_kept_bar_close_warning_names_its_purpose(
 # --------------------------------------- refine when the bar outlasts the coin's interval
 
 
-def interval_archive(path: Path, rows: dict[str, list[tuple[int, int]]], rate: float = 0.0003) -> Path:
+def interval_archive(
+    path: Path, rows: dict[str, list[tuple[int, int]]], rate: float = 0.0003
+) -> Path:
     """An archive holding ``(funding_time_ms, interval_hours)`` rows per symbol at ``rate``."""
     archive = RawDataArchive(path)
     try:
@@ -624,7 +620,9 @@ def interval_archive(path: Path, rows: dict[str, list[tuple[int, int]]], rate: f
     return path
 
 
-def every(hours: int, *, offset_h: int = 0, first_h: int = -24, last_h: int = 120) -> list[tuple[int, int]]:
+def every(
+    hours: int, *, offset_h: int = 0, first_h: int = -24, last_h: int = 120
+) -> list[tuple[int, int]]:
     """Settlement rows every ``hours`` h from START+first_h to START+last_h, ``hours`` interval."""
     return [(START_MS + t * H_MS, hours) for t in range(first_h + offset_h, last_h, hours)]
 

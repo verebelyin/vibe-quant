@@ -172,12 +172,16 @@ def _inputs(
         spec=spec,
         decisions=tuple(decision_times(START, END)),
         instruments=instruments,
-        specs={symbol: InstrumentSpec.from_instrument(instrument) for symbol, instrument in instruments.items()},
+        specs={
+            symbol: InstrumentSpec.from_instrument(instrument)
+            for symbol, instrument in instruments.items()
+        },
         ticks={symbol: all_ticks[symbol] for symbol in order},
         settlements={
             symbol: (
                 _settlement(
-                    symbol, [b for b in boundaries if b not in (gaps or {}).get(symbol, frozenset())]
+                    symbol,
+                    [b for b in boundaries if b not in (gaps or {}).get(symbol, frozenset())],
                 )
                 if symbol in funded
                 else Settlements((), ())
@@ -289,7 +293,9 @@ def test_flip_is_close_then_open_same_tick(inputs: CarryInputs) -> None:
     assert run.decisions[1].signals["ETHUSDT"] == pytest.approx(0.0027)
     assert run.decisions[1].weights == {"BTCUSDT": -0.5, "ETHUSDT": 0.5}
 
-    flipped = [fill for fill in run.fills if fill.symbol == "BTCUSDT" and fill.ts == D1 + _BAR_TS_INIT]
+    flipped = [
+        fill for fill in run.fills if fill.symbol == "BTCUSDT" and fill.ts == D1 + _BAR_TS_INIT
+    ]
     assert [(fill.steps, fill.reduce_only) for fill in flipped] == [
         (-98, True),
         (run.decisions[1].target_steps["BTCUSDT"], False),
@@ -573,9 +579,7 @@ def test_variant_map_required(tmp_path: Path, executor: object) -> None:
         executor(liquid)  # type: ignore[operator]
 
 
-def test_no_order_is_pending_at_a_decision(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_no_order_is_pending_at_a_decision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """arch-c9-2 R32: the outbox is empty at every D. BTC's D0 order has no own tick
     until after D1, so NT stops AT D1 -- before deciding again -- with the reference's
     stale-release text for that order (one message across executors, C9-1)."""
@@ -601,8 +605,12 @@ def test_no_order_is_pending_at_a_decision(
         simulate_reference(inputs)
 
     released = D1 + _BAR_TS_INIT
-    assert str(engine_error.value) == str(reference_error.value) == (
-        f"stale release BTCUSDT: queued at {D0}, released at {released} "
-        f"({released - D0} ns after the decision, limit {60 * _MIN} ns)"
+    assert (
+        str(engine_error.value)
+        == str(reference_error.value)
+        == (
+            f"stale release BTCUSDT: queued at {D0}, released at {released} "
+            f"({released - D0} ns after the decision, limit {60 * _MIN} ns)"
+        )
     )
     assert decided == [D0]

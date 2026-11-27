@@ -68,9 +68,7 @@ def _daily_zip(day: date, *, rows: int = 1) -> bytes:
 
 
 def _monthly_zip(days: list[date], *, rows: int = 1) -> bytes:
-    body = [
-        _mark(_day_start_ms(day) + i * 60_000) for day in days for i in range(rows)
-    ]
+    body = [_mark(_day_start_ms(day) + i * 60_000) for day in days for i in range(rows)]
     return _zip_bytes("BTCUSDT-1m-2026-10.csv", body, header=True)
 
 
@@ -90,9 +88,7 @@ def _monthly(seen: list[str]) -> list[str]:
     return [p.rsplit("/", 1)[-1] for p in seen if "/monthly/" in p]
 
 
-def _patch_http(
-    monkeypatch: pytest.MonkeyPatch, served: dict[str, bytes | Exception]
-) -> list[str]:
+def _patch_http(monkeypatch: pytest.MonkeyPatch, served: dict[str, bytes | Exception]) -> list[str]:
     seen: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -185,10 +181,7 @@ class TestM1TailFilledFromDaily:
     ) -> None:
         _seed_sep30(archive)
         wanted = _oct_days(5, 16)
-        served = {
-            f"BTCUSDT-1m-{d.isoformat()}.zip": _daily_zip(d)
-            for d in _oct_days(1, 16)
-        }
+        served = {f"BTCUSDT-1m-{d.isoformat()}.zip": _daily_zip(d) for d in _oct_days(1, 16)}
         seen = _patch_http(monkeypatch, served)
 
         _run(archive, start=datetime(2026, 10, 5, tzinfo=UTC))
@@ -272,7 +265,10 @@ class TestM2UnpublishedDayIsNotFatal:
 
 class TestM3FailedDayIsRecordedAndOthersContinue:
     def test_error_day_goes_to_failed_days_others_still_fetched(
-        self, archive: RawDataArchive, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+        self,
+        archive: RawDataArchive,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         _seed_sep30(archive)
         served = {
@@ -324,9 +320,7 @@ class TestM6RepublishedMonthlyInsertsNoDuplicates:
     ) -> None:
         _seed_sep30(archive)
         days = _oct_days(1, 5)
-        _patch_http(
-            monkeypatch, {f"BTCUSDT-1m-{d.isoformat()}.zip": _daily_zip(d) for d in days}
-        )
+        _patch_http(monkeypatch, {f"BTCUSDT-1m-{d.isoformat()}.zip": _daily_zip(d) for d in days})
         first = _run(
             archive,
             end=datetime(2026, 10, 5, tzinfo=UTC),
@@ -378,7 +372,10 @@ def _seed_sep30_open_ms() -> int:
 
 class TestM8VerboseOutput:
     def test_day_lines_summary_and_new_coverage_end(
-        self, archive: RawDataArchive, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+        self,
+        archive: RawDataArchive,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         _seed_sep30(archive)
         served = {
@@ -393,7 +390,9 @@ class TestM8VerboseOutput:
 
         assert "    2026-10-01: 1 rows from daily zip (1 new)" in out
         assert "    2026-10-03: daily zip unavailable (404)" in out
-        assert "  Unpublished-month tail: 16 days requested, 15 filled, 1 unpublished, 0 failed" in out
+        assert (
+            "  Unpublished-month tail: 16 days requested, 15 filled, 1 unpublished, 0 failed" in out
+        )
         assert "mark coverage now ends 2026-10-16" in out
         # the original unavailable-month line is unchanged and still printed
         assert "2026-10: unavailable (not yet published) - mark coverage ends 2026-09-30" in out
@@ -489,11 +488,7 @@ def _seed_full_days(archive: RawDataArchive, days: list[date]) -> None:
     archive.insert_mark_klines(
         "BTCUSDT",
         "1m",
-        [
-            _mark(_day_start_ms(day) + i * 60_000)
-            for day in days
-            for i in range(1440)
-        ],
+        [_mark(_day_start_ms(day) + i * 60_000) for day in days for i in range(1440)],
         "binance_vision_daily",
     )
 

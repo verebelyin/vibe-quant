@@ -121,6 +121,7 @@ def test_renamed_file_with_an_edited_assert_is_not_a_pass(tmp_path: Path) -> Non
     assert done.returncode == 1
     assert f"DIFF {_TEST_FILE}: missing at head" in done.stdout.splitlines()
 
+
 def test_missing_base_ref_fails_closed(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     done = _run(repo, "--base", "no-such-ref")

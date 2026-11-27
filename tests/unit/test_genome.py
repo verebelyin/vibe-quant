@@ -526,9 +526,7 @@ class TestBBandsDonchianGenome:
         assert INDICATOR_POOL["DONCHIAN"].default_threshold_range == (0.0, 1.0)
 
     def test_bbands_gene_with_percent_b(self) -> None:
-        g = StrategyGene(
-            "BBANDS", {"period": 20, "std_dev": 2.0}, ">", 0.8, sub_value="percent_b"
-        )
+        g = StrategyGene("BBANDS", {"period": 20, "std_dev": 2.0}, ">", 0.8, sub_value="percent_b")
         chrom = StrategyChromosome(
             entry_genes=[g],
             exit_genes=[StrategyGene("RSI", {"period": 14}, "<", 30.0)],
@@ -543,9 +541,7 @@ class TestBBandsDonchianGenome:
         assert any("percent_b" in c for c in long_conds)
 
     def test_bbands_gene_with_bandwidth(self) -> None:
-        g = StrategyGene(
-            "BBANDS", {"period": 20, "std_dev": 2.0}, "<", 0.05, sub_value="bandwidth"
-        )
+        g = StrategyGene("BBANDS", {"period": 20, "std_dev": 2.0}, "<", 0.05, sub_value="bandwidth")
         chrom = StrategyChromosome(
             entry_genes=[g],
             exit_genes=[StrategyGene("RSI", {"period": 14}, "<", 30.0)],
@@ -558,9 +554,7 @@ class TestBBandsDonchianGenome:
         assert any("bandwidth" in c for c in long_conds)
 
     def test_donchian_gene_with_position(self) -> None:
-        g = StrategyGene(
-            "DONCHIAN", {"period": 20}, ">", 0.9, sub_value="position"
-        )
+        g = StrategyGene("DONCHIAN", {"period": 20}, ">", 0.9, sub_value="position")
         chrom = StrategyChromosome(
             entry_genes=[g],
             exit_genes=[StrategyGene("RSI", {"period": 14}, "<", 30.0)],
@@ -574,9 +568,7 @@ class TestBBandsDonchianGenome:
         assert any("position" in c for c in long_conds)
 
     def test_bbands_validation_passes(self) -> None:
-        g = StrategyGene(
-            "BBANDS", {"period": 20, "std_dev": 2.0}, ">", 0.8, sub_value="percent_b"
-        )
+        g = StrategyGene("BBANDS", {"period": 20, "std_dev": 2.0}, ">", 0.8, sub_value="percent_b")
         chrom = StrategyChromosome(
             entry_genes=[g],
             exit_genes=[StrategyGene("RSI", {"period": 14}, "<", 30.0)],
@@ -587,9 +579,7 @@ class TestBBandsDonchianGenome:
         assert errors == []
 
     def test_donchian_validation_passes(self) -> None:
-        g = StrategyGene(
-            "DONCHIAN", {"period": 20}, ">", 0.5, sub_value="position"
-        )
+        g = StrategyGene("DONCHIAN", {"period": 20}, ">", 0.5, sub_value="position")
         chrom = StrategyChromosome(
             entry_genes=[g],
             exit_genes=[StrategyGene("RSI", {"period": 14}, "<", 30.0)],
@@ -900,10 +890,7 @@ class TestMAChromosome:
             )
         ]
         dsl = chromosome_to_dsl(chrom)
-        assert any(
-            "close < frama_ma_exit_0" in c
-            for c in dsl["exit_conditions"]["long"]
-        )
+        assert any("close < frama_ma_exit_0" in c for c in dsl["exit_conditions"]["long"])
 
     def test_clone_preserves_ma_genes_independently(self) -> None:
         original = self._make_ma_chrom("KAMA")

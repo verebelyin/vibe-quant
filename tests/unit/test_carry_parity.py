@@ -471,9 +471,7 @@ def test_compare_runs_reports_excluded_drift(parity: _Parity) -> None:
     decisions[2] = replace(decisions[2], excluded=excluded)
     drifted = replace(reference, decisions=tuple(decisions))
 
-    mismatches = compare_runs(
-        parity.engine, drifted, parity.engine_report, parity.reference_report
-    )
+    mismatches = compare_runs(parity.engine, drifted, parity.engine_report, parity.reference_report)
 
     assert any("decisions[2].excluded" in message for message in mismatches), mismatches
 
@@ -483,9 +481,7 @@ def test_compare_runs_ignores_the_engine_field(parity: _Parity) -> None:
     assert (parity.engine.engine, parity.reference.engine) == ("nt", "reference")
     # a third label, different from BOTH, is still ignored -- proves it is never read
     swapped = replace(parity.reference, engine="ignored-label")
-    assert (
-        compare_runs(parity.engine, swapped, parity.engine_report, parity.reference_report) == []
-    )
+    assert compare_runs(parity.engine, swapped, parity.engine_report, parity.reference_report) == []
 
 
 def _priced(run: CarryRun, index: int, price: float) -> CarryRun:
@@ -945,7 +941,15 @@ def test_trend_decision_ignores_one_legs_future_bars(
 
 def _times10(row: tuple[float | int, ...]) -> tuple[float | int, ...]:
     open_ms, o, h, low, c, volume, close_ms = row
-    return (open_ms, round(o * 10, 2), round(h * 10, 2), round(low * 10, 2), round(c * 10, 2), volume, close_ms)
+    return (
+        open_ms,
+        round(o * 10, 2),
+        round(h * 10, 2),
+        round(low * 10, 2),
+        round(c * 10, 2),
+        volume,
+        close_ms,
+    )
 
 
 def test_trend_executor_prefix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

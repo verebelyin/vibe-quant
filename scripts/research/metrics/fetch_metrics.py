@@ -5,6 +5,7 @@ URL: https://data.binance.vision/data/futures/um/daily/metrics/{SYM}/{SYM}-metri
 Each zip holds one 5-minute CSV (288 rows/day). A missing day is a 404: recorded, not fatal.
 Raw zips are cached under OUT_DIR/raw/{SYM}/ so a re-run is idempotent (no network for cached days).
 """
+
 import io
 import json
 import sys
@@ -17,11 +18,22 @@ from pathlib import Path
 import httpx
 import pandas as pd
 
-NUM = ["sum_open_interest", "sum_open_interest_value", "count_toptrader_long_short_ratio",
-       "sum_toptrader_long_short_ratio", "count_long_short_ratio", "sum_taker_long_short_vol_ratio"]
+NUM = [
+    "sum_open_interest",
+    "sum_open_interest_value",
+    "count_toptrader_long_short_ratio",
+    "sum_toptrader_long_short_ratio",
+    "count_long_short_ratio",
+    "sum_taker_long_short_vol_ratio",
+]
 COLS = ["create_time", "symbol"] + NUM
 
-OUT, START, END, SYMS = Path(sys.argv[1]), date.fromisoformat(sys.argv[2]), date.fromisoformat(sys.argv[3]), sys.argv[4:]
+OUT, START, END, SYMS = (
+    Path(sys.argv[1]),
+    date.fromisoformat(sys.argv[2]),
+    date.fromisoformat(sys.argv[3]),
+    sys.argv[4:],
+)
 BASE = "https://data.binance.vision/data/futures/um/daily/metrics"
 RAW = OUT / "raw"
 OUT.mkdir(parents=True, exist_ok=True)
@@ -59,7 +71,7 @@ def download(sym: str, day: date) -> tuple[date, str]:
         except Exception as e:  # network error / timeout
             err = f"{type(e).__name__}: {e}"
         if attempt < 2:
-            time.sleep(1.5 * (2 ** attempt))
+            time.sleep(1.5 * (2**attempt))
     return day, f"error:{err}"
 
 
@@ -69,7 +81,9 @@ def read_zip(path: Path) -> pd.DataFrame:
         raw = z.read(z.namelist()[0]).decode("utf-8-sig", errors="replace")
     header = None if is_ts(raw.split("\n", 1)[0].split(",")[0]) else 0
     df = pd.read_csv(io.StringIO(raw), header=header, names=COLS, usecols=range(len(COLS)))
-    df["ts"] = pd.to_datetime(df["create_time"], errors="coerce", utc=True).astype("datetime64[ns, UTC]")
+    df["ts"] = pd.to_datetime(df["create_time"], errors="coerce", utc=True).astype(
+        "datetime64[ns, UTC]"
+    )
     for c in NUM:
         df[c] = pd.to_numeric(df[c], errors="coerce").astype("float64")
     return df[["ts"] + NUM].dropna(subset=["ts"])
@@ -104,7 +118,10 @@ def coverage(sym: str, df: pd.DataFrame, days404: list[str], dropped: int) -> di
         "zero_count": {c: int((df[c] == 0).sum()) for c in NUM},
         "gaps_over_1h": {
             "count": int(len(gi)),
-            "largest": [{"start": ts.iloc[i - 1].isoformat(), "end": ts.iloc[i].isoformat()} for i in biggest],
+            "largest": [
+                {"start": ts.iloc[i - 1].isoformat(), "end": ts.iloc[i].isoformat()}
+                for i in biggest
+            ],
         },
     }
 
@@ -128,9 +145,11 @@ def build_symbol(sym: str) -> dict:
 
     df.to_parquet(OUT / f"{sym}.parquet", index=False)
     cov = coverage(sym, df, d404, dropped)
-    print(f"{sym}: rows={cov['rows']} first={cov['first_ts']} last={cov['last_ts']} "
-          f"days_404={len(d404)} dup_dropped={dropped} short_days={cov['days_with_fewer_than_288_rows']['count']} "
-          f"gaps>1h={cov['gaps_over_1h']['count']}")
+    print(
+        f"{sym}: rows={cov['rows']} first={cov['first_ts']} last={cov['last_ts']} "
+        f"days_404={len(d404)} dup_dropped={dropped} short_days={cov['days_with_fewer_than_288_rows']['count']} "
+        f"gaps>1h={cov['gaps_over_1h']['count']}"
+    )
     return {"coverage": cov, "errors": errors}
 
 

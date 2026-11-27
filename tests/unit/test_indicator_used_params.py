@@ -235,9 +235,7 @@ _DEAD_PERIOD_TYPES: list[tuple[str, dict[str, float]]] = [
 
 
 @pytest.mark.parametrize(("ind_type", "params"), _DEAD_PERIOD_TYPES)
-def test_genome_gene_drops_only_the_dead_period(
-    ind_type: str, params: dict[str, float]
-) -> None:
+def test_genome_gene_drops_only_the_dead_period(ind_type: str, params: dict[str, float]) -> None:
     """A generated gene carries exactly the spec params — the injected period is gone.
 
     Pre-fix ``_gene_to_indicator_config`` injected ``period=14`` for every type not
@@ -260,7 +258,6 @@ def test_genome_gene_drops_only_the_dead_period(
     for param in params:
         assert f"{name}_{param}" in source  # the real params still reach the strategy
     StrategyCompiler().compile_to_module(dsl)
-
 
 
 # --- An explicit null param saves on every endpoint and format ----

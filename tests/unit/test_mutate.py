@@ -386,9 +386,12 @@ def test_mutant_cap_refuses_a_maker_past_two(
     _many_lines(repo, 4)
     runner = _CountingRunner()
 
-    assert mutate.main(
-        ["--repo", str(repo), "--spec", str(_spec_file(tmp_path, 1)), "--", *_CMD], run=runner
-    ) == 1  # every mutant survives the stub: exit 1, but the run happened and was counted
+    assert (
+        mutate.main(
+            ["--repo", str(repo), "--spec", str(_spec_file(tmp_path, 1)), "--", *_CMD], run=runner
+        )
+        == 1
+    )  # every mutant survives the stub: exit 1, but the run happened and was counted
     assert mutate.main([*_one_mutant(repo, 1)], run=runner) == 1
     capsys.readouterr()
     calls_before = len(runner.calls)

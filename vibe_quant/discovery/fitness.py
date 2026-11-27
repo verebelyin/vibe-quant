@@ -57,7 +57,9 @@ COMPLEXITY_PENALTY_CAP: float = 0.1
 
 # Minimum trade thresholds
 MIN_TRADES: int = 50  # Default for 4h and longer timeframes
-MIN_TRADES_1M: int = 50  # For 1m timeframe (lowered from 100 — 3mo windows produce fewer trades in some regimes)
+MIN_TRADES_1M: int = (
+    50  # For 1m timeframe (lowered from 100 — 3mo windows produce fewer trades in some regimes)
+)
 
 # Overtrading penalty: commission-aware
 # Assumes ~0.1% round-trip commission (taker fees on crypto perps)
@@ -683,6 +685,7 @@ def _evaluate_single(
 
     try:
         import time as _time
+
         _bt_start = _time.monotonic()
         bt = backtest_fn(chrom)
         _bt_elapsed = _time.monotonic() - _bt_start
@@ -696,7 +699,9 @@ def _evaluate_single(
     except DataUnavailableError:
         raise
     except Exception as e:
-        logger.warning("Backtest failed for chromosome %s, assigning zero fitness", chrom.uid, exc_info=True)
+        logger.warning(
+            "Backtest failed for chromosome %s, assigning zero fitness", chrom.uid, exc_info=True
+        )
         return replace(_zero, error=f"{type(e).__name__}: {e}")
 
     if fitness == "v2" and _has_early_exit(bt):
@@ -754,7 +759,13 @@ def _evaluate_single(
     if fitness == "v2":
         try:
             adjusted, fitness_v2, symbol_scores, symbol_stats = _score_v2(
-                bt, trades, min_trades, timeframe, complexity_pen, sl_tp_pen, pooled_symbol_stats,
+                bt,
+                trades,
+                min_trades,
+                timeframe,
+                complexity_pen,
+                sl_tp_pen,
+                pooled_symbol_stats,
                 total_return,
             )
         except FitnessV2Error as exc:
@@ -789,14 +800,26 @@ def _evaluate_single(
         if symbol_scores is not None:
             logger.debug(
                 "Score %s: soft=0.5*min+0.5*median of %s = %.4f",
-                chrom.uid, {sym: round(sc, 4) for sym, sc in symbol_scores.items()}, adjusted,
+                chrom.uid,
+                {sym: round(sc, 4) for sym, sc in symbol_scores.items()},
+                adjusted,
             )
         else:
             logger.debug(
                 "Score %s: raw=%.4f - complexity=%.4f - overtrade=%.4f - sl_tp=%.4f = adjusted=%.4f "
                 "(sharpe365=%s dd=%.3f pf=%.2f ret=%.3f trades=%d genes=%d %s)",
-                chrom.uid, raw, complexity_pen, overtrade_pen, sl_tp_pen, adjusted,
-                fmt_sharpe(sharpe), max_dd, pf, total_return, trades, num_genes,
+                chrom.uid,
+                raw,
+                complexity_pen,
+                overtrade_pen,
+                sl_tp_pen,
+                adjusted,
+                fmt_sharpe(sharpe),
+                max_dd,
+                pf,
+                total_return,
+                trades,
+                num_genes,
                 genome_summary(chrom),
             )
 
@@ -877,9 +900,7 @@ def _score_v2(
     sl_tp_pen: float,
     pooled_symbol_stats: dict[str, tuple[float, int]] | None,
     total_return: float,
-) -> tuple[
-    float, FitnessV2, dict[str, float] | None, dict[str, tuple[float, int]] | None
-]:
+) -> tuple[float, FitnessV2, dict[str, float] | None, dict[str, tuple[float, int]] | None]:
     """``(adjusted, FitnessV2, symbol_scores, symbol_stats)`` of a v2 evaluation.
 
     Portfolio and pooled: one own score of the run's series (pooled: a coin under the
@@ -1062,15 +1083,37 @@ def evaluate_population(
     global _parallel_broken  # noqa: PLW0603
     if max_workers is not None and max_workers != 1 and not _parallel_broken:
         try:
-            return _evaluate_parallel(chromosomes, backtest_fn, filter_fn, max_workers, executor, min_trades=min_trades, timeframe=timeframe, fitness=fitness)
+            return _evaluate_parallel(
+                chromosomes,
+                backtest_fn,
+                filter_fn,
+                max_workers,
+                executor,
+                min_trades=min_trades,
+                timeframe=timeframe,
+                fitness=fitness,
+            )
         except DataUnavailableError:
             raise
         except Exception:
             _parallel_broken = True
-            logger.warning("Parallel evaluation failed, falling back to sequential for remainder of run", exc_info=True)
+            logger.warning(
+                "Parallel evaluation failed, falling back to sequential for remainder of run",
+                exc_info=True,
+            )
 
     with preserve_global_random():
-        return [_evaluate_single(chrom, backtest_fn, filter_fn, min_trades=min_trades, timeframe=timeframe, fitness=fitness) for chrom in chromosomes]
+        return [
+            _evaluate_single(
+                chrom,
+                backtest_fn,
+                filter_fn,
+                min_trades=min_trades,
+                timeframe=timeframe,
+                fitness=fitness,
+            )
+            for chrom in chromosomes
+        ]
 
 
 _TASK_ERROR = "__task_error__"
@@ -1137,7 +1180,11 @@ def _evaluate_parallel(
     from vibe_quant.discovery.backtest_fn import NTBacktestFn
 
     workers = max_workers if max_workers and max_workers > 0 else os.cpu_count() or 4
-    split_fn = backtest_fn if isinstance(backtest_fn, NTBacktestFn) and backtest_fn.splits_by_symbol else None
+    split_fn = (
+        backtest_fn
+        if isinstance(backtest_fn, NTBacktestFn) and backtest_fn.splits_by_symbol
+        else None
+    )
     workers = min(workers, len(chromosomes) * (len(split_fn.symbols) if split_fn else 1))
 
     _zero = FitnessResult(

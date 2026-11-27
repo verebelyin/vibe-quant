@@ -105,23 +105,17 @@ def test_proposed_to_spec_args_no_range_for_unknown_param() -> None:
 
 
 def test_proposed_to_spec_args_output_range_fraction() -> None:
-    args = proposed_to_spec_args(
-        {"name": "ind", "formula": "f", "output_range": "fraction"}
-    )
+    args = proposed_to_spec_args({"name": "ind", "formula": "f", "output_range": "fraction"})
     assert args.threshold_range == (0.2, 0.8)
 
 
 def test_proposed_to_spec_args_output_range_unbounded() -> None:
-    args = proposed_to_spec_args(
-        {"name": "ind", "formula": "f", "output_range": "unbounded"}
-    )
+    args = proposed_to_spec_args({"name": "ind", "formula": "f", "output_range": "unbounded"})
     assert args.threshold_range is None
 
 
 def test_proposed_to_spec_args_output_range_garbage_drops_to_none() -> None:
-    args = proposed_to_spec_args(
-        {"name": "ind", "formula": "f", "output_range": "wibble"}
-    )
+    args = proposed_to_spec_args({"name": "ind", "formula": "f", "output_range": "wibble"})
     assert args.threshold_range is None
 
 
@@ -147,9 +141,7 @@ def test_proposed_to_spec_args_display_name_fallback() -> None:
 
 
 def test_proposed_to_spec_args_display_name_passthrough() -> None:
-    args = proposed_to_spec_args(
-        {"name": "x", "formula": "f", "display_name": "Custom Label"}
-    )
+    args = proposed_to_spec_args({"name": "x", "formula": "f", "display_name": "Custom Label"})
     assert args.display_name == "Custom Label"
 
 
@@ -160,17 +152,13 @@ def test_proposed_to_spec_args_description_fallback() -> None:
 
 def test_proposed_to_spec_args_bare_param_value() -> None:
     # LLM emits a bare int instead of {default: 14}.
-    args = proposed_to_spec_args(
-        {"name": "x", "formula": "f", "parameters": {"period": 14}}
-    )
+    args = proposed_to_spec_args({"name": "x", "formula": "f", "parameters": {"period": 14}})
     assert args.default_params == {"period": 14}
     assert args.param_schema == {"period": int}
 
 
 def test_proposed_to_spec_args_float_param() -> None:
-    args = proposed_to_spec_args(
-        {"name": "x", "formula": "f", "parameters": {"alpha": 0.5}}
-    )
+    args = proposed_to_spec_args({"name": "x", "formula": "f", "parameters": {"alpha": 0.5}})
     assert args.default_params == {"alpha": 0.5}
     assert args.param_schema == {"alpha": float}
 

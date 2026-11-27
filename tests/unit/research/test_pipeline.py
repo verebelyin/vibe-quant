@@ -26,9 +26,7 @@ def _isolate_registry() -> Generator[None]:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_log_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> Generator[Path]:
+def _isolate_log_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[Path]:
     """Redirect on-disk extraction logs into tmp so tests don't leak into
     the repo's data/ tree."""
     log_root = tmp_path / "research-logs"
@@ -43,9 +41,7 @@ _REAL_AUTO_SCREEN = auto_screen.auto_screen_extraction
 def _stub_auto_screen(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
     """Skip real NT screening in unit tests — pipeline hook would otherwise
     try to compile and backtest a DSL against the on-disk catalog."""
-    monkeypatch.setattr(
-        auto_screen, "auto_screen_extraction", lambda sm, eid, dsl: None
-    )
+    monkeypatch.setattr(auto_screen, "auto_screen_extraction", lambda sm, eid, dsl: None)
     yield
 
 
@@ -138,9 +134,7 @@ def test_scrape_extract_fn_invoked_per_new_item(sm: StateManager) -> None:
         assert it["extraction_status"] == "extracted"
 
 
-def test_scrape_writes_extraction_log_per_item(
-    sm: StateManager, _isolate_log_root: Path
-) -> None:
+def test_scrape_writes_extraction_log_per_item(sm: StateManager, _isolate_log_root: Path) -> None:
     """Per-extraction prompt + raw response must land under
     data/research/logs/<scrape_run_id>/<item_id>.json so future
     prompt-engineering analysis can replay verbatim."""
@@ -206,9 +200,7 @@ def test_persist_extractions_stores_prompt_on_db_row(sm: StateManager) -> None:
         )
 
     run_scrape(sm=sm, source_name="fake", limit=1, extract_fn=fake_extract)
-    rows = sm.conn.execute(
-        "SELECT prompt FROM research_extractions ORDER BY id"
-    ).fetchall()
+    rows = sm.conn.execute("SELECT prompt FROM research_extractions ORDER BY id").fetchall()
     assert len(rows) == 1
     assert rows[0]["prompt"] == "PROMPT-UNDER-TEST"
 
@@ -632,7 +624,7 @@ def test_auto_screen_records_compile_error(
                     rationale=None,
                     raw_response="",
                     dsl_yaml="x",
-                    parsed_dsl_json='not-valid-json',
+                    parsed_dsl_json="not-valid-json",
                     parse_error=None,
                     llm_model="t",
                 )
@@ -641,9 +633,7 @@ def test_auto_screen_records_compile_error(
 
     summary = run_scrape(sm=sm, source_name="fake", limit=10, extract_fn=fake_extract)
     assert summary.status == "completed"
-    exs = sm.list_extractions_for_item(
-        sm.list_research_items(source="fake")[0]["id"]
-    )
+    exs = sm.list_extractions_for_item(sm.list_research_items(source="fake")[0]["id"])
     assert exs[0]["screen_status"] == "failed"
     assert exs[0]["screen_run_id"] is None
     assert exs[0]["screen_error"] is not None
@@ -692,9 +682,7 @@ def test_auto_screen_low_trades_still_done(
 
     summary = run_scrape(sm=sm, source_name="fake", limit=10, extract_fn=fake_extract)
     assert summary.status == "completed"
-    exs = sm.list_extractions_for_item(
-        sm.list_research_items(source="fake")[0]["id"]
-    )
+    exs = sm.list_extractions_for_item(sm.list_research_items(source="fake")[0]["id"])
     assert exs[0]["screen_status"] == "done"
     assert exs[0]["screen_trades"] == 12
     assert exs[0]["screen_sharpe"] == pytest.approx(2.0)
@@ -736,9 +724,7 @@ def test_auto_screen_timeout_marks_failed_with_timeout_error(
 
     summary = run_scrape(sm=sm, source_name="fake", limit=10, extract_fn=fake_extract)
     assert summary.status == "completed"
-    exs = sm.list_extractions_for_item(
-        sm.list_research_items(source="fake")[0]["id"]
-    )
+    exs = sm.list_extractions_for_item(sm.list_research_items(source="fake")[0]["id"])
     assert exs[0]["screen_status"] == "failed"
     assert exs[0]["screen_error"] == "timeout"
     # backtest_run row was created before the timeout — useful for triage
@@ -758,9 +744,7 @@ def test_auto_screen_failure_in_one_extraction_does_not_block_others(
     monkeypatch.setattr(
         auto_screen,
         "_run_single_metrics",
-        lambda *a, **k: BacktestMetrics(
-            parameters={}, sharpe_ratio=1.5, total_trades=80
-        ),
+        lambda *a, **k: BacktestMetrics(parameters={}, sharpe_ratio=1.5, total_trades=80),
     )
     # _normalize_dsl: raise for the bad payload, pass-through for the good one
     real_normalize = auto_screen._normalize_dsl
@@ -784,7 +768,7 @@ def test_auto_screen_failure_in_one_extraction_does_not_block_others(
                     rationale=None,
                     raw_response="",
                     dsl_yaml="x",
-                    parsed_dsl_json='garbage-not-json',
+                    parsed_dsl_json="garbage-not-json",
                     parse_error=None,
                     llm_model="t",
                 ),
@@ -803,9 +787,7 @@ def test_auto_screen_failure_in_one_extraction_does_not_block_others(
 
     summary = run_scrape(sm=sm, source_name="fake", limit=10, extract_fn=fake_extract)
     assert summary.status == "completed"
-    exs = sm.list_extractions_for_item(
-        sm.list_research_items(source="fake")[0]["id"]
-    )
+    exs = sm.list_extractions_for_item(sm.list_research_items(source="fake")[0]["id"])
     # Two extraction rows, one done, one failed
     statuses = sorted(e["screen_status"] for e in exs)
     assert statuses == ["done", "failed"]

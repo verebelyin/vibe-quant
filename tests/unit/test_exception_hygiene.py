@@ -230,7 +230,9 @@ def find_swallows(source: str, filename: str = "<string>") -> list[Swallow]:
             if _is_silent_handler(node):
                 swallows.append(Swallow(node.lineno, _handler_label(node)))
             elif _is_broad_handler(node) and not _reports_or_raises(node):
-                swallows.append(Swallow(node.lineno, f"{_handler_label(node)} (no log above debug)"))
+                swallows.append(
+                    Swallow(node.lineno, f"{_handler_label(node)} (no log above debug)")
+                )
         elif isinstance(node, (ast.With, ast.AsyncWith)):
             for item in node.items:
                 if _is_suppress_item(item):
@@ -284,9 +286,7 @@ def ratchet_failures(
         base = baseline.get(relative, 0)
         if len(handles) <= base:
             continue
-        locations = ", ".join(
-            f"{relative}:{s.lineno} ({s.label})" for s in handles
-        )
+        locations = ", ".join(f"{relative}:{s.lineno} ({s.label})" for s in handles)
         regressions.append(
             f"{relative}: {len(handles)} silent handler(s), baseline {base} "
             f"[{locations}] — log it, re-raise it, or narrow it"
@@ -310,9 +310,11 @@ def test_silent_exception_ratchet() -> None:
 
 
 def test_ratchet_flags_a_new_silent_handler() -> None:
-    found = {"vibe_quant/paper/node.py": find_swallows(
-        "try:\n    book()\nexcept Exception:\n    pass\n", "x.py"
-    )}
+    found = {
+        "vibe_quant/paper/node.py": find_swallows(
+            "try:\n    book()\nexcept Exception:\n    pass\n", "x.py"
+        )
+    }
     failures = ratchet_failures(found, {"vibe_quant/paper/node.py": 0})
     assert len(failures) == 1
     assert "log it, re-raise it, or narrow it" in failures[0]
@@ -376,9 +378,7 @@ def test_scanner_ignores_narrow_working_handler() -> None:
     assert find_swallows(source) == []
 
 
-def test_root_scan_files_are_ratcheted(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_root_scan_files_are_ratcheted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A swallow in a root module is found by the scan, so its baseline can pin it."""
     (tmp_path / "vibe_quant").mkdir()
     (tmp_path / "vibe_quant" / "trade_ledger.py").write_text(

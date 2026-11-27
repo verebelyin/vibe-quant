@@ -29,13 +29,20 @@ wfa_null = _load("wfa_null")
 
 # 184 days: K=6 -> 30d x 6, K=4 -> 46d x 4, K=3 -> 61d x 3
 CELL: dict[str, Any] = {
-    "symbol": "ZECUSDT", "timeframe": "1h", "start": "2025-07-01",
-    "end": "2026-01-01", "leverage": 3, "pair": ["DONCHIAN", "ROC"],
-    "direction": "long", "seed": 1,
+    "symbol": "ZECUSDT",
+    "timeframe": "1h",
+    "start": "2025-07-01",
+    "end": "2026-01-01",
+    "leverage": 3,
+    "pair": ["DONCHIAN", "ROC"],
+    "direction": "long",
+    "seed": 1,
 }
 
 
-def _base(k: int, cell: dict[str, Any] | None = None, key: str = "k", ledger: str = "L") -> dict[str, Any]:
+def _base(
+    k: int, cell: dict[str, Any] | None = None, key: str = "k", ledger: str = "L"
+) -> dict[str, Any]:
     return {"key": key, "ledger": ledger, "K": k, "cell": dict(cell or CELL), "next_win": False}
 
 
@@ -47,8 +54,13 @@ def _stub_factory(rets: list[float], trades: int = 100) -> Any:
         ret = rets[next(order)]
 
         def fn(_chrom: Any) -> dict[str, float | int]:
-            return {"total_return": ret, "total_trades": trades, "sharpe_ratio": 1.0,
-                    "max_drawdown": 0.1, "profit_factor": 1.5}
+            return {
+                "total_return": ret,
+                "total_trades": trades,
+                "sharpe_ratio": 1.0,
+                "max_drawdown": 0.1,
+                "profit_factor": 1.5,
+            }
 
         return fn
 
@@ -67,29 +79,49 @@ NEXT = {"start": "2026-01-01", "end": "2026-07-01", "ret": -0.1, "trades": 60}
 
 
 def test_population_keeps_only_complete_failed_transfers() -> None:
-    rows = [_winner(k) for k in ("kept", "gone", "failed", "no-next", "no-symbols", "old-win",
-                                 "bh-lost")]
+    rows = [
+        _winner(k)
+        for k in ("kept", "gone", "failed", "no-next", "no-symbols", "old-win", "bh-lost")
+    ]
     tmap = {
         "kept": {"key": "kept", "symbols": {"ETHUSDT": {"ret": -0.2, "trades": 60}}, "next": NEXT},
-        "gone": {"key": "gone", "own": {"ret": 0.2, "trades": 60, "bh": {"passed": True}},
-                 "symbols": {"ETHUSDT": {"ret": 0.2, "trades": 60, "bh": {"passed": True}}},
-                 "next": {**NEXT, "ret": 0.2, "bh": {"passed": True}}},
+        "gone": {
+            "key": "gone",
+            "own": {"ret": 0.2, "trades": 60, "bh": {"passed": True}},
+            "symbols": {"ETHUSDT": {"ret": 0.2, "trades": 60, "bh": {"passed": True}}},
+            "next": {**NEXT, "ret": 0.2, "bh": {"passed": True}},
+        },
         "failed": {"key": "failed", "failed": True, "symbols": {}, "next": None},
-        "no-next": {"key": "no-next", "symbols": {"ETHUSDT": {"ret": -0.2, "trades": 60}},
-                    "next": None},
+        "no-next": {
+            "key": "no-next",
+            "symbols": {"ETHUSDT": {"ret": -0.2, "trades": 60}},
+            "next": None,
+        },
         "no-symbols": {"key": "no-symbols", "symbols": {}, "next": NEXT},
         # before burst's buy-and-hold rule: profitable everywhere is untested, not no-edge
-        "old-win": {"key": "old-win", "symbols": {"ETHUSDT": {"ret": 0.2, "trades": 60}},
-                    "next": {**NEXT, "ret": 0.2}},
+        "old-win": {
+            "key": "old-win",
+            "symbols": {"ETHUSDT": {"ret": 0.2, "trades": 60}},
+            "next": {**NEXT, "ret": 0.2},
+        },
         # profitable everywhere but below buy-and-hold on another coin: no edge over holding
-        "bh-lost": {"key": "bh-lost", "own": {"ret": 0.2, "trades": 60, "bh": {"passed": True}},
-                    "symbols": {"ETHUSDT": {"ret": 0.2, "trades": 60, "bh": {"passed": False}}},
-                    "next": {**NEXT, "ret": 0.2, "bh": {"passed": True}}},
+        "bh-lost": {
+            "key": "bh-lost",
+            "own": {"ret": 0.2, "trades": 60, "bh": {"passed": True}},
+            "symbols": {"ETHUSDT": {"ret": 0.2, "trades": 60, "bh": {"passed": False}}},
+            "next": {**NEXT, "ret": 0.2, "bh": {"passed": True}},
+        },
     }
     included, excluded = wfa_null.population(rows, tmap)
     assert [r["key"] for r in included] == ["kept", "bh-lost"]
-    assert excluded == {"transfer_failed": 1, "no_next": 1, "no_symbols": 1,
-                        "transferred": 1, "no_transfer": 0, "old_rule": 1}
+    assert excluded == {
+        "transfer_failed": 1,
+        "no_next": 1,
+        "no_symbols": 1,
+        "transferred": 1,
+        "no_transfer": 0,
+        "old_rule": 1,
+    }
 
 
 @pytest.mark.parametrize(
@@ -124,7 +156,12 @@ def test_verdict_uses_production_wfa_rule(
     k: int, rets: list[float], profitable: int, passed: bool
 ) -> None:
     row = wfa_null.score(_base(k), SimpleNamespace(uid="t"), _stub_factory(rets))
-    assert (row["K"], row["windows"], row["profitable"], row["passed"]) == (k, k, profitable, passed)
+    assert (row["K"], row["windows"], row["profitable"], row["passed"]) == (
+        k,
+        k,
+        profitable,
+        passed,
+    )
     assert row["rets"] == rets
     assert row["trades"] == [100] * k
     assert row["error"] is None
@@ -163,8 +200,16 @@ def test_data_gap_fails_report_closed(tmp_path: Path, capsys: pytest.CaptureFixt
     assert gap["error"].startswith("DataUnavailableError: no 1m bars")
     assert (gap["rets"], gap["windows"], gap["passed"]) == ([], 0, False)
 
-    ok = {**_base(6, key="ok"), "step": 30, "windows": 6, "rets": [0.1] * 6,
-          "trades": [100] * 6, "profitable": 6, "passed": True, "error": None}
+    ok = {
+        **_base(6, key="ok"),
+        "step": 30,
+        "windows": 6,
+        "rets": [0.1] * 6,
+        "trades": [100] * 6,
+        "profitable": 6,
+        "passed": True,
+        "error": None,
+    }
     result = tmp_path / "r.jsonl"
     _rows(result, [ok, gap])
     rc = wfa_null.main(["report", "--result", str(result)])
@@ -183,15 +228,15 @@ def test_short_range_counts_as_fail() -> None:
 
 def test_factory_forwards_the_cell_timeframe() -> None:
     """Older ledgers (1m only) omit the field; the engine must still get the right bars."""
-    for cell, expected in (({k: v for k, v in CELL.items() if k != "timeframe"}, "1m"),
-                           (CELL, "1h")):
+    for cell, expected in (
+        ({k: v for k, v in CELL.items() if k != "timeframe"}, "1m"),
+        (CELL, "1h"),
+    ):
         fn = wfa_null._factory(cell)("2026-03-01", "2026-06-01")
         assert (fn.timeframe, fn.symbols) == (expected, [CELL["symbol"]])
 
 
-def test_worker_refuses_the_real_state_db(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_worker_refuses_the_real_state_db(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv(
         "VIBE_QUANT_DB", str(wfa_null.REPO_ROOT / "data" / "state" / "vibe_quant.db")
     )
@@ -214,13 +259,29 @@ def test_resume_skips_done_rows(
     out = tmp_path / "out"
     out.mkdir()
     _rows(out / "ledger.jsonl", [_winner("k")])
-    _rows(out / "transfer.jsonl", [
-        {"key": "k", "symbols": {"ETHUSDT": {"ret": -0.2, "trades": 60}}, "next": NEXT},
-    ])
+    _rows(
+        out / "transfer.jsonl",
+        [
+            {"key": "k", "symbols": {"ETHUSDT": {"ret": -0.2, "trades": 60}}, "next": NEXT},
+        ],
+    )
     result = tmp_path / "r.jsonl"
-    _rows(result, [{**_base(6, key="k"), "step": 30, "windows": 6, "rets": [0.1] * 6,
-                    "trades": [100] * 6, "profitable": 6, "passed": True,
-                    "error": None, "next_win": False}])
+    _rows(
+        result,
+        [
+            {
+                **_base(6, key="k"),
+                "step": 30,
+                "windows": 6,
+                "rets": [0.1] * 6,
+                "trades": [100] * 6,
+                "profitable": 6,
+                "passed": True,
+                "error": None,
+                "next_win": False,
+            }
+        ],
+    )
     launched: list[tuple[str, int]] = []
 
     class _Done:
@@ -234,9 +295,16 @@ def test_resume_skips_done_rows(
         return _Done(), tmp_path / "scratch", 0.0
 
     def _finish(spec: dict[str, Any], _tmp: Path, _rc: int, _wall: float) -> dict[str, Any]:
-        return {**_base(spec["K"], key=spec["key"], ledger=spec["ledger"]), "step": 46,
-                "windows": 4, "rets": [0.1] * 4, "trades": [100] * 4,
-                "profitable": 4, "passed": True, "error": None}
+        return {
+            **_base(spec["K"], key=spec["key"], ledger=spec["ledger"]),
+            "step": 46,
+            "windows": 4,
+            "rets": [0.1] * 4,
+            "trades": [100] * 4,
+            "profitable": 4,
+            "passed": True,
+            "error": None,
+        }
 
     monkeypatch.setattr(wfa_null, "_launch", _launch)
     monkeypatch.setattr(wfa_null, "_finish", _finish)
@@ -257,19 +325,26 @@ def test_verdict_threshold() -> None:
     assert wfa_null.verdict(0, 0) == "FAIL"
 
 
-def test_run_forwards_the_next_window_win(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_forwards_the_next_window_win(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The crosstab's next_win is the transfer win rule: below the 50-trade floor is False."""
     out = tmp_path / "out"
     out.mkdir()
     _rows(out / "ledger.jsonl", [_winner("up"), _winner("few")])
-    _rows(out / "transfer.jsonl", [
-        {"key": "up", "symbols": {"ETHUSDT": {"ret": -0.1, "trades": 60}},
-         "next": {**NEXT, "ret": 0.2, "trades": 60}},
-        {"key": "few", "symbols": {"ETHUSDT": {"ret": -0.1, "trades": 60}},
-         "next": {**NEXT, "ret": 0.2, "trades": 20}},
-    ])
+    _rows(
+        out / "transfer.jsonl",
+        [
+            {
+                "key": "up",
+                "symbols": {"ETHUSDT": {"ret": -0.1, "trades": 60}},
+                "next": {**NEXT, "ret": 0.2, "trades": 60},
+            },
+            {
+                "key": "few",
+                "symbols": {"ETHUSDT": {"ret": -0.1, "trades": 60}},
+                "next": {**NEXT, "ret": 0.2, "trades": 20},
+            },
+        ],
+    )
     launched: list[dict[str, Any]] = []
 
     class _Done:
@@ -283,11 +358,21 @@ def test_run_forwards_the_next_window_win(
         return _Done(), tmp_path, 0.0
 
     monkeypatch.setattr(wfa_null, "_launch", _launch)
-    monkeypatch.setattr(wfa_null, "_finish", lambda spec, _tmp, _rc, _wall: {
-        **_base(spec["K"], key=spec["key"]), "step": 30, "windows": 6,
-        "rets": [], "trades": [], "profitable": 0, "passed": False,
-        "error": None, "next_win": spec["next_win"],
-    })
+    monkeypatch.setattr(
+        wfa_null,
+        "_finish",
+        lambda spec, _tmp, _rc, _wall: {
+            **_base(spec["K"], key=spec["key"]),
+            "step": 30,
+            "windows": 6,
+            "rets": [],
+            "trades": [],
+            "profitable": 0,
+            "passed": False,
+            "error": None,
+            "next_win": spec["next_win"],
+        },
+    )
     result = tmp_path / "r.jsonl"
     wfa_null.main(["run", "--out", str(out), "--windows", "6", "--result", str(result)])
     assert [spec["key"] for spec in launched] == ["up", "few"]
@@ -298,10 +383,19 @@ def test_report_prints_per_ledger_and_pooled_rates(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     def row(ledger: str, passed: bool, key: str) -> dict[str, Any]:
-        return {"key": key, "ledger": ledger, "K": 6, "step": 30, "windows": 6,
-                "rets": [0.1 if passed else -0.1] * 6, "trades": [100] * 6,
-                "profitable": 6 if passed else 0, "passed": passed, "error": None,
-                "next_win": not passed}
+        return {
+            "key": key,
+            "ledger": ledger,
+            "K": 6,
+            "step": 30,
+            "windows": 6,
+            "rets": [0.1 if passed else -0.1] * 6,
+            "trades": [100] * 6,
+            "profitable": 6 if passed else 0,
+            "passed": passed,
+            "error": None,
+            "next_win": not passed,
+        }
 
     result = tmp_path / "r.jsonl"
     _rows(result, [row("A", True, "a"), row("B", False, "b")])

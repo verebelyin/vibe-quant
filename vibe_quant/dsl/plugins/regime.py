@@ -54,7 +54,9 @@ def compute_own_trend(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
     return pd.Series(aux_data.ref_trend_asof(symbol, close_ns, period), index=df.index)
 
 
-def _register(name: str, fn: object, period: int, rng: tuple[float, float], title: str, desc: str) -> None:
+def _register(
+    name: str, fn: object, period: int, rng: tuple[float, float], title: str, desc: str
+) -> None:
     indicator_registry.register_spec(
         IndicatorSpec(
             name=name,
@@ -77,14 +79,26 @@ def _register(name: str, fn: object, period: int, rng: tuple[float, float], titl
 
 
 _register(
-    "BTC_TREND", compute_btc_trend, 200, (20.0, 250.0), "BTC Daily Trend",
+    "BTC_TREND",
+    compute_btc_trend,
+    200,
+    (20.0, 250.0),
+    "BTC Daily Trend",
     "BTCUSDT daily close / EMA(period) - 1, as of the last closed daily bar.",
 )
 _register(
-    "BTC_ROC", compute_btc_roc, 20, (5.0, 60.0), "BTC Daily ROC",
+    "BTC_ROC",
+    compute_btc_roc,
+    20,
+    (5.0, 60.0),
+    "BTC Daily ROC",
     "BTCUSDT daily rate of change over N daily bars, as of the last closed daily bar.",
 )
 _register(
-    "OWN_TREND", compute_own_trend, 200, (20.0, 250.0), "Own-Symbol Daily Trend",
+    "OWN_TREND",
+    compute_own_trend,
+    200,
+    (20.0, 250.0),
+    "Own-Symbol Daily Trend",
     "Strategy symbol's daily close / EMA(period) - 1, as of the last closed daily bar.",
 )

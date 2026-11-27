@@ -79,9 +79,7 @@ def _seed_catalog(tmp_path: Path, *, n_bars: int = 100, timeframe_dir: str = "4-
     bar_dir.mkdir(parents=True)
     base = datetime(2024, 1, 1, tzinfo=UTC)
     # Use 4h spacing so the date math is easy to reason about.
-    ts_event = [
-        int((base + timedelta(hours=4 * i)).timestamp() * 1e9) for i in range(n_bars)
-    ]
+    ts_event = [int((base + timedelta(hours=4 * i)).timestamp() * 1e9) for i in range(n_bars)]
     df = pd.DataFrame({"ts_event": ts_event, "ts_init": ts_event})
     df.to_parquet(bar_dir / "bars.parquet", index=False)
     return catalog

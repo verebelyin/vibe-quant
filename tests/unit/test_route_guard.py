@@ -30,10 +30,14 @@ def _job(tmp_path: Path, target: dict[str, object] | None = None, ident: str = "
     brief.write_text("# brief\n")
     if target is not None:
         (job / "prompts" / f"{ident}.delegate.json").write_text(
-            json.dumps({
-                "task": f"Read your brief at {brief} and follow it exactly.",
-                "target": target, "mode": "async", "clientRequestId": ident,
-            })  # fmt: skip
+            json.dumps(
+                {
+                    "task": f"Read your brief at {brief} and follow it exactly.",
+                    "target": target,
+                    "mode": "async",
+                    "clientRequestId": ident,
+                }
+            )  # fmt: skip
         )
     return job
 
@@ -45,7 +49,9 @@ def _task(job: Path, ident: str = "cc-demo-1") -> str:
     )
 
 
-def _t3_payload(job: Path, target: dict[str, object], ident: str = "cc-demo-1") -> dict[str, object]:
+def _t3_payload(
+    job: Path, target: dict[str, object], ident: str = "cc-demo-1"
+) -> dict[str, object]:
     return {
         "tool_name": _T3,
         "tool_input": {"task": _task(job, ident), "target": target,
@@ -55,7 +61,9 @@ def _t3_payload(job: Path, target: dict[str, object], ident: str = "cc-demo-1") 
 
 def _agent_payload(job: Path, model: str | None, ident: str = "cc-demo-1") -> dict[str, object]:
     tool_input: dict[str, object] = {
-        "description": "demo", "subagent_type": "general", "prompt": _task(job, ident),
+        "description": "demo",
+        "subagent_type": "general",
+        "prompt": _task(job, ident),
     }
     if model is not None:
         tool_input["model"] = model
@@ -190,16 +198,24 @@ def test_the_override_log_keeps_two_unrelated_calls(tmp_path: Path) -> None:
     first = _job(tmp_path / "one", _ROUTED, ident="cc-alpha-1")
     second = _job(tmp_path / "two", _ROUTED, ident="cc-beta-2")
     other = {"providerInstanceId": "codex", "model": "gpt-6.1-sol"}
-    assert _run(
-        _t3_payload(first, dict(_USED), "cc-alpha-1"),
-        SWARM_ROUTE_OVERRIDE="alpha needs the pro model",
-    ).returncode == 0
-    assert _run(
-        _t3_payload(second, dict(other), "cc-beta-2"),
-        SWARM_ROUTE_OVERRIDE="beta is a codex task",
-    ).returncode == 0
+    assert (
+        _run(
+            _t3_payload(first, dict(_USED), "cc-alpha-1"),
+            SWARM_ROUTE_OVERRIDE="alpha needs the pro model",
+        ).returncode
+        == 0
+    )
+    assert (
+        _run(
+            _t3_payload(second, dict(other), "cc-beta-2"),
+            SWARM_ROUTE_OVERRIDE="beta is a codex task",
+        ).returncode
+        == 0
+    )
     rows = [json.loads(line) for line in (first / "route-overrides.jsonl").read_text().splitlines()]
-    rows += [json.loads(line) for line in (second / "route-overrides.jsonl").read_text().splitlines()]
+    rows += [
+        json.loads(line) for line in (second / "route-overrides.jsonl").read_text().splitlines()
+    ]
     assert [(row["id"], row["routed"], row["used"], row["reason"]) for row in rows] == [
         ("cc-alpha-1", "deepseek/deepseek-v4.1-flash", "deepseek/deepseek-v4-pro",
          "alpha needs the pro model"),
@@ -245,9 +261,7 @@ def test_agent_without_a_model_is_refused_as_an_inherited_override(tmp_path: Pat
 def test_settings_register_the_guard_for_both_dispatch_tools() -> None:
     settings = json.loads(_SETTINGS.read_text())
     entries = [
-        entry
-        for entry in settings["hooks"]["PreToolUse"]
-        if "route_guard.py" in json.dumps(entry)
+        entry for entry in settings["hooks"]["PreToolUse"] if "route_guard.py" in json.dumps(entry)
     ]
     assert len(entries) == 1
     matcher = re.compile(entries[0]["matcher"])

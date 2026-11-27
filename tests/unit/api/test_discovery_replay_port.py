@@ -46,7 +46,9 @@ _PORT: dict[str, Any] = {
 
 
 @pytest.fixture()
-async def api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[tuple[AsyncClient, Path]]:
+async def api(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[tuple[AsyncClient, Path]]:
     db_path = tmp_path / "scratch.db"
     app = create_app()
     state = StateManager(db_path=db_path)
@@ -83,7 +85,9 @@ def _port_discovery(
 
     folder = tmp_path / "port"
     folder.mkdir()
-    (folder / "port.yaml").write_text(yaml.safe_dump(port or _PORT, sort_keys=False), encoding="utf-8")
+    (folder / "port.yaml").write_text(
+        yaml.safe_dump(port or _PORT, sort_keys=False), encoding="utf-8"
+    )
     state = StateManager(db_path)
     run_id = state.create_backtest_run(
         None, "discovery", ["BTCUSDT"], "1h", "2024-10-15", "2024-12-15", {}
@@ -106,7 +110,9 @@ def _port_discovery(
     return run_id, json.loads(result["notes"])
 
 
-@pytest.mark.slow(reason="a real NT port discovery plus an in-process screening replay on BTCUSDT 1h")
+@pytest.mark.slow(
+    reason="a real NT port discovery plus an in-process screening replay on BTCUSDT 1h"
+)
 @pytest.mark.parametrize("finer_timeframe", [False, True])
 async def test_replay_of_a_port_champion_matches_its_discovery_result(
     api: tuple[AsyncClient, Path], tmp_path: Path, finer_timeframe: bool

@@ -95,8 +95,6 @@ def test_daily_quote_volume_malformed(
     # a zero-volume row is valid data, not malformed
     zero = RawDataArchive(tmp_path / "zero.db")
     zero.insert_klines("BTCUSDT", "1m", [(_DAY_MS, 1.0, 1.0, 1.0, 1.0, 1.0, 1, 0.0)], "test")
-    assert zero.get_daily_quote_volume("BTCUSDT", 0, 10 * _DAY_MS) == {
-        86_400_000_000_000: (0.0, 1)
-    }
+    assert zero.get_daily_quote_volume("BTCUSDT", 0, 10 * _DAY_MS) == {86_400_000_000_000: (0.0, 1)}
     archive.close()
     zero.close()

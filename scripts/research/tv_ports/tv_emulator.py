@@ -108,7 +108,9 @@ class EmulatorResult:
         return costed_equity_series(self.positions, self.ledger, self.starting_balance)
 
 
-def costed_equity_series(positions: Sequence[Any], ledger: Any, starting_balance: float) -> list[float]:
+def costed_equity_series(
+    positions: Sequence[Any], ledger: Any, starting_balance: float
+) -> list[float]:
     """Costed equity after each closed position, in open order (one rule for the engine and the emulator)."""
     out: list[float] = []
     realized = 0.0
@@ -310,12 +312,16 @@ class Emulator:
             )
             for p in self.cache.positions_open(venue=self.inst.id.venue)
         ]
-        paid = self.ledger.paid_through(self.now, self.cache.positions_open(venue=self.inst.id.venue))
+        paid = self.ledger.paid_through(
+            self.now, self.cache.positions_open(venue=self.inst.id.venue)
+        )
         decision = check_entry_margin(
             open_items=open_items,
             pending_items=[],
             new_item=MarginItem(
-                abs(qty.as_decimal()) * Decimal(str(price)) * mult, s.config.margin_leverage, str(self.inst.id)
+                abs(qty.as_decimal()) * Decimal(str(price)) * mult,
+                s.config.margin_leverage,
+                str(self.inst.id),
             ),
             equity=self.cache.balance.as_decimal() - Decimal(str(paid)),
             max_margin_pct=limit,
@@ -340,7 +346,15 @@ class Emulator:
         return probability >= self._draw()
 
     def _fill(
-        self, *, buy: bool, qty: Any, base_raw: int, order_type: str, maker: bool, action: str, oid: int,
+        self,
+        *,
+        buy: bool,
+        qty: Any,
+        base_raw: int,
+        order_type: str,
+        maker: bool,
+        action: str,
+        oid: int,
         finalize: bool = True,
     ) -> None:
         """Apply one fill: slip draw, commission, position update, then the strategy's event handlers."""
@@ -348,7 +362,9 @@ class Emulator:
         from nautilus_trader.model.position import Position
 
         if self.mode == "engine" and qty.raw > self.last_size:
-            raise EmulatorUnsupported(f"fill of {qty} exceeds the tick size (NT would fill partially)")
+            raise EmulatorUnsupported(
+                f"fill of {qty} exceeds the tick size (NT would fill partially)"
+            )
         px_raw = base_raw
         if self._event(self.p_slip):
             px_raw += self.inc_raw if buy else -self.inc_raw
@@ -357,7 +373,13 @@ class Emulator:
         rate = self.inst.maker_fee if maker else self.inst.taker_fee
         commission = Money(notional.as_decimal() * rate, self.ccy)
         event = self.ids.fill(
-            buy=buy, order_type=order_type, qty=qty, px=px, commission=commission, maker=maker, ts=self.now
+            buy=buy,
+            order_type=order_type,
+            qty=qty,
+            px=px,
+            commission=commission,
+            maker=maker,
+            ts=self.now,
         )
         self.res.fills.append(
             Fill(self.now, "BUY" if buy else "SELL", action, str(qty), str(px), str(commission))
@@ -393,9 +415,15 @@ class Emulator:
             tp = None
         close_side = "SELL" if is_long else "BUY"
         if sl is not None:
-            self._send(_Cmd(self.now, "sl", close_side, qty, self.inst.make_price(sl).raw, self._oid()), protection=True)
+            self._send(
+                _Cmd(self.now, "sl", close_side, qty, self.inst.make_price(sl).raw, self._oid()),
+                protection=True,
+            )
         if tp is not None:
-            self._send(_Cmd(self.now, "tp", close_side, qty, self.inst.make_price(tp).raw, self._oid()), protection=True)
+            self._send(
+                _Cmd(self.now, "tp", close_side, qty, self.inst.make_price(tp).raw, self._oid()),
+                protection=True,
+            )
 
     def _on_closed(self, closing_oid: int) -> None:
         """PositionClosed: the venue drops the position's reduce-only orders; the strategy reacts."""
@@ -419,7 +447,9 @@ class Emulator:
         Engine ``defer`` sends everything at once; ``tv`` queues entries/exits for the next open
         and arms protection and cancels at once; ``tick``/``bar`` queue everything.
         """
-        immediate = self.defer or (self.mode == "tv" and (protection or cmd.kind in ("cancel", "cancel_all")))
+        immediate = self.defer or (
+            self.mode == "tv" and (protection or cmd.kind in ("cancel", "cancel_all"))
+        )
         if immediate:
             if self._cmd_ok(cmd, None):
                 self._exec(cmd)
@@ -454,7 +484,9 @@ class Emulator:
         elif kind in ("sl", "tp"):
             if not self.pos_open:
                 return  # a reduce-only order with nothing to reduce is denied
-            self.resting.append(_Rest(cmd.oid, kind, str(cmd.side), int(cmd.price_raw or 0), cmd.qty))
+            self.resting.append(
+                _Rest(cmd.oid, kind, str(cmd.side), int(cmd.price_raw or 0), cmd.qty)
+            )
             from nautilus_trader.model.objects import Price
 
             self.res.levels.append(
@@ -465,34 +497,67 @@ class Emulator:
                     str(cmd.qty),
                 )
             )
-            if kind == "sl" and self.last is not None and (
-                self.last <= int(cmd.price_raw or 0) if cmd.side == "SELL" else self.last >= int(cmd.price_raw or 0)
+            if (
+                kind == "sl"
+                and self.last is not None
+                and (
+                    self.last <= int(cmd.price_raw or 0)
+                    if cmd.side == "SELL"
+                    else self.last >= int(cmd.price_raw or 0)
+                )
             ):
                 # a stop already triggered by the last price fills at once, at that price
                 self._fill(
-                    buy=cmd.side == "BUY", qty=self.positions[-1].quantity, base_raw=self.last,
-                    order_type="STOP_MARKET", maker=False, action="stop", oid=cmd.oid,
+                    buy=cmd.side == "BUY",
+                    qty=self.positions[-1].quantity,
+                    base_raw=self.last,
+                    order_type="STOP_MARKET",
+                    maker=False,
+                    action="stop",
+                    oid=cmd.oid,
                 )
-            if kind == "tp" and self.pos_open and self.last is not None and (
-                self.last >= int(cmd.price_raw or 0) if cmd.side == "SELL" else self.last <= int(cmd.price_raw or 0)
+            if (
+                kind == "tp"
+                and self.pos_open
+                and self.last is not None
+                and (
+                    self.last >= int(cmd.price_raw or 0)
+                    if cmd.side == "SELL"
+                    else self.last <= int(cmd.price_raw or 0)
+                )
             ):
                 # a limit already marketable at submission fills at once as a taker at the book
                 self._fill(
-                    buy=cmd.side == "BUY", qty=self.positions[-1].quantity, base_raw=self.last,
-                    order_type="LIMIT", maker=False, action="target", oid=cmd.oid,
+                    buy=cmd.side == "BUY",
+                    qty=self.positions[-1].quantity,
+                    base_raw=self.last,
+                    order_type="LIMIT",
+                    maker=False,
+                    action="target",
+                    oid=cmd.oid,
                 )
         elif kind == "exit":
             if not self.pos_open:
                 return  # reduce-only market with no position: denied, no fill, no draw
             pos = self.positions[-1]
             self._fill(
-                buy=not pos.is_long, qty=pos.quantity, base_raw=self._book(), order_type="MARKET",
-                maker=False, action="exit", oid=cmd.oid,
+                buy=not pos.is_long,
+                qty=pos.quantity,
+                base_raw=self._book(),
+                order_type="MARKET",
+                maker=False,
+                action="exit",
+                oid=cmd.oid,
             )
         elif kind == "entry":
             self._fill(
-                buy=cmd.side == "BUY", qty=cmd.qty, base_raw=self._book(), order_type="MARKET",
-                maker=False, action="entry", oid=cmd.oid,
+                buy=cmd.side == "BUY",
+                qty=cmd.qty,
+                base_raw=self._book(),
+                order_type="MARKET",
+                maker=False,
+                action="entry",
+                oid=cmd.oid,
             )
 
     def _book(self) -> int:
@@ -519,8 +584,13 @@ class Emulator:
         if sl is not None and (price <= sl.price_raw if is_long else price >= sl.price_raw):
             base = price if kind in _GAPS else sl.price_raw
             self._fill(
-                buy=not is_long, qty=pos.quantity, base_raw=base, order_type="STOP_MARKET",
-                maker=False, action="stop", oid=sl.oid,
+                buy=not is_long,
+                qty=pos.quantity,
+                base_raw=base,
+                order_type="STOP_MARKET",
+                maker=False,
+                action="stop",
+                oid=sl.oid,
             )
             return
         if tp is not None and (price >= tp.price_raw if is_long else price <= tp.price_raw):
@@ -532,13 +602,20 @@ class Emulator:
             elif not self._event(self.p_limit):
                 return
             self._fill(
-                buy=not is_long, qty=pos.quantity, base_raw=base, order_type="LIMIT",
-                maker=True, action="target", oid=tp.oid,
+                buy=not is_long,
+                qty=pos.quantity,
+                base_raw=base,
+                order_type="LIMIT",
+                maker=True,
+                action="target",
+                oid=tp.oid,
             )
 
     def _bar_ticks(self, bar: Any) -> list[tuple[int, str, int]]:
         quarter, close_size = bar_quarter_sizes(bar.volume.raw, self.min_size_raw)
-        return bar_ticks(bar.open.raw, bar.high.raw, bar.low.raw, bar.close.raw, self.last, quarter, close_size)
+        return bar_ticks(
+            bar.open.raw, bar.high.raw, bar.low.raw, bar.close.raw, self.last, quarter, close_size
+        )
 
     # ----------------------------------------------------------------------------------
     # strategy: the generated on_bar, driven by the recorded signal booleans
@@ -599,7 +676,9 @@ class Emulator:
             for held, is_long in self.refresh_sides.items():
                 if self.pos_side != held:
                     continue
-                if (long_sig if is_long else short_sig) and not self._delay("long_refresh" if is_long else "short_refresh"):
+                if (long_sig if is_long else short_sig) and not self._delay(
+                    "long_refresh" if is_long else "short_refresh"
+                ):
                     self._refresh_levels(k, is_long)
                 break
         if self.pos_open and (not self.reverse or (self.intent is None and self.pending is None)):
@@ -641,7 +720,11 @@ class Emulator:
             return
         self._send(_Cmd(self.now, "cancel_all"))
         pos = self.positions[-1]
-        self._send(_Cmd(self.now, "exit", "SELL" if pos.is_long else "BUY", pos.quantity, None, self._oid()))
+        self._send(
+            _Cmd(
+                self.now, "exit", "SELL" if pos.is_long else "BUY", pos.quantity, None, self._oid()
+            )
+        )
 
     def _drop_queued_protection(self) -> None:
         self.outbox = [c for c in self.outbox if c.kind not in ("sl", "tp")]
@@ -669,7 +752,9 @@ class Emulator:
         if self.sl_levels:
             self.strat._pending_levels = None
         pos = self.positions[-1]
-        self._send(_Cmd(self.now, "exit", "SELL" if pos.is_long else "BUY", pos.quantity, None, exit_id))
+        self._send(
+            _Cmd(self.now, "exit", "SELL" if pos.is_long else "BUY", pos.quantity, None, exit_id)
+        )
 
     def _reverse_on_closed(self, closing_oid: int) -> bool:
         intent, self.intent = self.intent, None
@@ -693,7 +778,9 @@ class Emulator:
         self.intent = None
         self.res.reverse_dropped += 1
         if self.pos_open:
-            raise EmulatorUnsupported("a reversal exit left the position open (protection re-arm is not modeled)")
+            raise EmulatorUnsupported(
+                "a reversal exit left the position open (protection re-arm is not modeled)"
+            )
 
     def _refresh_levels(self, k: int, is_long: bool) -> None:
         """``_refresh_levels``: valid new levels replace the protection; invalid ones keep it."""
@@ -718,9 +805,27 @@ class Emulator:
             tp = None
         close_side = "SELL" if is_long else "BUY"
         if sl is not None:
-            self._send(_Cmd(self.now, "sl", close_side, pos.quantity, self.inst.make_price(sl).raw, self._oid()))
+            self._send(
+                _Cmd(
+                    self.now,
+                    "sl",
+                    close_side,
+                    pos.quantity,
+                    self.inst.make_price(sl).raw,
+                    self._oid(),
+                )
+            )
         if tp is not None:
-            self._send(_Cmd(self.now, "tp", close_side, pos.quantity, self.inst.make_price(tp).raw, self._oid()))
+            self._send(
+                _Cmd(
+                    self.now,
+                    "tp",
+                    close_side,
+                    pos.quantity,
+                    self.inst.make_price(tp).raw,
+                    self._oid(),
+                )
+            )
 
     # ----------------------------------------------------------------------------------
     # the run
@@ -772,8 +877,14 @@ class Emulator:
             pos = self.positions[-1]
             self.now = last_ts
             self._fill(
-                buy=not pos.is_long, qty=pos.quantity, base_raw=self._book(), order_type="MARKET",
-                maker=False, action="exit", oid=self._oid(), finalize=False,
+                buy=not pos.is_long,
+                qty=pos.quantity,
+                base_raw=self._book(),
+                order_type="MARKET",
+                maker=False,
+                action="exit",
+                oid=self._oid(),
+                finalize=False,
             )
         self.res.sizing_skips = dict(getattr(self.strat, "_sizing_skips", {}) or {})
         return self.res

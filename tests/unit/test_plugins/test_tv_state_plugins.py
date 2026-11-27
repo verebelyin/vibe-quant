@@ -294,8 +294,7 @@ def r_rsi_div(bars: list[BarEvent], p: dict[str, Any]) -> dict[str, list[float]]
         return not math.isnan(bars_since) and p["range_lower"] <= bars_since <= p["range_upper"]
 
     out = {
-        k: [0.0] * size
-        for k in ("bull", "hidden_bull", "bear", "hidden_bear", "long", "long_exit")
+        k: [0.0] * size for k in ("bull", "hidden_bull", "bear", "hidden_bear", "long", "long_exit")
     }
     for t in range(size):
         if pl[t]:

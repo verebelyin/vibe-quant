@@ -286,9 +286,7 @@ def _has_account_checkpoint(config: PaperTradingConfig) -> bool:
     log: this runs on the money path.
     """
     try:
-        persistence = StatePersistence(
-            db_path=config.db_path, trader_id=config.trader_id
-        )
+        persistence = StatePersistence(db_path=config.db_path, trader_id=config.trader_id)
         try:
             return lineage.has_prior_state(
                 persistence, account_id(config.binance), config.trader_id

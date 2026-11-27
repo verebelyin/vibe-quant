@@ -172,9 +172,7 @@ def forward_stats(x: np.ndarray) -> ForwardStats:
 
 def _sharpe_futility(days: int, sr: float | None, ub: float | None) -> str | None:
     if days >= FUTILITY_MIN_DAYS and sr is not None and ub is not None and ub < FUTILITY_SR:
-        return (
-            f"forward Sharpe {sr:.2f} ({SHARPE_UNIT}), 95% upper bound {ub:.4f} < {FUTILITY_SR} after {days} days"
-        )
+        return f"forward Sharpe {sr:.2f} ({SHARPE_UNIT}), 95% upper bound {ub:.4f} < {FUTILITY_SR} after {days} days"
     return None
 
 

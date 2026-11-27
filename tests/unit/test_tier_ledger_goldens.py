@@ -110,9 +110,7 @@ def _flat_bars(instrument_id: str, closes: list[float] | None = None) -> list[An
     """One 1m bar per minute of the window, close-only (open/high/low = close)."""
     bar_type = BarType.from_str(_bar_type(instrument_id))
     prices = closes if closes is not None else [40000.0] * N_BARS
-    return [
-        _Bar(bar_type, at(i), price) for i, price in enumerate(prices)
-    ]
+    return [_Bar(bar_type, at(i), price) for i, price in enumerate(prices)]
 
 
 @dataclass(frozen=True)
@@ -442,9 +440,7 @@ def _scenario(name: str, tmp_path: Path, mode: str | None = None) -> _Inputs:
             "BTCUSDT", [(START_MS + 16 * 3_600_000, FUNDING_RATE, 40000.0)], "golden"
         )
         data.close()
-        return _inputs(
-            positions, one_btc, tmp_path, symbols=["BTCUSDT"], funding_archive=archive
-        )
+        return _inputs(positions, one_btc, tmp_path, symbols=["BTCUSDT"], funding_archive=archive)
 
     if name == "G4":
         return _inputs([], None, tmp_path, symbols=["BTCUSDT"])

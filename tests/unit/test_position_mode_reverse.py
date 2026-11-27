@@ -256,7 +256,10 @@ class TestSchema:
         del base["position_mode"]
         assert StrategyDSL.model_validate(base).position_mode is None
         assert StrategyDSL.model_validate({**base, "position_mode": None}).position_mode is None
-        assert StrategyDSL.model_validate({**base, "position_mode": "reverse"}).position_mode == "reverse"
+        assert (
+            StrategyDSL.model_validate({**base, "position_mode": "reverse"}).position_mode
+            == "reverse"
+        )
 
     @pytest.mark.parametrize("bad", ["Reverse", "flat", "", 1, True, "x"])
     def test_anything_else_names_the_valid_value(self, bad: object) -> None:
@@ -267,7 +270,11 @@ class TestSchema:
 def _src(d: dict[str, Any]) -> str:
     import re
 
-    return re.sub(r"Generated: [0-9T:.\-]+", "Generated: X", StrategyCompiler().compile(validate_strategy_dict(d)))
+    return re.sub(
+        r"Generated: [0-9T:.\-]+",
+        "Generated: X",
+        StrategyCompiler().compile(validate_strategy_dict(d)),
+    )
 
 
 class TestLegacyCompileUnchanged:
@@ -275,7 +282,13 @@ class TestLegacyCompileUnchanged:
         absent = dsl("rev_legacy")
         del absent["position_mode"]
         assert _src(absent) == _src({**absent, "position_mode": None})
-        for marker in ("ReversalIntent", "_begin_reverse", "_reverse_on_closed", "self._intent", "_expire_reversal"):
+        for marker in (
+            "ReversalIntent",
+            "_begin_reverse",
+            "_reverse_on_closed",
+            "self._intent",
+            "_expire_reversal",
+        ):
             assert marker not in _src(absent), marker
 
     def test_reverse_emits_the_hooks_exactly_where_the_design_puts_them(self) -> None:
@@ -287,7 +300,9 @@ class TestLegacyCompileUnchanged:
 
     def test_legacy_templates_are_not_the_reverse_ones(self) -> None:
         assert templates.ORDER_METHODS_LINES != templates.ORDER_METHODS_REVERSE_LINES
-        assert "_begin_reverse" not in "\n".join(templates.ORDER_METHODS_LINES + templates.ON_EVENT_LINES)
+        assert "_begin_reverse" not in "\n".join(
+            templates.ORDER_METHODS_LINES + templates.ON_EVENT_LINES
+        )
 
     def test_a_reverse_strategy_with_post_only_is_refused_at_start(self) -> None:
         with pytest.raises(ValueError, match="post_only"):
@@ -309,7 +324,9 @@ def test_active_latency_puts_the_entry_in_flight_after_the_exit() -> None:
     (exit_fill,) = out.exits()
     assert (long_entry.side, short_entry.side, exit_fill.side) == ("BUY", "SELL", "SELL")
     assert exit_fill.ts == bar_ts(3) and exit_fill.px == 10200.0
-    assert short_entry.ts == bar_ts(4) and short_entry.px == 10300.0  # reported, not equal to the exit
+    assert (
+        short_entry.ts == bar_ts(4) and short_entry.px == 10300.0
+    )  # reported, not equal to the exit
     assert out.open_positions == [("SHORT", short_entry.qty)]
 
 
@@ -329,13 +346,23 @@ def test_slow_venue_cancel_cannot_remove_the_new_sides_protection() -> None:
 
     (_, short_entry) = out.entries()
     assert short_entry.side == "SELL" and short_entry.px == 10100.0
-    new_pair = sorted((o.type, o.trigger or o.px) for o in out.orders if o.side == "BUY" and o.reduce_only
-                      and o.type in ("STOP_MARKET", "LIMIT"))
-    assert new_pair == [("LIMIT", pytest.approx(10100.0 * 0.96)), ("STOP_MARKET", pytest.approx(10100.0 * 1.02))]
+    new_pair = sorted(
+        (o.type, o.trigger or o.px)
+        for o in out.orders
+        if o.side == "BUY" and o.reduce_only and o.type in ("STOP_MARKET", "LIMIT")
+    )
+    assert new_pair == [
+        ("LIMIT", pytest.approx(10100.0 * 0.96)),
+        ("STOP_MARKET", pytest.approx(10100.0 * 1.02)),
+    ]
     for o in out.orders:
         if o.side == "BUY" and o.reduce_only and o.type in ("STOP_MARKET", "LIMIT"):
             assert o.status != "CANCELED" and o.cancel_requested >= bar_ts(len(closes) - 1), o
-    old_pair = [o for o in out.orders if o.side == "SELL" and o.reduce_only and o.type in ("STOP_MARKET", "LIMIT")]
+    old_pair = [
+        o
+        for o in out.orders
+        if o.side == "SELL" and o.reduce_only and o.type in ("STOP_MARKET", "LIMIT")
+    ]
     assert sorted(o.status for o in old_pair) == ["CANCELED", "CANCELED"]
     assert out.open_positions == [("SHORT", short_entry.qty)]
 
@@ -351,7 +378,10 @@ def test_a_stop_that_closes_the_position_first_drops_the_reversal() -> None:
     closes = [10000.0, 10000.0, 10000.0, 10100.0, 9000.0, 9000.0, 9000.0]
     out = run(closes)
 
-    assert [o.side for o in out.entries()] == ["BUY", "BUY"]  # the long, then a plain re-entry once flat
+    assert [o.side for o in out.entries()] == [
+        "BUY",
+        "BUY",
+    ]  # the long, then a plain re-entry once flat
     stops = [o for o in out.orders if o.type == "STOP_MARKET" and o.qty > 0]
     assert len(stops) == 1 and stops[0].side == "SELL"
     assert out.strategy._reverse_dropped == 1
@@ -365,7 +395,11 @@ def test_an_exit_that_never_fills_expires_at_the_next_bar_and_rearms_the_positio
     def withhold_exit(cls: type) -> type:
         class Withheld(cls):  # type: ignore[valid-type, misc]
             def _send_command(self, fn, *args):  # type: ignore[no-untyped-def]
-                if fn == self.submit_order and args[0].is_reduce_only and args[0].order_type == OrderType.MARKET:
+                if (
+                    fn == self.submit_order
+                    and args[0].is_reduce_only
+                    and args[0].order_type == OrderType.MARKET
+                ):
                     return
                 super()._send_command(fn, *args)
 
@@ -378,7 +412,9 @@ def test_an_exit_that_never_fills_expires_at_the_next_bar_and_rearms_the_positio
     assert out.open_positions == [("LONG", out.entries()[0].qty)]
     live = sorted((o.type, o.side) for o in out.open_orders)
     assert live == [("LIMIT", "SELL"), ("STOP_MARKET", "SELL")], live  # re-armed, not naked
-    assert sum(o.status == "CANCELED" for o in out.orders) == 2  # the first pair was cancelled by id
+    assert (
+        sum(o.status == "CANCELED" for o in out.orders) == 2
+    )  # the first pair was cancelled by id
 
 
 def _after_bars(pack: list[tuple[bool, int, list[tuple[str, float]]]]) -> Any:
@@ -412,20 +448,28 @@ def test_a_partial_ioc_exit_is_terminal_and_the_leftover_is_rearmed(
 
     def low_volume_bars(closes: list[float], tf: str) -> list[Bar]:
         return [
-            b if i < 3 else Bar(
-                bar_type=b.bar_type, open=b.open, high=b.high, low=b.low, close=b.close,
-                volume=Quantity.from_str("0.004"), ts_event=b.ts_event, ts_init=b.ts_init,
+            b
+            if i < 3
+            else Bar(
+                bar_type=b.bar_type,
+                open=b.open,
+                high=b.high,
+                low=b.low,
+                close=b.close,
+                volume=Quantity.from_str("0.004"),
+                ts_event=b.ts_event,
+                ts_init=b.ts_init,
             )
             for i, b in enumerate(real_bars(closes, tf))
         ]
 
     monkeypatch.setattr(sys.modules[__name__], "_bars", low_volume_bars)
     after: list[tuple[bool, int, list[tuple[str, float]]]] = []
-    out = run([10000.0] * 3 + [10100.0] + [10000.0] * 4, mode="immediate",
-              wrap=_after_bars(after))
+    out = run([10000.0] * 3 + [10100.0] + [10000.0] * 4, mode="immediate", wrap=_after_bars(after))
 
-    (partial,) = [o for o in out.orders
-                  if o.reduce_only and o.type == "MARKET" and o.ts == bar_ts(3)]
+    (partial,) = [
+        o for o in out.orders if o.reduce_only and o.type == "MARKET" and o.ts == bar_ts(3)
+    ]
     assert (partial.status, partial.qty) == ("CANCELED", 0.001)  # a real, terminal partial
     assert [o.side for o in out.entries()] == ["BUY"]  # no opposite entry
     assert out.strategy._intent is None and out.strategy._reverse_dropped == 1
@@ -444,8 +488,11 @@ def test_a_rejected_ioc_exit_is_terminal_and_the_full_position_is_rearmed() -> N
     def reject_exit(cls: type) -> type:
         class Reject(cls):  # type: ignore[valid-type, misc]
             def _send_command(self, fn, *args):  # type: ignore[no-untyped-def]
-                if fn == self.submit_order and args[0].is_reduce_only \
-                        and args[0].order_type == OrderType.MARKET:
+                if (
+                    fn == self.submit_order
+                    and args[0].is_reduce_only
+                    and args[0].order_type == OrderType.MARKET
+                ):
                     self.submit_order(
                         self.order_factory.market(
                             instrument_id=self.instrument_id,
@@ -473,8 +520,9 @@ def test_a_rejected_ioc_exit_is_terminal_and_the_full_position_is_rearmed() -> N
 
     out = run([10000.0] * 3 + [10100.0] + [10000.0] * 4, mode="immediate", wrap=reject_exit)
 
-    (denied,) = [o for o in out.orders
-                 if o.reduce_only and o.type == "MARKET" and o.ts == bar_ts(3)]
+    (denied,) = [
+        o for o in out.orders if o.reduce_only and o.type == "MARKET" and o.ts == bar_ts(3)
+    ]
     assert (denied.status, denied.qty) == ("DENIED", 0.0)  # a real, terminal rejection
     assert [o.side for o in out.entries()] == ["BUY"]  # no opposite entry
     assert out.strategy._intent is None and out.strategy._reverse_dropped == 1
@@ -498,7 +546,9 @@ def test_a_repeated_opposite_signal_while_a_reversal_is_pending_is_ignored() -> 
 
     assert [o.side for o in out.entries()] == ["BUY", "SELL"]
     reduce_only_markets = [o for o in out.orders if o.reduce_only and o.type == "MARKET"]
-    assert len(reduce_only_markets) == 1, reduce_only_markets  # a second exit would be a second order
+    assert len(reduce_only_markets) == 1, (
+        reduce_only_markets
+    )  # a second exit would be a second order
     assert out.strategy._reverse_dropped == 0
 
 
@@ -510,7 +560,11 @@ def test_a_close_arriving_after_the_intent_expired_opens_nothing() -> None:
             held = None
 
             def _send_command(self, fn, *args):  # type: ignore[no-untyped-def]
-                if fn == self.submit_order and args[0].is_reduce_only and args[0].order_type == OrderType.MARKET:
+                if (
+                    fn == self.submit_order
+                    and args[0].is_reduce_only
+                    and args[0].order_type == OrderType.MARKET
+                ):
                     self.held = args[0]
                     return
                 super()._send_command(fn, *args)
@@ -525,7 +579,9 @@ def test_a_close_arriving_after_the_intent_expired_opens_nothing() -> None:
 
     out = run(one_bar_short(3, 8), wrap=late_exit)
 
-    assert [o.side for o in out.entries() if o.side == "SELL"] == []  # no short after the late close
+    assert [
+        o.side for o in out.entries() if o.side == "SELL"
+    ] == []  # no short after the late close
     assert out.exits() and out.exits()[0].side == "SELL"  # the exit did close the long
     assert out.strategy._reverse_dropped == 1  # counted once, at the expiry
 
@@ -594,7 +650,11 @@ class TestDeferredDispatch:
 
     @staticmethod
     def _run(closes: list[float], wrap: Callable[[type], type] | None = None) -> Out:
-        d = dsl("rev_r6", timeframe="1m", entry_conditions={"long": ["close < 10050"], "short": ["close > 10050"]})
+        d = dsl(
+            "rev_r6",
+            timeframe="1m",
+            entry_conditions={"long": ["close < 10050"], "short": ["close > 10050"]},
+        )
         return run(closes, d=d, mode="defer", wrap=wrap)
 
     def test_flat_at_dispatch_is_a_plain_entry(self) -> None:
@@ -603,7 +663,9 @@ class TestDeferredDispatch:
         out = self._run(self._closes(stop_bar=21))
 
         assert [o.side for o in out.entries()][:2] == ["BUY", "SELL"]
-        assert [o for o in out.orders if o.reduce_only and o.type == "MARKET" and o.ts < 30 * _M] == []
+        assert [
+            o for o in out.orders if o.reduce_only and o.type == "MARKET" and o.ts < 30 * _M
+        ] == []
         assert out.strategy._reverse_dropped == 0
 
     def test_same_side_at_dispatch_does_nothing(self) -> None:
@@ -624,7 +686,9 @@ class TestDeferredDispatch:
         assert [o.side for o in out.entries()] == ["BUY"]
         assert len(out.orders) == len(baseline.orders)
         # (the only exit is on_stop closing the open long when the data ends)
-        assert [x for x in out.exits() if x.ts < 39 * _M] == [] and out.strategy._reverse_dropped == 0
+        assert [
+            x for x in out.exits() if x.ts < 39 * _M
+        ] == [] and out.strategy._reverse_dropped == 0
 
 
 # ---------------------------------------------------------------------------

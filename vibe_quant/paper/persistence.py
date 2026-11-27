@@ -618,7 +618,9 @@ class PaperCommandQueue:
                     if payload is None:
                         # A halt/kill/pause/close_all still runs, on its defaults: stopping
                         # is always safe, and the message says why it has no detail.
-                        payload = {"message": f"{row['command']} via API ({self.UNREADABLE_PAYLOAD})"}
+                        payload = {
+                            "message": f"{row['command']} via API ({self.UNREADABLE_PAYLOAD})"
+                        }
                     claimed.append(
                         PaperCommand(
                             id=row["id"],

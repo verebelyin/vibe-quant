@@ -100,9 +100,7 @@ def precheck_screening_data(
     """
     from vibe_quant.engine_run import loaded_timeframes
 
-    dsl_dict = _effective_dsl_dict(
-        dsl_config, strategy_name, parameters, screening=True
-    )
+    dsl_dict = _effective_dsl_dict(dsl_config, strategy_name, parameters, screening=True)
     if dsl_dict is None:
         return
 
@@ -232,9 +230,7 @@ def _dsl_indicator_types(dsl_dict: dict[str, object]) -> list[str]:
     indicators = dsl_dict.get("indicators")
     if not isinstance(indicators, dict):
         return []
-    return [
-        str(spec.get("type", "")) for spec in indicators.values() if isinstance(spec, dict)
-    ]
+    return [str(spec.get("type", "")) for spec in indicators.values() if isinstance(spec, dict)]
 
 
 def _check_fill_ticks(

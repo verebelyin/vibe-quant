@@ -180,14 +180,14 @@ def _catalog_bars(catalog: Path, start: str, end: str) -> dict[str, np.ndarray]:
     """The hourly bars the compiled strategy itself reads (catalog-rounded prices)."""
     from vibe_quant.fast_tier.signals import load_bars
 
-    rows = load_bars(
-        str(catalog), f"{SYMBOL}-PERP.BINANCE-1-HOUR-LAST-EXTERNAL", start, end
-    )
+    rows = load_bars(str(catalog), f"{SYMBOL}-PERP.BINANCE-1-HOUR-LAST-EXTERNAL", start, end)
     keys = ("open", "high", "low", "close", "volume")
     return {key: np.array([float(getattr(bar, key)) for bar in rows]) for key in keys}
 
 
-def _events(long_entry: Any, short_entry: Any, long_exit: Any, short_exit: Any) -> list[tuple[int, str, str]]:
+def _events(
+    long_entry: Any, short_entry: Any, long_exit: Any, short_exit: Any
+) -> list[tuple[int, str, str]]:
     """``(bar, side, action)`` of every signal, in bar order."""
     out: list[tuple[int, str, str]] = []
     for i in range(len(long_entry)):

@@ -61,9 +61,15 @@ async def test_short_wfa_rejected_422_no_run_row(client) -> None:
     ac, state, job_mgr = client
     before = _run_count(state)
     r = await _post(
-        ac, job_mgr,
-        {**_OK_BODY, "start_date": "2025-01-01", "end_date": "2025-03-02",
-         "train_test_split": 0.8, "wfa_oos_step_days": 90},
+        ac,
+        job_mgr,
+        {
+            **_OK_BODY,
+            "start_date": "2025-01-01",
+            "end_date": "2025-03-02",
+            "train_test_split": 0.8,
+            "wfa_oos_step_days": 90,
+        },
     )
     assert r.status_code == 422
     assert "WFA" in r.json()["detail"]
@@ -75,9 +81,15 @@ async def test_eval_windows_omitted_uses_cli_default(client) -> None:
     ac, state, job_mgr = client
     before = _run_count(state)
     r = await _post(
-        ac, job_mgr,
-        {**_OK_BODY, "start_date": "2025-01-01", "end_date": "2025-01-16",
-         "train_test_split": 0, "eval_windows": 0},
+        ac,
+        job_mgr,
+        {
+            **_OK_BODY,
+            "start_date": "2025-01-01",
+            "end_date": "2025-01-16",
+            "train_test_split": 0,
+            "eval_windows": 0,
+        },
     )
     assert r.status_code == 422
     assert "eval_windows" in r.json()["detail"]
@@ -113,7 +125,8 @@ async def test_valid_defaults_accepted(client) -> None:
 async def test_valid_cross_window_and_wfa_accepted(client) -> None:
     ac, _state, job_mgr = client
     r = await _post(
-        ac, job_mgr,
+        ac,
+        job_mgr,
         {**_OK_BODY, "cross_window_months": [1, 2], "wfa_oos_step_days": 60},
     )
     assert r.status_code == 201

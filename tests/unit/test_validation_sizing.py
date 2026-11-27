@@ -127,8 +127,13 @@ def _launch(tmp_path: Path, parameters: dict[str, object]) -> int:
     try:
         sid = state.create_strategy(name="sizing_probe", dsl_config=_dsl())
         return state.create_backtest_run(
-            strategy_id=sid, run_mode="validation", symbols=["BTCUSDT"], timeframe="4h",
-            start_date="2025-01-01", end_date="2025-02-01", parameters=parameters,
+            strategy_id=sid,
+            run_mode="validation",
+            symbols=["BTCUSDT"],
+            timeframe="4h",
+            start_date="2025-01-01",
+            end_date="2025-02-01",
+            parameters=parameters,
         )
     finally:
         state.close()
@@ -358,9 +363,7 @@ def test_validation_extraction_failure_still_cleans_catalog(
     run_id = _launch(tmp_path, {})
     runner = _runner(tmp_path)
     try:
-        with pytest.raises(
-            ValidationRunnerError, match="RuntimeError: extraction exploded"
-        ):
+        with pytest.raises(ValidationRunnerError, match="RuntimeError: extraction exploded"):
             runner.run(run_id=run_id)
     finally:
         runner.close()
@@ -387,8 +390,13 @@ def _screening_at_sizing(
     state = StateManager(tmp_path / "s.db")
     try:
         run_id = state.create_backtest_run(
-            strategy_id=strategy_id, run_mode="screening", symbols=["BTCUSDT"], timeframe="4h",
-            start_date="2025-01-01", end_date="2025-02-01", parameters=parameters,
+            strategy_id=strategy_id,
+            run_mode="screening",
+            symbols=["BTCUSDT"],
+            timeframe="4h",
+            start_date="2025-01-01",
+            end_date="2025-02-01",
+            parameters=parameters,
         )
         state.update_backtest_run_status(run_id, "completed")
         state.conn.execute(
@@ -419,8 +427,12 @@ def test_consistency_reference_must_share_the_runs_sizing(
         default = _screening_at_sizing(tmp_path, sid, {}, sharpe=0.46)
         assert default > matching, "the newer run must be the default-cap one"
         run_id = state.create_backtest_run(
-            strategy_id=sid, run_mode="validation", symbols=["BTCUSDT"], timeframe="4h",
-            start_date="2025-01-01", end_date="2025-02-01",
+            strategy_id=sid,
+            run_mode="validation",
+            symbols=["BTCUSDT"],
+            timeframe="4h",
+            start_date="2025-01-01",
+            end_date="2025-02-01",
             parameters={"max_position_pct": 1.0},
         )
     finally:

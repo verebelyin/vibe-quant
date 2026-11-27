@@ -11,7 +11,10 @@ import pytest
 from vibe_quant.data.catalog import INSTRUMENT_CONFIGS, create_instrument
 
 _FIXTURE = Path(__file__).parent.parent / "fixtures" / "binance_exchange_info_usdtm.json"
-_INFO = {s["symbol"]: {f["filterType"]: f for f in s["filters"]} for s in json.loads(_FIXTURE.read_text())["symbols"]}
+_INFO = {
+    s["symbol"]: {f["filterType"]: f for f in s["filters"]}
+    for s in json.loads(_FIXTURE.read_text())["symbols"]
+}
 
 
 _HISTORICAL_TICK = {"SOLUSDT": Decimal("0.001"), "NEARUSDT": Decimal("0.0001")}
@@ -86,8 +89,9 @@ def test_write_instrument_replaces_changed_and_skips_identical(tmp_path: Path) -
     from vibe_quant.data.catalog import CatalogManager
 
     new = create_instrument("SOLUSDT")
-    old = type(new).from_dict({**type(new).to_dict(new), "size_increment": "1", "size_precision": 0,
-                               "min_quantity": None})
+    old = type(new).from_dict(
+        {**type(new).to_dict(new), "size_increment": "1", "size_precision": 0, "min_quantity": None}
+    )
     mgr = CatalogManager(tmp_path)
     mgr.write_instrument(old)
     assert mgr.get_instruments()[0].size_increment == Quantity.from_str("1")

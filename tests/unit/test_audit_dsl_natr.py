@@ -71,7 +71,9 @@ def _bars(n: int, spec: str, step_ns: int, seed: int) -> list[Bar]:
     return out
 
 
-@pytest.mark.parametrize(("timeframe", "spec", "minutes"), [("1h", "1-HOUR", 60), ("15m", "15-MINUTE", 15)])
+@pytest.mark.parametrize(
+    ("timeframe", "spec", "minutes"), [("1h", "1-HOUR", 60), ("15m", "15-MINUTE", 15)]
+)
 def test_compiled_natr_matches_reference(timeframe: str, spec: str, minutes: int) -> None:
     bars = _bars(300, spec, minutes * 60_000_000_000, seed=minutes)
     dsl = {
@@ -112,11 +114,15 @@ def test_compiled_natr_matches_reference(timeframe: str, spec: str, minutes: int
 @pytest.mark.skipif(not _CATALOG.exists(), reason="needs data/catalog with BTC/ETH/SOL bars")
 @pytest.mark.parametrize("symbol", ["BTCUSDT", "ETHUSDT", "SOLUSDT"])
 @pytest.mark.parametrize(("tf", "minutes"), [("1-HOUR", 60)])
-def test_random_natr_gene_fires_5_to_95_pct_on_real_data(symbol: str, tf: str, minutes: int) -> None:
+def test_random_natr_gene_fires_5_to_95_pct_on_real_data(
+    symbol: str, tf: str, minutes: int
+) -> None:
     from nautilus_trader.persistence.catalog import ParquetDataCatalog
 
     bars = ParquetDataCatalog(str(_CATALOG)).bars(
-        bar_types=[f"{symbol}-PERP.BINANCE-{tf}-LAST-EXTERNAL"], start="2024-01-01", end="2026-03-01"
+        bar_types=[f"{symbol}-PERP.BINANCE-{tf}-LAST-EXTERNAL"],
+        start="2024-01-01",
+        end="2026-03-01",
     )
     if len(bars) < 1000:
         pytest.skip(f"not enough {symbol} {tf} bars in catalog")

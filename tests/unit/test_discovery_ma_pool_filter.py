@@ -78,9 +78,7 @@ def _seed_with_kama() -> StrategyChromosome:
         stop_loss_pct=2.0,
         take_profit_pct=5.0,
         direction=Direction.LONG,
-        ma_entry_genes=[
-            PriceVsMAConditionGene("KAMA", {"period": 10.0}, ConditionType.GT)
-        ],
+        ma_entry_genes=[PriceVsMAConditionGene("KAMA", {"period": 10.0}, ConditionType.GT)],
     )
 
 
@@ -132,15 +130,11 @@ class TestPoolWithoutMaNames:
 
 class TestSeedMaListsFiltered:
     @pytest.mark.parametrize("ma_list", _MA_LISTS)
-    def test_forbidden_ma_gene_dropped_from_each_list_and_seed_admitted(
-        self, ma_list: str
-    ) -> None:
+    def test_forbidden_ma_gene_dropped_from_each_list_and_seed_admitted(self, ma_list: str) -> None:
         random.seed(15)
         _filter_pool(["RSI", "VIDYA"])
 
-        population = initialize_population(
-            4, seed_chromosomes=[_both_seed_with_kama_in([ma_list])]
-        )
+        population = initialize_population(4, seed_chromosomes=[_both_seed_with_kama_in([ma_list])])
 
         seed = population[0]
         assert seed.direction is Direction.BOTH
@@ -151,9 +145,7 @@ class TestSeedMaListsFiltered:
         random.seed(16)
         _filter_pool(["RSI", "VIDYA"])
 
-        population = initialize_population(
-            4, seed_chromosomes=[_both_seed_with_kama_in(_MA_LISTS)]
-        )
+        population = initialize_population(4, seed_chromosomes=[_both_seed_with_kama_in(_MA_LISTS)])
 
         seed = population[0]
         assert seed.direction is Direction.BOTH

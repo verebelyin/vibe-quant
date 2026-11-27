@@ -70,9 +70,7 @@ class TestFundingCalculator:
         return path
 
     def test_symbol_from_instrument_id(self) -> None:
-        assert (
-            FundingCalculator.symbol_from_instrument_id("BTCUSDT-PERP.BINANCE") == "BTCUSDT"
-        )
+        assert FundingCalculator.symbol_from_instrument_id("BTCUSDT-PERP.BINANCE") == "BTCUSDT"
 
     def test_short_receives(self, archive_path: Path) -> None:
         calc = FundingCalculator(archive_path)
@@ -151,9 +149,7 @@ class TestCostsInNetPnl:
         assert trade.slippage_cost > 0.0
         assert trade.net_pnl == pytest.approx(100.0 - trade.slippage_cost)
         # Headline return charged by total_slippage / starting_balance
-        assert result.total_return == pytest.approx(
-            0.10 - result.total_slippage / 100_000.0
-        )
+        assert result.total_return == pytest.approx(0.10 - result.total_slippage / 100_000.0)
 
     def test_funding_charged_when_calculator_provided(self, tmp_path: Path) -> None:
         result = ValidationResult(starting_balance=100_000.0, total_return=0.10)
@@ -227,9 +223,7 @@ class TestCagrRunWindow:
 
         by_window = ValidationResult(total_return=0.10, trades=[trade])
         by_window.total_trades = 1
-        compute_extended_metrics(
-            by_window, run_start_date="2025-01-01", run_end_date="2026-01-01"
-        )
+        compute_extended_metrics(by_window, run_start_date="2025-01-01", run_end_date="2026-01-01")
         # 10% over 365 days -> CAGR ~= 10%
         assert by_window.cagr == pytest.approx(0.10, rel=0.01)
 

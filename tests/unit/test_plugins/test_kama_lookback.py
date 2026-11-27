@@ -46,7 +46,9 @@ def _clean_memo() -> object:
 def _stream(period: int, n_bars: int = 80) -> list[dict[str, float]]:
     spec = {"kama": ("KAMA", {"period": period}, "1h")}
     _, cls = compile_indicators({"kama": {"type": "KAMA", "period": period}})
-    return cast("list[dict[str, float]]", run_stream(cls, random_walk_bars(n_bars), False, specs=spec))
+    return cast(
+        "list[dict[str, float]]", run_stream(cls, random_walk_bars(n_bars), False, specs=spec)
+    )
 
 
 @pytest.mark.parametrize("period", SHORT_PERIODS)

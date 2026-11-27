@@ -67,9 +67,7 @@ def _aux_data() -> Any:
 # ---------------------------------------------------------------------------
 
 
-def _compiled(
-    indicators: dict[str, dict[str, Any]], entry: str, exit_: str
-) -> tuple[type, Any]:
+def _compiled(indicators: dict[str, dict[str, Any]], entry: str, exit_: str) -> tuple[type, Any]:
     """The generated 1m strategy class and its config instance for these conditions."""
     dsl = validate_strategy_dict(
         {
@@ -129,7 +127,10 @@ def _zec_bars(start: str, end: str, limit: int | None = None) -> list[Bar]:
 
 def _frame(bars: list[Bar]) -> pd.DataFrame:
     return pd.DataFrame(
-        {c: [float(getattr(b, c)) for b in bars] for c in ("open", "high", "low", "close", "volume")}
+        {
+            c: [float(getattr(b, c)) for b in bars]
+            for c in ("open", "high", "low", "close", "volume")
+        }
     )
 
 
@@ -177,7 +178,12 @@ def _feed_reference(strategy: Any, bars: list[Bar]) -> Signals:
     sx = np.zeros(n, dtype=bool)
     checks = [
         getattr(strategy, name, None)
-        for name in ("_check_long_entry", "_check_short_entry", "_check_long_exit", "_check_short_exit")
+        for name in (
+            "_check_long_entry",
+            "_check_short_entry",
+            "_check_long_exit",
+            "_check_short_exit",
+        )
     ]
     for i, bar in enumerate(bars):
         strategy._feed_pta_buffer("1m", bar)

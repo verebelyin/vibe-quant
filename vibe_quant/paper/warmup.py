@@ -116,9 +116,7 @@ def indicator_needs(
         spec = info.spec
         if spec.paper_warmup is None:
             needs.append(
-                WarmupNeed(
-                    info.name, info.config.type, interval, refusal="no paper warm-up class"
-                )
+                WarmupNeed(info.name, info.config.type, interval, refusal="no paper warm-up class")
             )
             continue
         params = StrategyCompiler._merge_effective_params(info)
@@ -348,9 +346,7 @@ class TopUpScheduler:
         return None
 
 
-def seed_all(
-    symbol: str, bar_types: Mapping[str, BarType], now_ms: int
-) -> dict[str, list[Bar]]:
+def seed_all(symbol: str, bar_types: Mapping[str, BarType], now_ms: int) -> dict[str, list[Bar]]:
     """Seed of every needed interval (blocking; run off the loop): ``{interval: bars}``.
 
     Raises:
@@ -363,4 +359,3 @@ def seed_all(
         except SeedError as exc:
             raise SeedError(exc.reason, interval) from None
     return out
-

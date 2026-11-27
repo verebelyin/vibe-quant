@@ -34,9 +34,9 @@
 
 **Fix:**
 ```python
-base_currency=Currency.from_str(config["base_currency"]),  # BTC for BTCUSDT
-quote_currency=USDT,
-settlement_currency=USDT,
+base_currency = (Currency.from_str(config["base_currency"]),)  # BTC for BTCUSDT
+quote_currency = (USDT,)
+settlement_currency = (USDT,)
 ```
 
 #### H-2: Type error in _print_summary call

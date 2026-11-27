@@ -142,7 +142,9 @@ def _run(
     )
 
 
-def _short_eth(spike: Mapping[int, Mapping[str, float]] | None = None, **kw: Any) -> tuple[CarryRun, CarryInputs]:
+def _short_eth(
+    spike: Mapping[int, Mapping[str, float]] | None = None, **kw: Any
+) -> tuple[CarryRun, CarryInputs]:
     """E0 10,000; short 2.0 ETH at 2,500 (5,000 notional, fee 2.0) at the fill tick."""
     spec = _spec(**kw)
     run = _run(spec, [_fill(_ETH, _FILL_TS, "-2.0", 2_500.0, fee=2.0)])
@@ -238,7 +240,10 @@ def test_views_from_run(monkeypatch: pytest.MonkeyPatch) -> None:
         (_ETH, _ETH, "ETHUSDT-PERP.BINANCE"),
     ]
     assert [tuple(e) for e in views[0].events] == [(t1, 0.1, 50_000.0, -2.5)]
-    assert [tuple(e) for e in views[1].events] == [(t1, -2.0, 2_500.0, -2.5), (t2, 1.5, 2_400.0, -1.8)]
+    assert [tuple(e) for e in views[1].events] == [
+        (t1, -2.0, 2_500.0, -2.5),
+        (t2, 1.5, 2_400.0, -1.8),
+    ]
     assert list(views[0].funding) == [(t3, -0.25)]
     assert list(views[1].funding) == [(t3, 1.5)]
     for symbol in (_BTC, _ETH):
@@ -264,7 +269,9 @@ def test_views_from_run(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_cross_bust_raises() -> None:
     """R41: MARK high 3.1x entry on one minute busts the account: ``CarryLiquidated`` at the
     bar open, legs (ETHUSDT,), raised before the daily equity walk would see E(B) = -502."""
-    eth_after = {b: 2_500.0 if b < _START + 2 * _DAY else 7_750.0 for b in range(_START, _END + _DAY, _DAY)}
+    eth_after = {
+        b: 2_500.0 if b < _START + 2 * _DAY else 7_750.0 for b in range(_START, _END + _DAY, _DAY)
+    }
     boundaries = {_BTC: {}, _ETH: eth_after}
     spike = {_SPIKE: {"high": 7_750.0}}
 
@@ -319,9 +326,7 @@ def test_liquidation_horizon_gap_and_extrema() -> None:
     assert carry_liquidation(*_pair(btc={_SPIKE: {"low": 20_000.0}}))["count"] == 0
     # together in one minute: MB 10,000 - 7,000 - 3,000 = 0 <= MM 8 + 48
     with pytest.raises(CarryLiquidated) as both:
-        carry_liquidation(
-            *_pair(eth={_SPIKE: {"high": 6_000.0}}, btc={_SPIKE: {"low": 20_000.0}})
-        )
+        carry_liquidation(*_pair(eth={_SPIKE: {"high": 6_000.0}}, btc={_SPIKE: {"low": 20_000.0}}))
     assert both.value.decision_ns == _SPIKE
     assert both.value.symbols == (_BTC, _ETH)
     assert (both.value.margin_balance, both.value.maint_margin) == (0.0, 56.0)
@@ -350,19 +355,28 @@ def test_liquidation_data_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     earlier bust in the same segment) and a symbol without a tier table are
     ``CarryDataError`` with the scanner's text, never a bust."""
     run, inputs = _short_eth()
-    with pytest.raises(CarryDataError, match=r"^ETHUSDT: no mark-price series for position ETHUSDT$"):
+    with pytest.raises(
+        CarryDataError, match=r"^ETHUSDT: no mark-price series for position ETHUSDT$"
+    ):
         carry_liquidation(run, _inputs(run.spec, {_BTC: _marks(_PRICE[_BTC])}))
 
     hole = tuple(range(_SPIKE, _SPIKE + 61 * _MIN, _MIN))  # bars 62 min apart
     with pytest.raises(CarryDataError, match=r"^ETHUSDT: mark gap of more than 60 minutes"):
         carry_liquidation(run, _inputs(run.spec, {_ETH: _marks(2_500.0, None, hole)}))
     short_hole = tuple(range(_SPIKE, _SPIKE + 59 * _MIN, _MIN))  # bars 60 min apart: allowed
-    assert carry_liquidation(run, _inputs(run.spec, {_ETH: _marks(2_500.0, None, short_hole)}))["count"] == 0
+    assert (
+        carry_liquidation(run, _inputs(run.spec, {_ETH: _marks(2_500.0, None, short_hole)}))[
+            "count"
+        ]
+        == 0
+    )
 
     # the bust at the spike is masked by a later out-of-tier mark in the same segment
     masked = {_SPIKE: {"high": 7_750.0}, _SPIKE + _HOUR: {"high": 1e9}}
     run, inputs = _short_eth(masked)
-    with pytest.raises(CarryDataError, match=r"^ETHUSDT: notional 2000000000\.0 >= last cap 1200000000\.0$") as tier:
+    with pytest.raises(
+        CarryDataError, match=r"^ETHUSDT: notional 2000000000\.0 >= last cap 1200000000\.0$"
+    ) as tier:
         carry_liquidation(run, inputs)
     assert not isinstance(tier.value, CarryEquityTooSmall)
 
@@ -374,7 +388,9 @@ def test_liquidation_data_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("vibe_quant.liquidation.tiers.load_tier_tables", lambda: no_eth)
     with pytest.raises(CarryDataError, match=r"^ETHUSDT$"):
         carry_liquidation(*_short_eth())
-    with pytest.raises(CarryDataError, match=r"^no liquidation tier table for ETHUSDT in 2026-10-17$"):
+    with pytest.raises(
+        CarryDataError, match=r"^no liquidation tier table for ETHUSDT in 2026-10-17$"
+    ):
         require_tier_symbols((_BTC, _ETH))
     require_tier_symbols((_BTC,))
 

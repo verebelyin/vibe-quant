@@ -91,28 +91,40 @@ class _Bracket(Strategy):
                 tp = entry * (1 + self.config.tp_pct / 100 * (1 if long else -1))
                 self.submit_order(
                     self.order_factory.limit(
-                        IID, xside, pos.quantity, inst.make_price(tp),
-                        time_in_force=TimeInForce.GTC, reduce_only=True,
+                        IID,
+                        xside,
+                        pos.quantity,
+                        inst.make_price(tp),
+                        time_in_force=TimeInForce.GTC,
+                        reduce_only=True,
                     )
                 )
             if self.config.sl_pct:
                 sl = entry * (1 - self.config.sl_pct / 100 * (1 if long else -1))
                 self.submit_order(
                     self.order_factory.stop_market(
-                        IID, xside, pos.quantity, inst.make_price(sl),
-                        time_in_force=TimeInForce.GTC, reduce_only=True,
+                        IID,
+                        xside,
+                        pos.quantity,
+                        inst.make_price(sl),
+                        time_in_force=TimeInForce.GTC,
+                        reduce_only=True,
                     )
                 )
 
     def on_order_filled(self, event: OrderFilled) -> None:
-        self.fills.append(
-            (event.order_type.name, event.order_side.name, float(event.last_px))
-        )
+        self.fills.append((event.order_type.name, event.order_side.name, float(event.last_px)))
 
 
 def _run(
-    fill_model: FillModel, bars: list[Bar], *, side: str = "BUY", tp: float = 0.0,
-    sl: float = 0.0, entry_bar: int = 0, adaptive: bool = False,
+    fill_model: FillModel,
+    bars: list[Bar],
+    *,
+    side: str = "BUY",
+    tp: float = 0.0,
+    sl: float = 0.0,
+    entry_bar: int = 0,
+    adaptive: bool = False,
 ) -> list[tuple[str, str, float]]:
     engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(log_level="ERROR")))
     retain_log_guard(engine)
@@ -160,14 +172,26 @@ def _exit(fills: list[tuple[str, str, float]]) -> tuple[str, str, float]:
 
 
 # Entry fills at bar-0 close 10000 (no latency); bar 1 spikes through TP/SL.
-TP_LONG_BARS = [_bar(10000, 10010, 9990, 10000, 0), _bar(10000, 10300, 9995, 10050, 1),
-                _bar(10050, 10060, 10040, 10050, 2)]
-SL_LONG_BARS = [_bar(10000, 10010, 9990, 10000, 0), _bar(10000, 10005, 9700, 9800, 1),
-                _bar(9800, 9810, 9790, 9800, 2)]
-TP_SHORT_BARS = [_bar(10000, 10010, 9990, 10000, 0), _bar(10000, 10005, 9700, 9950, 1),
-                 _bar(9950, 9960, 9940, 9950, 2)]
-GAP_LONG_BARS = [_bar(10000, 10010, 9990, 10000, 0), _bar(9800, 9810, 9700, 9750, 1),
-                 _bar(9750, 9760, 9740, 9750, 2)]
+TP_LONG_BARS = [
+    _bar(10000, 10010, 9990, 10000, 0),
+    _bar(10000, 10300, 9995, 10050, 1),
+    _bar(10050, 10060, 10040, 10050, 2),
+]
+SL_LONG_BARS = [
+    _bar(10000, 10010, 9990, 10000, 0),
+    _bar(10000, 10005, 9700, 9800, 1),
+    _bar(9800, 9810, 9790, 9800, 2),
+]
+TP_SHORT_BARS = [
+    _bar(10000, 10010, 9990, 10000, 0),
+    _bar(10000, 10005, 9700, 9950, 1),
+    _bar(9950, 9960, 9940, 9950, 2),
+]
+GAP_LONG_BARS = [
+    _bar(10000, 10010, 9990, 10000, 0),
+    _bar(9800, 9810, 9700, 9750, 1),
+    _bar(9750, 9760, 9740, 9750, 2),
+]
 
 
 def test_long_tp_limit_fills_at_limit_not_bar_high() -> None:
@@ -195,8 +219,11 @@ def test_long_sl_fills_exactly_at_trigger_with_zero_stop_ticks() -> None:
 
 
 def test_short_sl_fills_at_trigger_plus_tick() -> None:
-    bars = [_bar(10000, 10010, 9990, 10000, 0), _bar(10000, 10300, 9995, 10200, 1),
-            _bar(10200, 10210, 10190, 10200, 2)]
+    bars = [
+        _bar(10000, 10010, 9990, 10000, 0),
+        _bar(10000, 10300, 9995, 10200, 1),
+        _bar(10200, 10210, 10190, 10200, 2),
+    ]
     order_type, side, px = _exit(_run(_validation_model(), bars, side="SELL", sl=1.0))
     assert (order_type, side) == ("STOP_MARKET", "BUY")
     assert px == pytest.approx(10100.0 + TICK)
@@ -244,6 +271,7 @@ def test_market_order_best_price_without_degradation() -> None:
 
 def test_repeat_runs_bit_identical() -> None:
     """Same seed, same data -> identical fills (validation repeatability)."""
+
     def scenario() -> list[tuple[str, str, float]]:
         model = _validation_model(prob_best_price_fill=0.5, max_adverse_ticks=2)
         bars = [_bar(10000 + i, 10010 + i, 9990 + i, 10000 + i, i) for i in range(30)]

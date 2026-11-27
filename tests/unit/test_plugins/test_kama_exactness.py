@@ -53,8 +53,13 @@ def _flat_df(n: int) -> pd.DataFrame:
     """Constant price: every diff is exactly 0, exercising the er = 1.0 guard."""
     close = pd.Series(np.full(n, 100.0))
     return pd.DataFrame(
-        {"open": close, "high": close, "low": close, "close": close,
-         "volume": pd.Series(np.full(n, 1.0))}
+        {
+            "open": close,
+            "high": close,
+            "low": close,
+            "close": close,
+            "volume": pd.Series(np.full(n, 1.0)),
+        }
     )
 
 
@@ -62,7 +67,7 @@ def _gap_df(seed: int, n: int) -> pd.DataFrame:
     """Random walk with NaN gaps in close."""
     df = _df(seed, n)
     close = df["close"].to_numpy(copy=True)
-    close[:: 7] = np.nan
+    close[::7] = np.nan
     df["close"] = pd.Series(close)
     return df
 

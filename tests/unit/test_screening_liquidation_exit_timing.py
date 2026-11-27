@@ -131,7 +131,9 @@ class Order:
     price: float | None = None
 
 
-def write_last_bars(catalog: Path, bars: Bars, interval: str = "1m", symbol: str = "BTCUSDT") -> None:
+def write_last_bars(
+    catalog: Path, bars: Bars, interval: str = "1m", symbol: str = "BTCUSDT"
+) -> None:
     """Materialise ``bars`` as catalog LAST bars (ts_init = the bar close) for ``load_bar_windows``."""
     instrument = create_instrument(symbol)
     bar_type = get_bar_type(symbol, interval, price_type=PriceType.LAST)
@@ -234,7 +236,9 @@ def limit_order(
     accepted_at: int,
     side: Any = OrderSide.BUY,
 ) -> Order:
-    return Order(ClientOrderId(order_id), OrderType.LIMIT, side, [OrderAccepted(accepted_at)], price=level)
+    return Order(
+        ClientOrderId(order_id), OrderType.LIMIT, side, [OrderAccepted(accepted_at)], price=level
+    )
 
 
 def engine_with_orders(
@@ -257,7 +261,9 @@ def no_cache_engine(positions: list[StubPos]) -> SimpleNamespace:
     return engine
 
 
-def spy_load_bar_windows(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, list[tuple[int, int]]]]:
+def spy_load_bar_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[str, list[tuple[int, int]]]]:
     """Record every ``load_bar_windows`` call of the exit refinement (R17b/R19)."""
     import vibe_quant.validation.extraction as extraction
 
@@ -351,7 +357,10 @@ def test_only_boundary_stop_market_and_limit_fills_are_refined() -> None:
         client_order_id=ClientOrderId("SL-late"),
     )  # fmt: skip
     pos = position_with([market, stop, limit, early, late])
-    orders = {"SL-1": stop_order(accepted_at=at(BAR_OPEN_MIN)), "TP-1": limit_order(accepted_at=at(BAR_OPEN_MIN))}
+    orders = {
+        "SL-1": stop_order(accepted_at=at(BAR_OPEN_MIN)),
+        "TP-1": limit_order(accepted_at=at(BAR_OPEN_MIN)),
+    }
 
     inputs = resting_inputs([pos], orders)
 
@@ -373,7 +382,14 @@ def test_falls_is_the_direction_the_trigger_watches(
     fill = Fill(
         boundary_ts(), side, 1.0, 40000.0, order_type=order_type, client_order_id=ClientOrderId("O-1")
     )  # fmt: skip
-    order = Order(ClientOrderId("O-1"), order_type, side, [OrderAccepted(at(BAR_OPEN_MIN))], trigger_price=SL_LEVEL, price=SL_LEVEL)
+    order = Order(
+        ClientOrderId("O-1"),
+        order_type,
+        side,
+        [OrderAccepted(at(BAR_OPEN_MIN))],
+        trigger_price=SL_LEVEL,
+        price=SL_LEVEL,
+    )
 
     inputs = resting_inputs([position_with([fill])], {"O-1": order})
 
@@ -442,7 +458,11 @@ def test_an_unusable_order_on_the_boundary_names_the_key_and_client_order_id() -
     with pytest.raises(ValueError, match=r"A@\d+ fill 0: order SL-1 has no OrderAccepted"):
         resting_inputs(
             [pos],
-            {"SL-1": Order(ClientOrderId("SL-1"), OrderType.STOP_MARKET, OrderSide.SELL, [], 39500.0)},
+            {
+                "SL-1": Order(
+                    ClientOrderId("SL-1"), OrderType.STOP_MARKET, OrderSide.SELL, [], 39500.0
+                )
+            },
         )
 
     for bad_type in (OrderType.STOP_LIMIT, OrderType.MARKET_IF_TOUCHED):
@@ -549,9 +569,7 @@ def test_no_boundary_resting_fill_reads_no_file_and_leaves_the_engine_cache_unto
     pos = market_only_long()
     runner = screening_runner(tmp_path, "isolated", catalog, leverage=50.0)
 
-    scan_fill_ts, notes = runner._boundary_exit_scan_ts(
-        no_cache_engine([pos]), [pos], E4H, catalog
-    )
+    scan_fill_ts, notes = runner._boundary_exit_scan_ts(no_cache_engine([pos]), [pos], E4H, catalog)
 
     assert scan_fill_ts is None
     assert notes == ZERO_TIMING
@@ -738,4 +756,3 @@ def test_a_boundary_fill_behind_a_non_boundary_fill_keeps_its_own_index(
     assert metrics.liquidation_count == 0
     assert runner.last_liquidation_notes is not None
     assert runner.last_liquidation_notes["exit_timing"]["refined"] == 1
-

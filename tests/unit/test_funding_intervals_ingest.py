@@ -103,9 +103,7 @@ def test_parse_vision_funding_csv(caplog: pytest.LogCaptureFixture) -> None:
     served = {"SOLUSDT-fundingRate-2022-11.zip": _funding_zip("SOLUSDT", 2022, 11, body)}
     with caplog.at_level(logging.WARNING, logger="vibe_quant.data.downloader"):
         with _client_for(served) as client:
-            rows = downloader.download_monthly_funding_intervals(
-                "SOLUSDT", 2022, 11, client=client
-            )
+            rows = downloader.download_monthly_funding_intervals("SOLUSDT", 2022, 11, client=client)
         assert rows == [(1668009600000, 8), (1668013200000, 4)]
         assert "skipped 3 funding interval rows for SOLUSDT 2022-11" in caplog.text
 
@@ -249,9 +247,7 @@ def test_404_month_is_retried_and_gap_months_fetched(
     archive = RawDataArchive(tmp_path / "gap.db")
     calls: list[tuple[int, int]] = []
 
-    def fake(
-        symbol: str, year: int, month: int, *a: Any, **k: Any
-    ) -> list[tuple[int, int]] | None:
+    def fake(symbol: str, year: int, month: int, *a: Any, **k: Any) -> list[tuple[int, int]] | None:
         calls.append((year, month))
         if month == 7:
             return None
@@ -276,9 +272,7 @@ def test_404_month_is_retried_and_gap_months_fetched(
         archive.close()
 
 
-def test_current_month_is_never_fetched(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_current_month_is_never_fetched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """C4: the current month is not published yet, so rates in it fetch nothing."""
     archive = RawDataArchive(tmp_path / "current.db")
     calls: list[tuple[int, int]] = []
@@ -332,9 +326,7 @@ def test_months_without_rates_are_not_fetched(
         archive.close()
 
 
-def test_ingest_months_and_idempotent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_ingest_months_and_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Only complete months up to ``now``; the second call is a no-op."""
     archive = RawDataArchive(tmp_path / "months.db")
     calls: list[tuple[int, int]] = []
@@ -398,7 +390,9 @@ def test_update_survives_interval_fetch_failure(
 
         monkeypatch.setattr(ingest, "download_funding_rates", lambda *a, **k: [])
         monkeypatch.setattr(ingest, "download_monthly_funding_intervals", boom)
-        monkeypatch.setattr(ingest, "download_recent_klines", lambda *a, **k: [_kline(now_ms - 180_000)])
+        monkeypatch.setattr(
+            ingest, "download_recent_klines", lambda *a, **k: [_kline(now_ms - 180_000)]
+        )
         monkeypatch.setattr(ingest, "create_instrument", lambda _s: _FakeInstrument())
         monkeypatch.setattr(ingest, "klines_to_bars", lambda *a, **k: [])
         monkeypatch.setattr(ingest, "aggregate_bars", lambda *a, **k: [])
@@ -406,7 +400,10 @@ def test_update_survives_interval_fetch_failure(
 
         with caplog.at_level(logging.WARNING, logger="vibe_quant.data.ingest"):
             counts = ingest.update_symbol(
-                "BTCUSDT", archive=archive, catalog=_FakeCatalog(), verbose=False  # type: ignore[arg-type]
+                "BTCUSDT",
+                archive=archive,
+                catalog=_FakeCatalog(),
+                verbose=False,  # type: ignore[arg-type]
             )
 
         assert counts["new_funding_intervals"] == 0

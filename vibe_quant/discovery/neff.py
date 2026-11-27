@@ -196,9 +196,7 @@ def effective_trials(
             # target cannot drift with the BLAS choice of V inside degenerate
             # eigenspaces (review B2); canonical row order fixes the z pairing.
             ordered = sorted(kept, key=lambda r: r.tobytes())
-            corr = np.asarray(
-                np.nan_to_num(np.corrcoef(np.vstack(ordered))), dtype=np.float64
-            )
+            corr = np.asarray(np.nan_to_num(np.corrcoef(np.vstack(ordered))), dtype=np.float64)
             # Collapse exactly-identical series BEFORE the MC so a degenerate
             # all-identical input cannot be decided by Monte-Carlo noise: one
             # distinct series gives n_m == 1 analytically (chief ruling on R1).
@@ -211,9 +209,7 @@ def effective_trials(
                 sub = corr[np.ix_(reps, reps)]
                 w, vec = np.linalg.eigh(sub)
                 root = (vec * np.sqrt(np.clip(w, 0.0, None))) @ vec.T
-                z = np.random.default_rng(NEFF_EV_SEED).standard_normal(
-                    (NEFF_EV_DRAWS, n_distinct)
-                )
+                z = np.random.default_rng(NEFF_EV_SEED).standard_normal((NEFF_EV_DRAWS, n_distinct))
                 maxima = (z @ root).max(axis=1)
                 target = float(maxima.mean())
                 n_m = expected_max_inverse(target)

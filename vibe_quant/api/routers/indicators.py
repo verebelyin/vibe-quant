@@ -109,9 +109,7 @@ def get_catalog() -> IndicatorCatalogResponse:
         )
         for err in get_load_errors()
     ]
-    return IndicatorCatalogResponse(
-        indicators=entries, plugin_errors=plugin_errors
-    )
+    return IndicatorCatalogResponse(indicators=entries, plugin_errors=plugin_errors)
 
 
 @router.post("/reload")

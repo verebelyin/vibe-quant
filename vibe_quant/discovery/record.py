@@ -137,11 +137,7 @@ def provenance_notes(
     # (bead vibe-quant-6wq6w). Only a mode-OFF run needs the top-level key: a
     # mode-on run already carries its leverage in notes.liquidation, and an
     # explicit default (10) writes nothing (R4/R7).
-    if (
-        liquidation is not None
-        and not liquidation.on
-        and liquidation.leverage != DEFAULT_LEVERAGE
-    ):
+    if liquidation is not None and not liquidation.on and liquidation.leverage != DEFAULT_LEVERAGE:
         notes["leverage"] = liquidation.leverage
     # An explicit GA pool (scalar AND MA genes) is recorded so a harness can check what
     # the run used, not what it asked for (P-2, 2026-10-19: 96+ runs ignored the pool for
@@ -365,9 +361,7 @@ def champion_entry(
             "final": fitness.adjusted_score,
         }
     if fitness.symbol_scores is not None:
-        entry["symbol_scores"] = {
-            sym: round(sc, 6) for sym, sc in fitness.symbol_scores.items()
-        }
+        entry["symbol_scores"] = {sym: round(sc, 6) for sym, sc in fitness.symbol_scores.items()}
     # Always persisted (JSON null when unavailable) so readers can tell
     # "no edge to attribute" from "key never written".
     entry["fee_drag"] = fitness.fee_drag
@@ -463,8 +457,11 @@ def no_champion_notes(
         "best_raw_score": best_raw_score,
         "reason": (
             "No candidate passed every gate"
-            + (f" (rejected at: {', '.join(stages)})" if stages else
-               " (no candidate scored above zero)")
+            + (
+                f" (rejected at: {', '.join(stages)})"
+                if stages
+                else " (no candidate scored above zero)"
+            )
             + ". See guardrail_rejections for per-candidate reasons. Consider: "
             "longer date range, larger population, or a different indicator pool."
         ),
@@ -526,7 +523,12 @@ class ChildParams:
     def run_parameters(self, *, screening: bool = False) -> dict[str, object]:
         """The child's stored parameters: fee, then liquidation, then sizing (then, for a
         screening child of a pooled run, ``symbol_agg``)."""
-        return {**self.fee, **self.liquidation, **self.sizing, **(self.symbol_agg if screening else {})}
+        return {
+            **self.fee,
+            **self.liquidation,
+            **self.sizing,
+            **(self.symbol_agg if screening else {}),
+        }
 
 
 def _is_count(value: object) -> bool:
@@ -670,8 +672,7 @@ class DiscoveryRecord:
             return BankrollCell.from_note(entry.get("bankroll"))
         except BankrollGridError as exc:
             raise ChampionBankrollInvalid(
-                f"discovery run {self.run_id} strategy {strategy_index} "
-                "has no valid bankroll setup"
+                f"discovery run {self.run_id} strategy {strategy_index} has no valid bankroll setup"
             ) from exc
 
     def liquidation_params(self, *, strategy_index: int | None = None) -> dict[str, object]:

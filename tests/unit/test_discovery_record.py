@@ -273,7 +273,9 @@ _GENOME_DSL: dict[str, object] = {
     ],
     ids=["absent", "null", "list", "bnb_discount"],
 )
-def test_fee_rows(state: StateManager, notes: dict[str, object], expected: tuple[object, ...]) -> None:
+def test_fee_rows(
+    state: StateManager, notes: dict[str, object], expected: tuple[object, ...]
+) -> None:
     put(state, notes)
     assert outcome(lambda: fee_params(state, RUN)) == expected
 
@@ -483,9 +485,24 @@ async def test_promote_precedence_no_rows(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("holdout", "mode", "vrange", "expected"),
     [
-        (["2025-01-01", "2025-03-01"], "validation", "holdout", ("2025-01-01", "2025-03-01", "holdout", ["2025-01-01", "2025-03-01"])),
-        (["2025-01-01", "2025-03-01"], "validation", "full", ("2024-01-01", "2025-01-01", "full", ["2025-01-01", "2025-03-01"])),
-        (["2025-01-01", "2025-03-01"], "screening", "holdout", ("2024-01-01", "2025-01-01", "full", ["2025-01-01", "2025-03-01"])),
+        (
+            ["2025-01-01", "2025-03-01"],
+            "validation",
+            "holdout",
+            ("2025-01-01", "2025-03-01", "holdout", ["2025-01-01", "2025-03-01"]),
+        ),
+        (
+            ["2025-01-01", "2025-03-01"],
+            "validation",
+            "full",
+            ("2024-01-01", "2025-01-01", "full", ["2025-01-01", "2025-03-01"]),
+        ),
+        (
+            ["2025-01-01", "2025-03-01"],
+            "screening",
+            "holdout",
+            ("2024-01-01", "2025-01-01", "full", ["2025-01-01", "2025-03-01"]),
+        ),
         ("ABSENT", "validation", "holdout", ("2024-01-01", "2025-01-01", "full", None)),
         (["a", "b", "c"], "validation", "holdout", ("2024-01-01", "2025-01-01", "full", None)),
     ],
@@ -512,7 +529,12 @@ async def test_holdout_dates_rows(
         run = state.get_backtest_run(body["run_id"])
         assert run is not None
         source = run["parameters"]["promote_source"]
-        assert (body["start_date"], body["end_date"], body["date_range"], source["holdout_dates"]) == expected
+        assert (
+            body["start_date"],
+            body["end_date"],
+            body["date_range"],
+            source["holdout_dates"],
+        ) == expected
         assert (run["start_date"], run["end_date"]) == (expected[0], expected[1])
 
 
@@ -534,46 +556,75 @@ async def test_jobs_seed_rows(tmp_path: Path) -> None:
 
 async def test_results_shape_rows(tmp_path: Path) -> None:
     async with api_client(tmp_path / "r.db") as (ac, state, _jobs):
-        put(state, {"top_strategies": {}, "reason": 5, "guardrail_rejections": {},
-                    "rejection_counts": [3]})
+        put(
+            state,
+            {
+                "top_strategies": {},
+                "reason": 5,
+                "guardrail_rejections": {},
+                "rejection_counts": [3],
+            },
+        )
         response = await ac.get(f"/api/discovery/results/{RUN}")
         assert response.status_code == 200
-        empty = {"strategies": [], "reason": None, "guardrail_rejections": None,
-                 "rejection_counts": None, "timing_null_gate": None}
+        empty = {
+            "strategies": [],
+            "reason": None,
+            "guardrail_rejections": None,
+            "rejection_counts": None,
+            "timing_null_gate": None,
+        }
         assert response.json() == empty
 
         put(state, {"top_strategies": [], "reason": "why", "guardrail_rejections": []}, run_id=8)
         response = await ac.get("/api/discovery/results/8")
-        assert response.json() == {"strategies": [], "reason": "why", "guardrail_rejections": [],
-                                   "rejection_counts": None, "timing_null_gate": None}
+        assert response.json() == {
+            "strategies": [],
+            "reason": "why",
+            "guardrail_rejections": [],
+            "rejection_counts": None,
+            "timing_null_gate": None,
+        }
 
         response = await ac.get("/api/discovery/results/999")  # no row at all
         assert response.json() == empty
 
         # --gate-pool all: the counts over every rejection reach the results page
-        counts = {"total": 612, "by_stage": {"gate_pool_cap": 3, "guardrails": 609},
-                  "by_kind": {"Bootstrap CI": 61, "DSR": 540, "Top-K cap": 3, "Min trades": 9}}
-        put(state, {"top_strategies": [], "guardrail_rejections": [{"uid": "u1"}],
-                    "rejection_counts": counts}, run_id=9)
+        counts = {
+            "total": 612,
+            "by_stage": {"gate_pool_cap": 3, "guardrails": 609},
+            "by_kind": {"Bootstrap CI": 61, "DSR": 540, "Top-K cap": 3, "Min trades": 9},
+        }
+        put(
+            state,
+            {
+                "top_strategies": [],
+                "guardrail_rejections": [{"uid": "u1"}],
+                "rejection_counts": counts,
+            },
+            run_id=9,
+        )
         response = await ac.get("/api/discovery/results/9")
         assert response.json()["rejection_counts"] == counts
 
 
-_GOOD_COUNTS: dict[str, object] = {"total": 3, "by_stage": {"guardrails": 3},
-                                   "by_kind": {"DSR": 3}}
+_GOOD_COUNTS: dict[str, object] = {"total": 3, "by_stage": {"guardrails": 3}, "by_kind": {"DSR": 3}}
 
 
-@pytest.mark.parametrize("bad", [
-    {},
-    {"total": 3},  # partial dict
-    {**_GOOD_COUNTS, "total": "3"},  # wrong type (pydantic lax would coerce it)
-    {**_GOOD_COUNTS, "total": True},
-    {**_GOOD_COUNTS, "by_stage": {"guardrails": 1.5}},
-    {**_GOOD_COUNTS, "by_kind": ["DSR"]},
-    {**_GOOD_COUNTS, "total": float("inf")},  # non-finite
-    {**_GOOD_COUNTS, "by_kind": {"DSR": float("nan")}},
-    {**_GOOD_COUNTS, "total": -1},
-])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {},
+        {"total": 3},  # partial dict
+        {**_GOOD_COUNTS, "total": "3"},  # wrong type (pydantic lax would coerce it)
+        {**_GOOD_COUNTS, "total": True},
+        {**_GOOD_COUNTS, "by_stage": {"guardrails": 1.5}},
+        {**_GOOD_COUNTS, "by_kind": ["DSR"]},
+        {**_GOOD_COUNTS, "total": float("inf")},  # non-finite
+        {**_GOOD_COUNTS, "by_kind": {"DSR": float("nan")}},
+        {**_GOOD_COUNTS, "total": -1},
+    ],
+)
 async def test_results_malformed_rejection_counts_degrade_to_none(
     tmp_path: Path, caplog: pytest.LogCaptureFixture, bad: dict[str, object]
 ) -> None:
@@ -642,10 +693,16 @@ def test_seed_loader_rows(state: StateManager, caplog: pytest.LogCaptureFixture)
 
     put(state, "{not json", run_id=3)
     assert load_seed_chromosomes(state, 3) is None
-    assert [r.getMessage() for r in caplog.records] == ["Failed to load seed chromosomes from run 3"]
+    assert [r.getMessage() for r in caplog.records] == [
+        "Failed to load seed chromosomes from run 3"
+    ]
     assert caplog.records[0].levelno == logging.WARNING
 
-    put(state, {"top_strategies": [{"score": 1.0}, {"chromosome": {}}, {"chromosome": None}]}, run_id=4)
+    put(
+        state,
+        {"top_strategies": [{"score": 1.0}, {"chromosome": {}}, {"chromosome": None}]},
+        run_id=4,
+    )
     assert load_seed_chromosomes(state, 4) is None  # entries without a usable chromosome skipped
 
     caplog.clear()
@@ -731,7 +788,11 @@ def test_load_discovery_metrics_rows(state: StateManager) -> None:
 
     put(
         state,
-        {"top_strategies": [{"sharpe": 1.0, "trades": 5, "full_range_sharpe": 2.0, "full_range_trades": 9}]},
+        {
+            "top_strategies": [
+                {"sharpe": 1.0, "trades": 5, "full_range_sharpe": 2.0, "full_range_trades": 9}
+            ]
+        },
         run_id=7,
     )
     assert _load_discovery_metrics(state, 7, 0) == (2.0, 9, None)  # full_range_* preferred
@@ -744,17 +805,24 @@ def test_load_discovery_metrics_worst_multi_symbol_notes(state: StateManager) ->
     two = ["BTCUSDT", "ETHUSDT"]
     put(
         state,
-        {"symbol_agg": "worst", "top_strategies": [{"sharpe": 1.0, "trades": 2, "full_range_trades_sum": 40}]},
+        {
+            "symbol_agg": "worst",
+            "top_strategies": [{"sharpe": 1.0, "trades": 2, "full_range_trades_sum": 40}],
+        },
         run_id=1,
         symbols=two,
     )
     assert _load_discovery_metrics(state, 1, 0) == (1.0, 40, worst)
-    put(state, {"symbol_agg": "worst", "top_strategies": [{"sharpe": 1.0, "trades": 2}]}, run_id=2, symbols=two)
+    put(
+        state,
+        {"symbol_agg": "worst", "top_strategies": [{"sharpe": 1.0, "trades": 2}]},
+        run_id=2,
+        symbols=two,
+    )
     assert _load_discovery_metrics(state, 2, 0) == (
         1.0,
         None,
-        worst
-        + " trade comparison skipped: stored trades are the MIN per symbol "
+        worst + " trade comparison skipped: stored trades are the MIN per symbol "
         "(no trades_sum persisted) while the replay is a portfolio run.",
     )
     put(state, {"symbol_agg": "worst", "top_strategies": [{"sharpe": 1.0, "trades": 2}]}, run_id=3)
@@ -775,7 +843,9 @@ _DRIFT = {"drift": 0.5}
     ],
     ids=["bad_json", "list", "dict"],
 )
-def test_merge_replay_drift_rows(state: StateManager, notes: str, expected: dict[str, object]) -> None:
+def test_merge_replay_drift_rows(
+    state: StateManager, notes: str, expected: dict[str, object]
+) -> None:
     put(state, notes)
     state.merge_replay_drift_payload(RUN, _DRIFT)
     assert state.get_result_notes_raw(RUN) == json.dumps(expected)
@@ -936,9 +1006,18 @@ _BOOT = "Bootstrap CI lower bound -0.50 (t-stat) < 0.0 (observed t-stat=1.00, n=
     ("reason", "kind"),
     [
         ("Holdout: sharpe 0.54 <= 0.00 (ann √365)", "Holdout"),
-        ("Cross-window: 1/3 shifted windows passed (need 3; sharpe>=0.60 ann √365 and return>0)", "Cross-window"),
-        ("DSR q95 not significant: stat=0.1000 < spread=2.0000 (SR=0.655 ann √365, T=1689, N=400)", "DSR"),
-        ("DSR not significant: p=0.1100 >= 0.05 (pooled daily SR=0.602 ann √365, T=181, N=55)", "DSR"),
+        (
+            "Cross-window: 1/3 shifted windows passed (need 3; sharpe>=0.60 ann √365 and return>0)",
+            "Cross-window",
+        ),
+        (
+            "DSR q95 not significant: stat=0.1000 < spread=2.0000 (SR=0.655 ann √365, T=1689, N=400)",
+            "DSR",
+        ),
+        (
+            "DSR not significant: p=0.1100 >= 0.05 (pooled daily SR=0.602 ann √365, T=181, N=55)",
+            "DSR",
+        ),
         ("DSR per-symbol floor: ETHUSDT PSR(SR>0)=0.500 < 0.80 (SR=0.380 ann √365)", "DSR"),
         ("K-Fold CV not robust: mean_oos_sharpe=0.481 std=1.444 (ann √365)", "K-Fold"),
         ("Multi-seed pooled N=3: Holdout: sharpe 0.54 <= 0.00 (ann √365)", "Holdout"),
@@ -978,7 +1057,11 @@ def test_rejection_ledger_counts_candidates_per_kind() -> None:
     rows = [
         _row("both", "guardrails", _DSR, _BOOT),
         _row("dsr2", "guardrails", _DSR, "DSR per-symbol floor: ETHUSDT PSR(SR>0)=0.500 < 0.80"),
-        _row("cap", "gate_pool_cap", "Passed every gate; not kept: within distance 0.15 of champion x"),
+        _row(
+            "cap",
+            "gate_pool_cap",
+            "Passed every gate; not kept: within distance 0.15 of champion x",
+        ),
     ]
 
     _kept, counts = record.rejection_ledger(rows, "all")
@@ -1102,5 +1185,6 @@ def test_v2_champion_entry_records_own_neighbours_and_final_score() -> None:
     )
     assert unscored["fitness_v2"]["neighbours"] is None  # type: ignore[index]
     v1 = dataclasses.replace(_v2_champion(0.8, None, 0.8), fitness_v2=None)
-    assert "fitness_v2" not in record.champion_entry(chrom, v1, timeframe="4h", dsr=None, buy_hold=None)
-
+    assert "fitness_v2" not in record.champion_entry(
+        chrom, v1, timeframe="4h", dsr=None, buy_hold=None
+    )

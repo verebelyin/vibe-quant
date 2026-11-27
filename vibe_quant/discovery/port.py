@@ -202,8 +202,10 @@ def _parse_param(name: str, spec: object) -> PortParam:
         msg = f"params.{name}: unknown kind {kind_raw!r}"
         raise PortError(msg)
     kind = cast("ParamKind", kind_raw)
-    param = _parse_choice_param(name, spec) if kind == "choice" else _parse_numeric_param(
-        name, spec, kind
+    param = (
+        _parse_choice_param(name, spec)
+        if kind == "choice"
+        else _parse_numeric_param(name, spec, kind)
     )
     if "default" not in spec:
         msg = f"params.{name}: missing 'default'"

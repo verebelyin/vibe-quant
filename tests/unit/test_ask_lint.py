@@ -20,10 +20,7 @@ ask_lint = importlib.util.module_from_spec(_spec)
 sys.modules["ask_lint_under_test"] = ask_lint
 _spec.loader.exec_module(ask_lint)
 
-BAD = (
-    "We hit vibe-quant-abcde while running scripts/agents/chief.py. "
-    "Should we change it?"
-)
+BAD = "We hit vibe-quant-abcde while running scripts/agents/chief.py. Should we change it?"
 GOOD = (
     "You hold BTC and ETH. ETH fails to save at 14:32 and the screen shows 0 positions.\n"
     "\n"

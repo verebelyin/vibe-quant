@@ -141,12 +141,14 @@ class TestMarkSeriesRoundtrip:
         assert np.all(np.diff(series.ts) > 0)
 
         # low/high/close equal the inputs formatted to the instrument tick.
-        assert np.array_equal(series.low, np.array(
-            [_round_tick(_mark_row(i)[2]) for i in range(THREE_DAYS)], dtype=np.float64
-        ))
-        assert np.array_equal(series.high, np.array(
-            [_round_tick(_mark_row(i)[1]) for i in range(THREE_DAYS)], dtype=np.float64
-        ))
+        assert np.array_equal(
+            series.low,
+            np.array([_round_tick(_mark_row(i)[2]) for i in range(THREE_DAYS)], dtype=np.float64),
+        )
+        assert np.array_equal(
+            series.high,
+            np.array([_round_tick(_mark_row(i)[1]) for i in range(THREE_DAYS)], dtype=np.float64),
+        )
         assert np.array_equal(series.close, _expected_close())
         # the bar open (the liquidation fill rule needs it), from the archive's open column
         assert np.array_equal(series.open, _expected_open())
@@ -200,7 +202,9 @@ class TestMarkSeriesRoundtrip:
         assert after.close[-1] == _round_tick(c)
 
 
-def _last_and_mark_klines(count: int = 480) -> tuple[list[tuple[float, ...]], list[tuple[float, ...]]]:
+def _last_and_mark_klines(
+    count: int = 480,
+) -> tuple[list[tuple[float, ...]], list[tuple[float, ...]]]:
     last_rows: list[tuple[float, ...]] = []
     mark_rows: list[tuple[float, ...]] = []
     for i in range(count):
@@ -211,7 +215,9 @@ def _last_and_mark_klines(count: int = 480) -> tuple[list[tuple[float, ...]], li
         last_rows.append(
             (open_ms, o, o + 1.5, o - 1.5, c, 12.5, open_ms + MINUTE_MS - 1, 0.0, 10, 0.0, 0.0)
         )
-        mark_rows.append((open_ms, o, o + 1.6, o - 1.6, c, 0.0, open_ms + MINUTE_MS - 1, 0, 60, 0.0, 0.0))
+        mark_rows.append(
+            (open_ms, o, o + 1.6, o - 1.6, c, 0.0, open_ms + MINUTE_MS - 1, 0, 60, 0.0, 0.0)
+        )
     return last_rows, mark_rows
 
 
@@ -256,7 +262,7 @@ def _series_from_ts(ts: np.ndarray) -> MarkSeries:
 
 class TestRequireMarkCoverage:
     def _full(self) -> MarkSeries:
-        ts = (T0_MS * 1_000_000 + np.arange(120, dtype=np.int64) * _MINUTE_NS)
+        ts = T0_MS * 1_000_000 + np.arange(120, dtype=np.int64) * _MINUTE_NS
         return _series_from_ts(ts)
 
     def test_none_series_raises_naming_symbol(self) -> None:
@@ -310,9 +316,7 @@ class TestRequireMarkCoverage:
 
     def test_window_entirely_inside_a_gap_raises(self) -> None:
         # Bars at minutes [0, 180] only: the empty window [30, 150] is not covered.
-        s = _series_from_ts(
-            np.array([self._at(0), self._at(180)], dtype=np.int64)
-        )
+        s = _series_from_ts(np.array([self._at(0), self._at(180)], dtype=np.int64))
         with pytest.raises(MarkDataMissing) as exc:
             require_mark_coverage(s, "BTCUSDT", self._at(30), self._at(150))
         assert "BTCUSDT" in str(exc.value)
@@ -360,9 +364,7 @@ class TestRequireMarkCoverage:
 class TestCheckMarkCoverage:
     """``check_mark_coverage`` loops symbols in order; first failure wins (M10)."""
 
-    def test_check_mark_coverage_first_failure_wins(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_check_mark_coverage_first_failure_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
         seen: list[tuple[object, str]] = []
 
         def fake_load(catalog_path: object, symbol: str) -> MarkSeries | None:

@@ -67,7 +67,8 @@ logger = logging.getLogger(__name__)
 # rewritten parquet file changes the identity and reloads; process-level LRU of 4 entries.
 _PTA_ARRAYS_MAX = 4
 _PTA_ARRAYS: OrderedDict[
-    tuple[str, str, str | None, str], tuple[tuple[tuple[str, int, int, int], ...], dict[str, np.ndarray]]
+    tuple[str, str, str | None, str],
+    tuple[tuple[tuple[str, int, int, int], ...], dict[str, np.ndarray]],
 ] = OrderedDict()
 # Catalog-origin histories (start None): (catalog path, bar type) -> (file identity, arrays of
 # EVERY catalog bar, read-only). Each request slices ts_init <= its end, the filter NT's own
@@ -236,9 +237,10 @@ def _origin_history(catalog_path: str, bar_type: str, end: str) -> dict[str, np.
             array.flags.writeable = False  # shared by every run of the process
         nbytes = sum(array.nbytes for array in history.values())
         # files rewritten during the read: serve uncached (the run's generation check fails it)
-        if nbytes <= _ORIGIN_HISTORY_MAX_BYTES and _bar_files_identity(
-            catalog_path, bar_type
-        ) == identity:
+        if (
+            nbytes <= _ORIGIN_HISTORY_MAX_BYTES
+            and _bar_files_identity(catalog_path, bar_type) == identity
+        ):
             used = sum(a.nbytes for _, arrays in _ORIGIN_HISTORY.values() for a in arrays.values())
             while _ORIGIN_HISTORY and used + nbytes > _ORIGIN_HISTORY_MAX_BYTES:
                 _, (_, evicted) = _ORIGIN_HISTORY.popitem(last=False)
@@ -466,7 +468,11 @@ def install_pta_precompute(
                         )
                         replay = replay_pta_series
                     columns = strategy_pta_columns(
-                        strategy._pta_params, meta, strategy._pta_buffer_cap, tf, frame,
+                        strategy._pta_params,
+                        meta,
+                        strategy._pta_buffer_cap,
+                        tf,
+                        frame,
                         replay=replay,
                     )
                     precomputed = PtaPrecomputed(
@@ -501,8 +507,13 @@ def report_pta_precompute(
     report: list[dict[str, object]] = []
     for instrument_id, tf, pre in installed:
         report.append(
-            {"instrument": instrument_id, "tf": tf, "n": pre.n, "fed": pre.fed,
-             "failed_at": pre.failed_at}
+            {
+                "instrument": instrument_id,
+                "tf": tf,
+                "n": pre.n,
+                "fed": pre.fed,
+                "failed_at": pre.failed_at,
+            }
         )
         if pre.failed_at is not None or pre.fed != pre.n:
             logger.warning(
@@ -555,9 +566,7 @@ _COMPILE_CACHE: dict[str, tuple[str, str, str, frozenset[str], str]] = {}
 
 # Generated-config fields the runner sets itself (screening fill mode); a
 # sweep/override may never set them.
-_RUNNER_OWNED_FIELDS = frozenset(
-    {"command_release", "command_release_bar_type", "margin_leverage"}
-)
+_RUNNER_OWNED_FIELDS = frozenset({"command_release", "command_release_bar_type", "margin_leverage"})
 
 
 class UnknownStrategyParamError(ValueError):
@@ -627,7 +636,9 @@ def screening_fill_mode(timeframe: str, loaded_timeframes: Iterable[str]) -> Scr
 _HAS_DATA_CACHE: set[tuple[str, str, int | None, int | None]] = set()
 
 
-def _bar_type_has_data(catalog_path: str, bar_type: str, start_ns: int | None, end_ns: int | None) -> bool:
+def _bar_type_has_data(
+    catalog_path: str, bar_type: str, start_ns: int | None, end_ns: int | None
+) -> bool:
     key = (catalog_path, bar_type, start_ns, end_ns)
     if key in _HAS_DATA_CACHE:
         return True
@@ -1027,9 +1038,7 @@ class NTScreeningRunner:
             fields = self._config_fields()
             self._strategy_overrides = resolve_strategy_params(dict(strategy_overrides), fields)
             clash = sorted(
-                key
-                for key in sweep
-                if _config_key(key, fields) in self._strategy_overrides
+                key for key in sweep if _config_key(key, fields) in self._strategy_overrides
             )
             if clash:
                 msg = f"Parameter(s) {clash} are both a fixed override and a sweep key"
@@ -1340,9 +1349,7 @@ class NTScreeningRunner:
             if mode.command_release:
                 config_dict["command_release"] = mode.command_release
             if mode.command_release == "bar":
-                config_dict["command_release_bar_type"] = (
-                    f"{instrument_id}-1-MINUTE-LAST-EXTERNAL"
-                )
+                config_dict["command_release_bar_type"] = f"{instrument_id}-1-MINUTE-LAST-EXTERNAL"
             strategy_configs.append(
                 ImportableStrategyConfig(
                     strategy_path=f"{module_path}:{strategy_cls_name}",
@@ -1379,9 +1386,7 @@ class NTScreeningRunner:
         # default run stays byte-identical.
         return replace(config, default_leverage=Decimal(str(self._leverage)))
 
-    def _install_pta_precompute(
-        self, node: Any
-    ) -> list[tuple[str, str, PtaPrecomputed]]:
+    def _install_pta_precompute(self, node: Any) -> list[tuple[str, str, PtaPrecomputed]]:
         """Install precomputed compute_fn columns (:func:`install_pta_precompute`) unless off."""
         if not self._pta_precompute or not pta_precompute_enabled():
             return []
@@ -1389,9 +1394,7 @@ class NTScreeningRunner:
             node, str(self._resolved_catalog_path.resolve()), self._start_date, self._end_date
         )
 
-    def _report_pta_precompute(
-        self, installed: list[tuple[str, str, PtaPrecomputed]]
-    ) -> None:
+    def _report_pta_precompute(self, installed: list[tuple[str, str, PtaPrecomputed]]) -> None:
         self.last_pta_precompute = report_pta_precompute(installed)
 
     def _run_backtest(self, params: dict[str, float | int], start_time: float) -> BacktestMetrics:
@@ -1676,9 +1679,7 @@ class NTScreeningRunner:
                     end_ns=end_ns,
                     taker_fee=self._fee_schedule.taker_rate,
                 )
-            trade_inputs: list[tuple[Any, OpenPositionMark | None]] = [
-                (p, None) for p in closed
-            ]
+            trade_inputs: list[tuple[Any, OpenPositionMark | None]] = [(p, None) for p in closed]
             trade_inputs.extend((mark.position, mark) for mark in open_marks)
             # One shared cost/accumulate pass (trade_ledger): the screening-tier rules keep
             # this tier's fee association (R5); the funding exit is ``funding_refine``.
@@ -1810,9 +1811,7 @@ class NTScreeningRunner:
                 screening_liquidation_moments(liquidated.returns, liquidated.n_closed)
             )
         else:
-            metrics.skewness, metrics.kurtosis, metrics.trade_returns = screening_moments(
-                engine
-            )
+            metrics.skewness, metrics.kurtosis, metrics.trade_returns = screening_moments(engine)
 
         # Mark-to-market paths, built once: they feed the max drawdown (incl.
         # open-trade intrabar losses and funding, bd vibe-quant-e70tl.11) and,
@@ -1962,9 +1961,7 @@ class NTScreeningRunner:
         if not timing.kept_bar_close:
             return
         suffix = (
-            f" (liquidation_mode={self._liquidation_mode})"
-            if purpose == "liquidation scan"
-            else ""
+            f" (liquidation_mode={self._liquidation_mode})" if purpose == "liquidation scan" else ""
         )
         logger.warning(
             "Exit refinement for the %s: %d of %d boundary resting fill(s) kept "

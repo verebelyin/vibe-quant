@@ -30,7 +30,10 @@ def test_hook_prints_once_per_session(tmp_path: Path) -> None:
     payload = json.dumps(
         {"transcript_path": str(_transcript(tmp_path, 652_000)), "session_id": f"t-{tmp_path.name}"}
     )
-    env = {**os.environ, "TMPDIR": str(tmp_path)}  # the per-session marker must not outlive the test
+    env = {
+        **os.environ,
+        "TMPDIR": str(tmp_path),
+    }  # the per-session marker must not outlive the test
     run = lambda: subprocess.run(  # noqa: E731
         [sys.executable, str(_PATH)], input=payload, capture_output=True, text=True, env=env
     )

@@ -36,10 +36,15 @@ from vibe_quant.validation.extraction import load_catalog_bars
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from rsi_ideas_test import fund_sum, funding, rsi  # noqa: E402
 
-COINS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "NEARUSDT", "SUIUSDT", "ZECUSDT",
-         "HYPEUSDT")
-TFS = {"1m": ("1-MINUTE", 525_600), "5m": ("5-MINUTE", 105_120), "15m": ("15-MINUTE", 35_040),
-       "1h": ("1-HOUR", 8_760), "4h": ("4-HOUR", 2_190), "1d": ("1-DAY", 365)}
+COINS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "NEARUSDT", "SUIUSDT", "ZECUSDT", "HYPEUSDT")
+TFS = {
+    "1m": ("1-MINUTE", 525_600),
+    "5m": ("5-MINUTE", 105_120),
+    "15m": ("15-MINUTE", 35_040),
+    "1h": ("1-HOUR", 8_760),
+    "4h": ("4-HOUR", 2_190),
+    "1d": ("1-DAY", 365),
+}
 START = pd.Timestamp("2026-01-01").value
 END = pd.Timestamp("2026-10-21").value
 LEV = 5
@@ -120,9 +125,13 @@ def stats_u(g: np.ndarray, liq: np.ndarray, lev: int) -> dict[str, object]:
     if len(g) == 0:
         return {"n": 0}
     m = np.where(liq, -1.0, lev * g) if lev > 1 else g
-    return {"n": len(g), "win": float((m > 0).mean()), "mean": float(m.mean()),
-            "liqs": int(liq.sum()) if lev > 1 else 0,
-            "compound": float(np.prod(1 + np.maximum(m, -1)) - 1)}
+    return {
+        "n": len(g),
+        "win": float((m > 0).mean()),
+        "mean": float(m.mean()),
+        "liqs": int(liq.sum()) if lev > 1 else 0,
+        "compound": float(np.prod(1 + np.maximum(m, -1)) - 1),
+    }
 
 
 def run_tf(tf: str) -> dict[str, object]:
@@ -138,18 +147,29 @@ def run_tf(tf: str) -> dict[str, object]:
         u_res = {}
         for n in (14, 7, 2):
             g, liq, held = user_rule(ts, op, lo, close, ft, fc, n)
-            u_res[f"rsi{n}"] = {"x5": stats_u(g, liq, LEV), "x1": stats_u(g, liq, 1),
-                                "avg_bars": float(held.mean()) if len(held) else None}
+            u_res[f"rsi{n}"] = {
+                "x5": stats_u(g, liq, LEV),
+                "x1": stats_u(g, liq, 1),
+                "avg_bars": float(held.mean()) if len(held) else None,
+            }
         out["U"][sym] = {"bh_2026": bh, **u_res}  # type: ignore[index]
         nets, drift = rule_a(ts, op, close, ft, fc)
-        out["A"][sym] = {"n": len(nets), "mean_net": float(nets.mean()) if len(nets) else None,  # type: ignore[index]
-                         "drift": drift}
+        out["A"][sym] = {
+            "n": len(nets),
+            "mean_net": float(nets.mean()) if len(nets) else None,  # type: ignore[index]
+            "drift": drift,
+        }
         frames[sym] = positions(ts, close, ft, fc)
     port = pd.concat(frames, axis=1)
     cols = ["bh", "B_rsi50", "C_band", "null_sma50"]
     pm = pd.DataFrame({c: port.xs(c, axis=1, level=1).mean(axis=1) for c in cols}).dropna()
-    out["BC"] = {c: {"sharpe": float(pm[c].mean() / pm[c].std(ddof=1) * np.sqrt(per_year)),
-                     "ret": float(np.prod(1 + pm[c]) - 1)} for c in cols}
+    out["BC"] = {
+        c: {
+            "sharpe": float(pm[c].mean() / pm[c].std(ddof=1) * np.sqrt(per_year)),
+            "ret": float(np.prod(1 + pm[c]) - 1),
+        }
+        for c in cols
+    }
     print(f"{tf} done", file=sys.stderr, flush=True)
     return {"tf": tf, **out}
 

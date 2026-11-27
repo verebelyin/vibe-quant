@@ -196,8 +196,14 @@ def test_second_symbol_refused_at_1x(disposed: list[BacktestEngine]) -> None:
     refused = [s for s in strats.values() if s._margin_refusals]
     assert len(refused) == 1
     # the refused symbol never opened a position or left an order behind
-    assert not [o for o in engine.cache.orders(instrument_id=InstrumentId.from_str(
-        next(k for k, v in strats.items() if v is refused[0])))]
+    assert not [
+        o
+        for o in engine.cache.orders(
+            instrument_id=InstrumentId.from_str(
+                next(k for k, v in strats.items() if v is refused[0])
+            )
+        )
+    ]
     assert [(ok) for (_t, _q, _p, ok) in refused[0].margin_calls] == [False]
 
 
@@ -464,9 +470,7 @@ def _validation_result(
 def test_validation_notes_margin_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``notes.margin_limit`` = the cushion + the summed refused entries, only when on;
     the strategy config carries the run leverage as ``margin_leverage``."""
-    result, cfg = _validation_result(
-        tmp_path, monkeypatch, {"max_margin_pct": 0.5, "leverage": 5}
-    )
+    result, cfg = _validation_result(tmp_path, monkeypatch, {"max_margin_pct": 0.5, "leverage": 5})
     assert result.notes["margin_limit"] == {"max_margin_pct": 0.5, "refused_entries": 3}
     assert json.loads(json.dumps(result.notes))["margin_limit"]["refused_entries"] == 3
     assert cfg["max_margin_pct"] == 0.5

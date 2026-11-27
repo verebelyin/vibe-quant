@@ -68,7 +68,9 @@ def _find_state_db() -> Path:
     # Worktrees have no data/state (single-writer DB): use the main checkout's, read-only.
     common = subprocess.run(
         ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
         cwd=REPO_ROOT,
     ).stdout.strip()
     return Path(common).parent / "data/state/vibe_quant.db"
@@ -123,7 +125,9 @@ def load_declared_pins(path: Path) -> dict[str, dict[str, float | int]]:
     for section, metrics in data.items():
         if not isinstance(metrics, dict) or set(metrics) != set(_METRIC_KEYS):
             raise ValueError(f"{path}: {section} needs exactly {_METRIC_KEYS}")
-        bad = [k for k, v in metrics.items() if isinstance(v, bool) or not isinstance(v, (int, float))]
+        bad = [
+            k for k, v in metrics.items() if isinstance(v, bool) or not isinstance(v, (int, float))
+        ]
         if bad:
             raise ValueError(f"{path}: {section} non-numeric {bad}")
         out[section] = metrics
@@ -168,8 +172,15 @@ def _validation_multi_checks(
         run_id = conn.execute(
             "INSERT INTO backtest_runs(strategy_id, run_mode, symbols, timeframe, "
             "start_date, end_date, parameters) VALUES (?,?,?,?,?,?,?)",
-            (239, "validation", json.dumps(VALIDATION_SYMBOLS), timeframe,
-             VALIDATION_START, VALIDATION_END, "{}"),
+            (
+                239,
+                "validation",
+                json.dumps(VALIDATION_SYMBOLS),
+                timeframe,
+                VALIDATION_START,
+                VALIDATION_END,
+                "{}",
+            ),
         ).lastrowid
         assert run_id is not None
         conn.commit()
@@ -217,9 +228,12 @@ def main(argv: list[str] | None = None) -> int:
 
     ok = _screening_checks(dsl, pins.get("screening"))
     if args.validation_multi:
-        ok = _validation_multi_checks(
-            db, dsl.timeframe, pins.get("validation_multi", EXPECTED_VALIDATION_MULTI)
-        ) and ok
+        ok = (
+            _validation_multi_checks(
+                db, dsl.timeframe, pins.get("validation_multi", EXPECTED_VALIDATION_MULTI)
+            )
+            and ok
+        )
     return 0 if ok else 1
 
 

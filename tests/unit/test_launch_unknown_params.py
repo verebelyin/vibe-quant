@@ -70,9 +70,7 @@ def _seed_screening_run(
     return run_id
 
 
-def _run_cli(
-    db: Path, run_id: int, monkeypatch: pytest.MonkeyPatch
-) -> tuple[int, MagicMock]:
+def _run_cli(db: Path, run_id: int, monkeypatch: pytest.MonkeyPatch) -> tuple[int, MagicMock]:
     """Run ``screening run`` with the pipeline factory replaced by a recorder."""
     from vibe_quant.screening import __main__ as cli
     from vibe_quant.screening import pipeline as pipeline_mod
@@ -91,9 +89,7 @@ def _run_row(db: Path, run_id: int) -> dict[str, Any]:
     return dict(row)
 
 
-def _run_cli_real_pipeline(
-    db: Path, run_id: int, monkeypatch: pytest.MonkeyPatch
-) -> int:
+def _run_cli_real_pipeline(db: Path, run_id: int, monkeypatch: pytest.MonkeyPatch) -> int:
     """``screening run`` end to end: CLI resolution, real pipeline, real DB rows.
 
     Only the ENGINE is replaced (``use_mock=True`` -> ``_run_mock_backtest``): the
@@ -190,9 +186,7 @@ def test_screening_sweep_rows_record_each_value_and_the_override(
 ) -> None:
     """Every combination's row carries its own grid value AND the fixed override."""
     db = tmp_path / "s.db"
-    run_id = _seed_screening_run(
-        db, {"sweep": sweep, "stop_loss_type": "fixed_pct"}
-    )
+    run_id = _seed_screening_run(db, {"sweep": sweep, "stop_loss_type": "fixed_pct"})
 
     code = _run_cli_real_pipeline(db, run_id, monkeypatch)
 
@@ -500,7 +494,9 @@ async def test_launch_unknown_param_is_422_before_any_run(
 
     r = await ac.post(
         f"/api/backtest/{endpoint}",
-        json=_body(state, {key: 14 if key == "rsi_perid" else "free form"}, name=f"{endpoint}_{key}"),
+        json=_body(
+            state, {key: 14 if key == "rsi_perid" else "free form"}, name=f"{endpoint}_{key}"
+        ),
     )
 
     assert r.status_code == 422, r.text
@@ -510,9 +506,7 @@ async def test_launch_unknown_param_is_422_before_any_run(
 
 
 @pytest.mark.parametrize("endpoint", ["screening", "validation"])
-async def test_launch_run_level_keys_still_launch(
-    client: tuple[Any, ...], endpoint: str
-) -> None:
+async def test_launch_run_level_keys_still_launch(client: tuple[Any, ...], endpoint: str) -> None:
     ac, state, start_job = client
 
     r = await ac.post(
@@ -528,9 +522,7 @@ async def test_launch_run_level_keys_still_launch(
     assert start_job.call_count == 1
 
 
-async def test_launch_screening_checks_the_effective_dsl_override(
-    client: tuple[Any, ...]
-) -> None:
+async def test_launch_screening_checks_the_effective_dsl_override(client: tuple[Any, ...]) -> None:
     """``parameters.dsl_override`` is the DSL the screening subprocess runs (gotcha 6062).
 
     The stored DSL has no ``rsi``; only the override does. Four cases pin that the

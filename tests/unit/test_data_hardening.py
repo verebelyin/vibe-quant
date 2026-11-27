@@ -49,9 +49,7 @@ def db_path(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def sessions_env(
-    db_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> Path:
+def sessions_env(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point ingest's module-level archive/catalog at a tmp db."""
     monkeypatch.setattr(ingest, "RawDataArchive", lambda *a, **k: RawDataArchive(db_path))
     monkeypatch.setattr(ingest, "CatalogManager", lambda *a, **k: _NoopCatalog())
@@ -139,9 +137,7 @@ class TestPartialSessionStatus:
 
 
 class TestWriteInstrumentHardening:
-    def test_non_corruption_error_propagates_and_dir_survives(
-        self, tmp_path: Path
-    ) -> None:
+    def test_non_corruption_error_propagates_and_dir_survives(self, tmp_path: Path) -> None:
         mgr = CatalogManager(tmp_path)
         inst = create_instrument("BTCUSDT")
         inst_dir = tmp_path / "data" / "crypto_perpetual" / str(inst.id)
@@ -172,10 +168,7 @@ class TestWriteInstrumentHardening:
         # is the path that actually reaches the unreadable-parquet handler.
         for f in pdir.glob("*.parquet"):
             f.unlink()
-        bad = (
-            pdir
-            / "2024-01-01T00-00-00-000000000Z_2024-01-01T01-00-00-000000000Z.parquet"
-        )
+        bad = pdir / "2024-01-01T00-00-00-000000000Z_2024-01-01T01-00-00-000000000Z.parquet"
         bad.write_bytes(b"not a parquet" * 300)
 
         mgr.write_instrument(inst)  # corrupt -> rmtree + rewrite
@@ -233,13 +226,9 @@ class TestD2Mutants:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        monkeypatch.setattr(
-            ingest, "RawDataArchive", lambda *a, **k: RawDataArchive(db_path)
-        )
+        monkeypatch.setattr(ingest, "RawDataArchive", lambda *a, **k: RawDataArchive(db_path))
         monkeypatch.setattr(ingest, "CatalogManager", lambda *a, **k: _NoopCatalog())
-        monkeypatch.setattr(
-            ingest, "ingest_detail_data", lambda **k: {"failed_ranges": ["x..y"]}
-        )
+        monkeypatch.setattr(ingest, "ingest_detail_data", lambda **k: {"failed_ranges": ["x..y"]})
         code = ingest.main(["detail", "--symbols", "BTCUSDT", "--start", "2024-01-01"])
         assert code == 1
         assert "x..y" in capsys.readouterr().err

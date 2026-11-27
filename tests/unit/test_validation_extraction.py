@@ -119,25 +119,19 @@ def test_trade_duration_garbled_times_warn_without_changing_avg(
     result.total_trades = len(result.trades)
 
     with caplog.at_level(logging.WARNING, logger="vibe_quant.validation.extraction"):
-        compute_extended_metrics(
-            result, run_start_date="2024-01-01", run_end_date="2024-12-31"
-        )
+        compute_extended_metrics(result, run_start_date="2024-01-01", run_end_date="2024-12-31")
 
     # Only the good trade contributes: exactly one day.
     assert result.avg_trade_duration_hours == pytest.approx(24.0)
     messages = [record.getMessage() for record in caplog.records]
-    assert any(
-        "not-a-date" in m and "also-not-a-date" in m for m in messages
-    ), messages
+    assert any("not-a-date" in m and "also-not-a-date" in m for m in messages), messages
 
 
 def test_cagr_unparseable_trade_span_warns_and_leaves_cagr_at_default(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A trade span that cannot be parsed warns and leaves CAGR at its default."""
-    result = ValidationResult(
-        total_return=0.10, trades=[_make_trade("nope", "also-nope")]
-    )
+    result = ValidationResult(total_return=0.10, trades=[_make_trade("nope", "also-nope")])
     result.total_trades = 1
 
     with caplog.at_level(logging.WARNING, logger="vibe_quant.validation.extraction"):
@@ -286,9 +280,7 @@ def _four_hour_catalog(tmp_path: Any) -> Any:
     _write_bar_catalog(
         root,
         {
-            "4h": [
-                (_BASE_NS + i * 4 * _HOUR_NS, 100.0 + i, 1000.0 * (i + 1)) for i in range(4)
-            ],
+            "4h": [(_BASE_NS + i * 4 * _HOUR_NS, 100.0 + i, 1000.0 * (i + 1)) for i in range(4)],
             "1m": [(_BASE_NS + i * 60_000_000_000, 100.0, 5.0) for i in range(10)],
         },
     )
@@ -300,9 +292,7 @@ def test_runner_slippage_model_reads_the_primary_last_bars_before_the_fill(
 ) -> None:
     """The runner's model uses the PRIMARY LAST series and excludes the fill bar."""
     root = _four_hour_catalog(tmp_path)
-    model = build_slippage_model(
-        _venue(), "4h", [BTC], root, _BASE_NS, _BASE_NS + 4 * 4 * _HOUR_NS
-    )
+    model = build_slippage_model(_venue(), "4h", [BTC], root, _BASE_NS, _BASE_NS + 4 * 4 * _HOUR_NS)
 
     assert model.estimator is not None
     fill_ts = _BASE_NS + 2 * 4 * _HOUR_NS  # bars 0 and 1 are strictly before it
@@ -349,9 +339,7 @@ def test_runner_slippage_model_warns_for_an_empty_primary_series(
     _write_bar_catalog(root, {"4h": [(_BASE_NS - 10 * _HOUR_NS, 100.0, 1000.0)]})
 
     with caplog.at_level(logging.WARNING, logger="vibe_quant.validation.runner"):
-        model = build_slippage_model(
-            _venue(), "4h", [BTC], root, _BASE_NS, _BASE_NS + _HOUR_NS
-        )
+        model = build_slippage_model(_venue(), "4h", [BTC], root, _BASE_NS, _BASE_NS + _HOUR_NS)
 
     assert model.stats == {}
     (record,) = [r for r in caplog.records if r.levelno == logging.WARNING]
@@ -372,9 +360,7 @@ def test_load_bar_stats_windows_reads_close_and_volume(tmp_path: Any) -> None:
     root = _four_hour_catalog(tmp_path)
     bar_type = f"{BTC}-4-HOUR-LAST-EXTERNAL"
 
-    loaded = load_bar_stats_windows(
-        root, bar_type, [(_BASE_NS, _BASE_NS + 5 * _HOUR_NS)]
-    )
+    loaded = load_bar_stats_windows(root, bar_type, [(_BASE_NS, _BASE_NS + 5 * _HOUR_NS)])
 
     assert loaded is not None
     ts, close, volume = loaded
@@ -541,9 +527,7 @@ def test_extract_trades_no_positions_raises_after_a_swallowed_cache_read() -> No
         raise RuntimeError("cache read failed")
 
     engine = SimpleNamespace(
-        kernel=SimpleNamespace(
-            cache=SimpleNamespace(positions=broken, position_snapshots=list)
-        )
+        kernel=SimpleNamespace(cache=SimpleNamespace(positions=broken, position_snapshots=list))
     )
     model = _cost_model()
     ledger = CostLedger(model, SimpleNamespace())
@@ -565,9 +549,7 @@ def test_other_symbols_open_funding_counts_at_sizing_but_its_slippage_waits_for_
     model = _cost_model()
     ledger = CostLedger(model, SimpleNamespace())
     btc = _closed_btc()
-    eth_open = FakePosition.open(
-        "E-1", eth, entry_ns=_BASE_NS, entry_price=100.0, qty=5.0
-    )
+    eth_open = FakePosition.open("E-1", eth, entry_ns=_BASE_NS, entry_price=100.0, qty=5.0)
     ledger.on_position_closed(btc)
 
     now = _BASE_NS + 25 * _HOUR_NS
@@ -731,9 +713,7 @@ def test_real_validation_run_sizes_on_costs_with_another_symbol_open(
     ledger = captured["ledger"]
 
     # The still-open second ETH entry, as the post-hoc trade record sees it.
-    second = next(
-        t for t in result.trades if t.symbol == _ETH and t.exit_reason == "end_of_data"
-    )
+    second = next(t for t in result.trades if t.symbol == _ETH and t.exit_reason == "end_of_data")
     filled_at = datetime.fromisoformat(second.entry_time)
     second_entry_ns = int(filled_at.timestamp()) * 1_000_000_000 + filled_at.microsecond * 1_000
     sizing_ts, paid_at_sizing, balance_at = max(
@@ -744,17 +724,13 @@ def test_real_validation_run_sizes_on_costs_with_another_symbol_open(
     # The closed ETH trade: funding to its exit plus both legs, from the PRIMARY prefix.
     estimator = SlippageEstimator(impact_coefficient=0.1)
     eth_qty = float(eth_pos.peak_qty)
-    entry_leg = estimator.estimate_cost(
-        float(eth_pos.avg_px_open), eth_qty, 60.0, 0.02, 0.0001
-    )
-    exit_leg = estimator.estimate_cost(
-        float(eth_pos.avg_px_close), eth_qty, 60.0, 0.02, 0.0001
-    )
+    entry_leg = estimator.estimate_cost(float(eth_pos.avg_px_open), eth_qty, 60.0, 0.02, 0.0001)
+    exit_leg = estimator.estimate_cost(float(eth_pos.avg_px_close), eth_qty, 60.0, 0.02, 0.0001)
     assert exit_leg != entry_leg
     # The 1m decoy (volume 1.0) is not the series the legs read.
-    assert estimator.estimate_cost(
-        float(eth_pos.avg_px_open), eth_qty, 1.0, 0.02, 0.0001
-    ) != entry_leg
+    assert (
+        estimator.estimate_cost(float(eth_pos.avg_px_open), eth_qty, 1.0, 0.02, 0.0001) != entry_leg
+    )
     eth_settlements = int(eth_pos.ts_closed) // _SETTLE_NS - int(eth_pos.ts_opened) // _SETTLE_NS
     eth_funding = eth_settlements * _T3_RATE * eth_qty * float(eth_pos.avg_px_open)
     eth_key = cost_key(eth_pos)
@@ -768,8 +744,11 @@ def test_real_validation_run_sizes_on_costs_with_another_symbol_open(
 
     # Sizing at the second entry: the closed legs + BTC's open funding, no BTC slippage.
     btc_funding = (
-        sizing_ts // _SETTLE_NS - int(btc_pos.ts_opened) // _SETTLE_NS
-    ) * _T3_RATE * float(btc_pos.peak_qty) * float(btc_pos.avg_px_open)
+        (sizing_ts // _SETTLE_NS - int(btc_pos.ts_opened) // _SETTLE_NS)
+        * _T3_RATE
+        * float(btc_pos.peak_qty)
+        * float(btc_pos.avg_px_open)
+    )
     expected_paid = ledger.finalized[eth_key] + btc_funding
     assert paid_at_sizing == pytest.approx(expected_paid, abs=1e-9)
     btc_entry_leg = estimator.estimate_cost(
@@ -780,12 +759,15 @@ def test_real_validation_run_sizes_on_costs_with_another_symbol_open(
     expected_qty = math.floor((balance_at - paid_at_sizing) / 120.0 * 1000 + 1e-9) / 1000
     assert second.quantity == expected_qty
     # Teeth: the two legs and the other symbol's funding each move at least one size tick.
-    assert second.quantity < math.floor(
-        (balance_at - (paid_at_sizing - (entry_leg + exit_leg))) / 120.0 * 1000 + 1e-9
-    ) / 1000
-    assert second.quantity < math.floor(
-        (balance_at - (paid_at_sizing - btc_funding)) / 120.0 * 1000 + 1e-9
-    ) / 1000
+    assert (
+        second.quantity
+        < math.floor((balance_at - (paid_at_sizing - (entry_leg + exit_leg))) / 120.0 * 1000 + 1e-9)
+        / 1000
+    )
+    assert (
+        second.quantity
+        < math.floor((balance_at - (paid_at_sizing - btc_funding)) / 120.0 * 1000 + 1e-9) / 1000
+    )
 
     # The post-hoc ledger reconciled with the sizing ledger (it would have raised otherwise).
     assert reconciled and reconciled[-1][0] is ledger
@@ -809,7 +791,13 @@ def test_extract_results_forwards_the_slippage_model_and_ledger(
     try:
         assert (
             runner._extract_results(  # noqa: SLF001
-                1, "s", None, None, None, slippage=model, cost_ledger=ledger  # type: ignore[arg-type]
+                1,
+                "s",
+                None,
+                None,
+                None,
+                slippage=model,
+                cost_ledger=ledger,  # type: ignore[arg-type]
             )
             == "forwarded"
         )
@@ -826,7 +814,9 @@ def test_market_twin_reconcile_failure_is_reported_and_the_primary_result_kept(
     runner = ValidationRunner(db_path=tmp_path / "s.db", logs_path=tmp_path / "logs")
 
     def boom(_self: Any, **_kwargs: Any) -> None:
-        raise ModeledCostIntegrityError("modeled costs: sizing ledger and trade ledger disagree for X@1")
+        raise ModeledCostIntegrityError(
+            "modeled costs: sizing ledger and trade ledger disagree for X@1"
+        )
 
     monkeypatch.setattr(ValidationRunner, "_run_backtest", boom)
     try:
@@ -882,4 +872,3 @@ class TestSlippageModelSelection:
         assert len(result.trades) == 1
         assert result.trades[0].slippage_cost > 0.0
         assert result.total_slippage > 0.0
-

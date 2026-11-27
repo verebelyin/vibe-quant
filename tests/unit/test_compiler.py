@@ -587,9 +587,7 @@ take_profit:
         assert "slow_period" in source
         assert "signal_period" in source
 
-    def test_macd_signal_forces_pandas_ta_fallback(
-        self, compiler: StrategyCompiler
-    ) -> None:
+    def test_macd_signal_forces_pandas_ta_fallback(self, compiler: StrategyCompiler) -> None:
         """MACD with .signal/.histogram conditions must use pandas-ta, not NT.
 
         NT MACD only exposes .value (MACD line). When signal/histogram

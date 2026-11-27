@@ -114,8 +114,14 @@ def test_null_draws_match_hand_computed_orders() -> None:
 
 
 def test_null_on_flat_prices_is_the_fees() -> None:
-    totals, _ = oa.null_draws(np.full(11, 64.0), np.array([3, 2]), np.array([1.0, -1.0]), FEE, 50,
-                              np.random.default_rng(0))
+    totals, _ = oa.null_draws(
+        np.full(11, 64.0),
+        np.array([3, 2]),
+        np.array([1.0, -1.0]),
+        FEE,
+        50,
+        np.random.default_rng(0),
+    )
     assert set(totals.tolist()) == {(1 - 2 * FEE) ** 2 - 1.0}
 
 
@@ -185,37 +191,69 @@ def test_alpha_beta_recovers_an_exact_line() -> None:
 def test_oos_segments_per_universe() -> None:
     d = oa.day_of
     assert oa.oos_segments("U1", "2023-01-01", "2026-10-20") == [
-        (d("2023-01-01"), d("2026-01-01")), (d("2026-08-01"), d("2026-10-20"))
+        (d("2023-01-01"), d("2026-01-01")),
+        (d("2026-08-01"), d("2026-10-20")),
     ]
-    assert oa.oos_segments("U1", "2025-05-31", "2026-10-20")[0] == (d("2025-05-31"), d("2026-01-01"))
+    assert oa.oos_segments("U1", "2025-05-31", "2026-10-20")[0] == (
+        d("2025-05-31"),
+        d("2026-01-01"),
+    )
     assert oa.oos_segments("U2", "2023-05-04", "2026-11-07") == [(d("2026-01-01"), d("2026-11-07"))]
     assert oa.oos_segments("FWD", "2023-01-01", "2026-10-20") == []
     assert oa.half_of(d("2026-06-30")) == "2026H1" and oa.half_of(d("2026-07-01")) == "2026H2"
 
 
-def _coin(ret: float, null: list[float], cells: dict[str, float], null_cells: dict[str, list[float]]) -> object:
+def _coin(
+    ret: float, null: list[float], cells: dict[str, float], null_cells: dict[str, list[float]]
+) -> object:
     return oa.CoinOOS(
-        coin="X", ret=ret, trades=10, sharpe=0.0, pf=1.0, dd=0.0, exposure=0.5, alpha=0.0, beta=0.0,
-        days=100, cells=cells, null=np.array(null), null_cells={k: np.array(v) for k, v in null_cells.items()},
-        null_pct=0.0, bh=None,
+        coin="X",
+        ret=ret,
+        trades=10,
+        sharpe=0.0,
+        pf=1.0,
+        dd=0.0,
+        exposure=0.5,
+        alpha=0.0,
+        beta=0.0,
+        days=100,
+        cells=cells,
+        null=np.array(null),
+        null_cells={k: np.array(v) for k, v in null_cells.items()},
+        null_pct=0.0,
+        bh=None,
     )
 
 
 def test_judge_applies_the_pre_registered_bars() -> None:
     # 8 coins: 6 positive is enough, 5 is not; cell share 0.6 passes; CI needs a positive drift
     null = [-0.1, 0.0, 0.1] * 10
-    coins = [_coin(0.2 if i < 6 else -0.1, null, {"2026H1": 0.1, "2026H2": 0.1 if i < 4 else -0.1},
-                   {"2026H1": null, "2026H2": null}) for i in range(8)]
-    series = {f"C{i}": dict(enumerate(np.random.default_rng(i).normal(0.01, 0.01, 200))) for i in range(8)}
+    coins = [
+        _coin(
+            0.2 if i < 6 else -0.1,
+            null,
+            {"2026H1": 0.1, "2026H2": 0.1 if i < 4 else -0.1},
+            {"2026H1": null, "2026H2": null},
+        )
+        for i in range(8)
+    ]
+    series = {
+        f"C{i}": dict(enumerate(np.random.default_rng(i).normal(0.01, 0.01, 200))) for i in range(8)
+    }
     v = oa.judge(coins, series, seed=0)
     assert (v["need"], v["positive"], v["cells"]) == (6, 6, 16)
     assert v["cell_share"] == 12 / 16
     assert v["robust"] and v["ci_lo"] > 0
     assert v["port_ret"] == 0.125  # (6 * 0.2 - 2 * 0.1) / 8
     assert v["port_null_pct"] == 1.0 and v["beats_null"] and v["candidate"]
-    losing = {f"C{i}": dict(enumerate(np.random.default_rng(i).normal(-0.01, 0.01, 200))) for i in range(8)}
+    losing = {
+        f"C{i}": dict(enumerate(np.random.default_rng(i).normal(-0.01, 0.01, 200)))
+        for i in range(8)
+    }
     v = oa.judge(coins, losing, seed=0)
-    assert v["ci_lo"] < 0 and not v["robust"] and not v["candidate"]  # coins and cells alone are not enough
+    assert (
+        v["ci_lo"] < 0 and not v["robust"] and not v["candidate"]
+    )  # coins and cells alone are not enough
     coins[5] = _coin(-0.1, null, {"2026H1": 0.1, "2026H2": 0.1}, {"2026H1": null, "2026H2": null})
     assert not oa.judge(coins, series, seed=0)["robust"]
 
@@ -236,10 +274,23 @@ def test_coin_oos_on_synthetic_bars(monkeypatch: pytest.MonkeyPatch) -> None:
     opens = np.full(48, 64.0)
     monkeypatch.setitem(oa._BARS, ("XUSDT", "1h"), (t0 + np.arange(48) * hour, opens, opens.copy()))
     row = {
-        "coin": "XUSDT", "tf": "1h", "start": start, "end": end, "first_day": oa.day_of(start),
+        "coin": "XUSDT",
+        "tf": "1h",
+        "start": start,
+        "end": end,
+        "first_day": oa.day_of(start),
         "daily": [0.25, -0.5],
-        "positions": [{"side": 1, "ts_open": t0, "ts_close": t0 + 24 * hour, "px_open": 64.0,
-                       "px_close": 80.0, "qty": 1.0, "realized_pnl": 16.0}],
+        "positions": [
+            {
+                "side": 1,
+                "ts_open": t0,
+                "ts_close": t0 + 24 * hour,
+                "px_open": 64.0,
+                "px_close": 80.0,
+                "qty": 1.0,
+                "realized_pnl": 16.0,
+            }
+        ],
     }
     c = oa.coin_oos(row, "U2", {}, {}, 20, FEE, seed=0)
     assert c is not None
@@ -262,19 +313,40 @@ def test_forward_flags_a_carried_position_and_appends_idempotently(
     opens = np.full(72, 64.0)
     monkeypatch.setitem(oa._BARS, ("XUSDT", "1h"), (t0 + np.arange(72) * hour, opens, opens.copy()))
     row = {
-        "sid": "s1", "coin": "XUSDT", "tf": "1h", "start": "2026-01-01", "end": end,
-        "first_day": oa.day_of("2026-01-01"), "daily": [0.5, 0.25, -0.5],
+        "sid": "s1",
+        "coin": "XUSDT",
+        "tf": "1h",
+        "start": "2026-01-01",
+        "end": end,
+        "first_day": oa.day_of("2026-01-01"),
+        "daily": [0.5, 0.25, -0.5],
         # opened the day before FWD, closed inside it: in the return, not a FWD trade
-        "positions": [{"side": 1, "ts_open": t0 + hour, "ts_close": t0 + 30 * hour, "px_open": 64.0,
-                       "px_close": 80.0, "qty": 1.0, "realized_pnl": 16.0}],
+        "positions": [
+            {
+                "side": 1,
+                "ts_open": t0 + hour,
+                "ts_close": t0 + 30 * hour,
+                "px_open": 64.0,
+                "px_close": 80.0,
+                "qty": 1.0,
+                "realized_pnl": 16.0,
+            }
+        ],
     }
     fc = oa.forward_coin(row, {}, {}, 10, FEE)
     assert fc is not None
-    assert (fc["ret"], fc["trades"], fc["carried"], fc["window"]) == (-0.375, 0, True, f"{start}..{end}")
+    assert (fc["ret"], fc["trades"], fc["carried"], fc["window"]) == (
+        -0.375,
+        0,
+        True,
+        f"{start}..{end}",
+    )
     assert fc["null_pct"] == 0.0  # no FWD trade: every null draw is 0, -0.375 is below all
 
     path = tmp_path / "watch.json"
-    path.write_text('{"oos_analysis_20261110": {"picks": [{"sid": "s1", "forward": []}]}, "candidates": []}')
+    path.write_text(
+        '{"oos_analysis_20261110": {"picks": [{"sid": "s1", "forward": []}]}, "candidates": []}'
+    )
     table = [{"sid": "s1", "coins_pos": "0/1", "mean_ret": -0.375, "per_coin": {"XUSDT": fc}}]
     oa.append_forward(path, table, "2026-01-04", "src")
     oa.append_forward(path, table, "2026-01-04", "src")  # same window: replaced, not duplicated

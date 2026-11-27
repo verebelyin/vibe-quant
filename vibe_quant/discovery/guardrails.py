@@ -383,14 +383,17 @@ def apply_discovery_dsr_returns(
         mean_total = sum(float(v["mean"]) for v in stats.values())
         per_symbol: dict[str, dict[str, float | int | None]] = {}
         for sym, st in stats.items():
-            psr = 1.0 - _clamped_dsr(
-                dsr,
-                float(st["sharpe"]),
-                1,
-                max(2, int(st["observations"])),
-                float(st["skewness"]),
-                float(st["kurtosis"]),
-            ).p_value
+            psr = (
+                1.0
+                - _clamped_dsr(
+                    dsr,
+                    float(st["sharpe"]),
+                    1,
+                    max(2, int(st["observations"])),
+                    float(st["skewness"]),
+                    float(st["kurtosis"]),
+                ).p_value
+            )
             per_symbol[sym] = {
                 "sharpe_annualized": float(st["sharpe"]) * ann,
                 "psr": psr,
@@ -408,7 +411,12 @@ def apply_discovery_dsr_returns(
 
     logger.info(
         "DSR(pooled daily): sharpe365=%s T=%d trials=%d p=%.4f (unclamped %.4f) reasons=%s",
-        fmt_sharpe(sharpe * ann, 3), t, num_trials, result.p_value, unclamped.p_value, reasons,
+        fmt_sharpe(sharpe * ann, 3),
+        t,
+        num_trials,
+        result.p_value,
+        unclamped.p_value,
+        reasons,
     )
     for reason in reasons:
         logger.info("Guardrail reject: %s", reason)
@@ -477,7 +485,9 @@ def check_purged_kfold(
         )
         logger.info("Guardrail reject: %s", reason)
     else:
-        logger.info("K-Fold CV passed: mean_oos_sharpe365=%s", fmt_sharpe(result.mean_oos_sharpe, 3))
+        logger.info(
+            "K-Fold CV passed: mean_oos_sharpe365=%s", fmt_sharpe(result.mean_oos_sharpe, 3)
+        )
     return result, passed, reason
 
 
@@ -559,9 +569,7 @@ def apply_guardrails(
     # 1b. Minimum return (reject positive-Sharpe but negative-return strategies)
     min_return_passed = fitness.total_return >= config.min_return
     if not min_return_passed:
-        reasons.append(
-            f"Return {fitness.total_return:.2%} below minimum {config.min_return:.2%}"
-        )
+        reasons.append(f"Return {fitness.total_return:.2%} below minimum {config.min_return:.2%}")
 
     # 2. Complexity
     complexity_passed, complexity_reason = check_complexity(num_genes, config.max_complexity)
@@ -683,8 +691,7 @@ def apply_guardrails(
             bootstrap_passed = False
             n_ret = len(trade_returns) if trade_returns is not None else 0
             reasons.append(
-                f"Bootstrap CI required but insufficient {sample} "
-                f"(got {n_ret}, need ≥5)"
+                f"Bootstrap CI required but insufficient {sample} (got {n_ret}, need ≥5)"
             )
 
     # Overall verdict: all enabled checks must pass

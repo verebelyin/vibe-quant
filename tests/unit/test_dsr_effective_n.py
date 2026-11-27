@@ -84,9 +84,7 @@ def test_identical_series_count_once_scaled() -> None:
 
 
 @pytest.mark.parametrize("seed", [20261018, 2, 5])
-def test_identical_series_seed_independent(
-    monkeypatch: pytest.MonkeyPatch, seed: int
-) -> None:
+def test_identical_series_seed_independent(monkeypatch: pytest.MonkeyPatch, seed: int) -> None:
     """5 identical rows -> run_n_eff 8 for any NEFF_EV_SEED.
 
     Without the collapse these seeds land above the emax(1)/emax(2) boundary
@@ -306,6 +304,7 @@ def test_estimator_error_falls_back(
     two ``%d`` arguments in the message is caught. It must also not leak the raw
     exception text (no ``exc_info``, no exception message) on a money path.
     """
+
     def boom(*_a: Any, **_k: Any) -> Any:
         raise raised
 
@@ -539,16 +538,38 @@ def test_no_dsr_no_estimator(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.parametrize(
     ("sr_daily", "obs", "skew", "kurt", "n_pass", "p_pass", "n_reject", "p_reject"),
     [
-        (0.07145514172223692, 583, 0.4411043186673014, 5.5771365757692095, 752,
-         0.925788404900211, 13, 0.49184659184404467),  # run 920 e4f18102194c
-        (0.05171608339198556, 1689, 5.596524297180125, 95.36507893278105, 167,
-         0.7135411452541981, 27, 0.4632292151894185),  # run 950 a083a1f3236b
+        (
+            0.07145514172223692,
+            583,
+            0.4411043186673014,
+            5.5771365757692095,
+            752,
+            0.925788404900211,
+            13,
+            0.49184659184404467,
+        ),  # run 920 e4f18102194c
+        (
+            0.05171608339198556,
+            1689,
+            5.596524297180125,
+            95.36507893278105,
+            167,
+            0.7135411452541981,
+            27,
+            0.4632292151894185,
+        ),  # run 950 a083a1f3236b
     ],
     ids=["920-e4f18102194c", "950-a083a1f3236b"],
 )
 def test_stored_record_p_values(
-    sr_daily: float, obs: int, skew: float, kurt: float,
-    n_pass: int, p_pass: float, n_reject: int, p_reject: float,
+    sr_daily: float,
+    obs: int,
+    skew: float,
+    kurt: float,
+    n_pass: int,
+    p_pass: float,
+    n_reject: int,
+    p_reject: float,
 ) -> None:
     """The DSR p-values at the raw and effective Ns of two stored runs."""
     dsr = DeflatedSharpeRatio()

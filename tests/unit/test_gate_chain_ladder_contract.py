@@ -69,7 +69,9 @@ def _make_pipe(
     )
 
 
-def _validate(pipe: DiscoveryPipeline, top: list[tuple[StrategyChromosome, FitnessResult]]) -> DiscoveryResult:
+def _validate(
+    pipe: DiscoveryPipeline, top: list[tuple[StrategyChromosome, FitnessResult]]
+) -> DiscoveryResult:
     """Run the full ladder (Gate 1b buy-hold -> cross-window -> WFA -> holdout)."""
     return pipe._apply_validation_gates(
         top,
@@ -300,6 +302,7 @@ def test_buy_hold_skip_rows() -> None:
 
 def test_buy_hold_closes_error_fails_closed() -> None:
     """A benchmark that cannot be built rejects every survivor."""
+
     def boom(_symbols: list[str]) -> dict[str, dict[int, float]]:
         raise RuntimeError("x")
 
@@ -345,7 +348,7 @@ def test_cross_window_rows() -> None:
     tie_pass = _make_pipe(
         _cfg(cross_window_months=[1]),
         lambda c: _bt(),
-        backtest_fn_factory=lambda ws, we: (lambda c: _bt(sharpe_ratio=0.5, total_return=0.1)),
+        backtest_fn_factory=lambda ws, we: lambda c: _bt(sharpe_ratio=0.5, total_return=0.1),
     )
     results, error = _xwin(tie_pass, _top((1.0, _fit())))
     assert error is None
@@ -355,7 +358,7 @@ def test_cross_window_rows() -> None:
     zero_return = _make_pipe(
         _cfg(cross_window_months=[1]),
         lambda c: _bt(),
-        backtest_fn_factory=lambda ws, we: (lambda c: _bt(sharpe_ratio=3.0, total_return=0.0)),
+        backtest_fn_factory=lambda ws, we: lambda c: _bt(sharpe_ratio=3.0, total_return=0.0),
     )
     results, error = _xwin(zero_return, _top((1.0, _fit())))
     assert error is None
@@ -365,7 +368,9 @@ def test_cross_window_rows() -> None:
     def crashing(ws: str, we: str) -> BacktestFn:
         raise RuntimeError("x")
 
-    crashed = _make_pipe(_cfg(cross_window_months=[1]), lambda c: _bt(), backtest_fn_factory=crashing)
+    crashed = _make_pipe(
+        _cfg(cross_window_months=[1]), lambda c: _bt(), backtest_fn_factory=crashing
+    )
     results, error = _xwin(crashed, _top((1.0, _fit())))
     assert error is None
     assert results[0].passed is False
@@ -376,7 +381,9 @@ def test_cross_window_rows() -> None:
     def missing_data(ws: str, we: str) -> BacktestFn:
         raise DataUnavailableError("d")
 
-    broken = _make_pipe(_cfg(cross_window_months=[1]), lambda c: _bt(), backtest_fn_factory=missing_data)
+    broken = _make_pipe(
+        _cfg(cross_window_months=[1]), lambda c: _bt(), backtest_fn_factory=missing_data
+    )
     with pytest.raises(DataUnavailableError, match="^d$"):
         _xwin(broken, _top((1.0, _fit())))
 
@@ -386,7 +393,7 @@ def test_cross_window_range_error_rejects_once(monkeypatch: pytest.MonkeyPatch) 
     pipe = _make_pipe(
         _cfg(cross_window_months=[1]),
         lambda c: _bt(),
-        backtest_fn_factory=lambda ws, we: (lambda c: _bt()),
+        backtest_fn_factory=lambda ws, we: lambda c: _bt(),
     )
     _break_window_ranges(monkeypatch, "cross_window_ranges", "d")
     res = _validate(pipe, _top((1.0, _fit()), (2.0, _fit())))
@@ -405,14 +412,17 @@ def test_cross_window_required() -> None:
         ret = 0.1 if ws == "2024-02-01" else -0.1
         return lambda c: _bt(sharpe_ratio=1.0, total_return=ret)
 
-    res = _validate(_make_pipe(cfg, lambda c: _bt(), backtest_fn_factory=one_of_two), _top((1.0, _fit())))
+    res = _validate(
+        _make_pipe(cfg, lambda c: _bt(), backtest_fn_factory=one_of_two), _top((1.0, _fit()))
+    )
     assert [c.stop_loss_pct for c, _ in res.top_strategies] == [1.0]
     (cwr,) = res.cross_window_results
     assert (cwr.windows_passed, cwr.total_windows, cwr.required, cwr.passed) == (1, 2, 1, True)
 
     none_of_two = _make_pipe(
-        cfg, lambda c: _bt(),
-        backtest_fn_factory=lambda ws, we: (lambda c: _bt(sharpe_ratio=1.0, total_return=-0.1)),
+        cfg,
+        lambda c: _bt(),
+        backtest_fn_factory=lambda ws, we: lambda c: _bt(sharpe_ratio=1.0, total_return=-0.1),
     )
     res = _validate(none_of_two, _top((1.0, _fit())))
     assert _reasons(res) == [
@@ -428,7 +438,9 @@ def test_cross_window_reject_prints_the_limit_in_display_units() -> None:
         ret = 0.1 if ws == "2024-02-01" else -0.1
         return lambda c: _bt(sharpe_ratio=1.0, total_return=ret)
 
-    res = _validate(_make_pipe(cfg, lambda c: _bt(), backtest_fn_factory=first_only), _top((1.0, _fit())))
+    res = _validate(
+        _make_pipe(cfg, lambda c: _bt(), backtest_fn_factory=first_only), _top((1.0, _fit()))
+    )
     assert _reasons(res) == [
         ["Cross-window: 1/3 shifted windows passed (need 3; sharpe>=0.60 ann √365 and return>0)"]
     ]
@@ -438,9 +450,10 @@ def test_ladder_logs_name_the_sharpe_unit(caplog: LogCaptureFixture) -> None:
     """Window and holdout log lines key the Sharpe as sharpe365= with the display value (0.5 -> 0.60)."""
     cfg = _holdout_cfg(cross_window_months=[1], holdout_min_sharpe=0.5)
     pipe = _make_pipe(
-        cfg, lambda c: _bt(),
+        cfg,
+        lambda c: _bt(),
         holdout_backtest_fn=lambda c: _bt(sharpe_ratio=0.5),
-        backtest_fn_factory=lambda ws, we: (lambda c: _bt(sharpe_ratio=0.5)),
+        backtest_fn_factory=lambda ws, we: lambda c: _bt(sharpe_ratio=0.5),
     )
     with caplog.at_level(logging.INFO):
         _validate(pipe, _top((1.0, _fit())))
@@ -494,7 +507,7 @@ def test_wfa_rows() -> None:
         _make_pipe(
             _cfg(wfa_oos_step_days=30, start_date="2024-01-01", end_date="2024-01-10"),
             lambda c: _bt(),
-            backtest_fn_factory=lambda ws, we: (lambda c: _bt()),
+            backtest_fn_factory=lambda ws, we: lambda c: _bt(),
         ),
         _top((1.0, _fit())),
     )
@@ -514,12 +527,18 @@ def test_wfa_rows() -> None:
     res = _validate(_make_pipe(cfg, lambda c: _bt(), backtest_fn_factory=half), _top((1.0, _fit())))
     assert [c.stop_loss_pct for c, _ in res.top_strategies] == [1.0]
     (wfa,) = res.wfa_results
-    assert (wfa.windows_profitable, wfa.total_windows, wfa.consistency, wfa.passed) == (1, 2, 0.5, True)
+    assert (wfa.windows_profitable, wfa.total_windows, wfa.consistency, wfa.passed) == (
+        1,
+        2,
+        0.5,
+        True,
+    )
 
     # A 0.0-return window is NOT profitable.
     flat = _make_pipe(
-        cfg, lambda c: _bt(),
-        backtest_fn_factory=lambda ws, we: (lambda c: _bt(total_return=0.0)),
+        cfg,
+        lambda c: _bt(),
+        backtest_fn_factory=lambda ws, we: lambda c: _bt(total_return=0.0),
     )
     res = _validate(flat, _top((1.0, _fit())))
     assert _reasons(res) == [["WFA: 0/2 rolling windows profitable (0% < 50%)"]]
@@ -530,7 +549,7 @@ def test_wfa_range_error(monkeypatch: pytest.MonkeyPatch) -> None:
     pipe = _make_pipe(
         _cfg(wfa_oos_step_days=30),
         lambda c: _bt(),
-        backtest_fn_factory=lambda ws, we: (lambda c: _bt()),
+        backtest_fn_factory=lambda ws, we: lambda c: _bt(),
     )
     _break_window_ranges(monkeypatch, "wfa_window_ranges", "d")
     res = _validate(pipe, _top((1.0, _fit()), (2.0, _fit())))
@@ -563,9 +582,7 @@ def test_holdout_rows() -> None:
     nan = float("nan")
     top = _top((1.0, _fit()))
 
-    no_dates = _validate(
-        _make_pipe(_cfg(train_test_split=0.8), lambda c: _bt()), top
-    )
+    no_dates = _validate(_make_pipe(_cfg(train_test_split=0.8), lambda c: _bt()), top)
     assert _reasons(no_dates) == [["Holdout: no holdout dates"]]
     assert no_dates.holdout_min_trades is None
 
@@ -602,14 +619,18 @@ def test_holdout_rows() -> None:
     def crashing(c: StrategyChromosome) -> dict[str, float | int]:
         raise RuntimeError("x")
 
-    crashed = _validate(_make_pipe(_holdout_cfg(), lambda c: _bt(), holdout_backtest_fn=crashing), top)
+    crashed = _validate(
+        _make_pipe(_holdout_cfg(), lambda c: _bt(), holdout_backtest_fn=crashing), top
+    )
     assert _reasons(crashed) == _reasons(empty)
 
     def missing_data(c: StrategyChromosome) -> dict[str, float | int]:
         raise DataUnavailableError("d")
 
     with pytest.raises(DataUnavailableError, match="^d$"):
-        _validate(_make_pipe(_holdout_cfg(), lambda c: _bt(), holdout_backtest_fn=missing_data), top)
+        _validate(
+            _make_pipe(_holdout_cfg(), lambda c: _bt(), holdout_backtest_fn=missing_data), top
+        )
 
     split_zero = _validate(_make_pipe(_cfg(), lambda c: _bt()), top)
     assert [c.stop_loss_pct for c, _ in split_zero.top_strategies] == [1.0]
@@ -668,7 +689,7 @@ def test_result_lists_follow_survivors() -> None:
         cfg,
         lambda c: _bt(),
         holdout_backtest_fn=holdout,
-        backtest_fn_factory=lambda ws, we: (lambda c: _bt(sharpe_ratio=1.0, total_return=0.1)),
+        backtest_fn_factory=lambda ws, we: lambda c: _bt(sharpe_ratio=1.0, total_return=0.1),
     )
     res = _validate(pipe, [(c3, _fit()), (c1, _fit()), (c2, _fit())])
 

@@ -117,7 +117,9 @@ def load_monthly_klines(directory: Path) -> dict[str, dict[int, tuple[float, flo
     return out
 
 
-def add_fill_klines(directory: Path, klines: dict[str, dict[int, tuple[float, float, float]]]) -> int:
+def add_fill_klines(
+    directory: Path, klines: dict[str, dict[int, tuple[float, float, float]]]
+) -> int:
     """Add daily fill rows for interior missing days; existing days win. Returns rows used."""
     used = 0
     for name in sorted(os.listdir(directory)):
@@ -328,7 +330,9 @@ def main() -> None:
         mean_d = float(d_values.mean())
         drift_delta = np.array(
             [
-                short_return(str(record["symbol"]), int(record["entry"]), int(record["exit"]), True)[0]
+                short_return(
+                    str(record["symbol"]), int(record["entry"]), int(record["exit"]), True
+                )[0]
                 - float(record["r_event"])
                 for record in records
             ]
@@ -373,14 +377,10 @@ def main() -> None:
         unhedged: list[float] = []
         active_days = 0
         first_prev = [
-            i
-            for i, (_, entry, exit_day) in enumerate(events)
-            if entry < CAL_START - 1 <= exit_day
+            i for i, (_, entry, exit_day) in enumerate(events) if entry < CAL_START - 1 <= exit_day
         ]
         prev_n = len(first_prev)
-        prev_weights: dict[int, float] = (
-            {i: 1.0 / prev_n for i in first_prev} if prev_n else {}
-        )
+        prev_weights: dict[int, float] = {i: 1.0 / prev_n for i in first_prev} if prev_n else {}
         for t in range(CAL_START, CAL_END + 1):
             current = [i for i, (_, entry, exit_day) in enumerate(events) if entry < t <= exit_day]
             n = len(current)

@@ -66,7 +66,16 @@ def engines() -> Iterator[list[BacktestEngine]]:
 
 
 def _bar(
-    spec: str, step: int, i: int, o: float, h: float, low: float, c: float, *, iid: str = _BTC, prec: int = 1
+    spec: str,
+    step: int,
+    i: int,
+    o: float,
+    h: float,
+    low: float,
+    c: float,
+    *,
+    iid: str = _BTC,
+    prec: int = 1,
 ) -> Bar:
     """Bar ``i`` of length ``step``; ts_init = bar close (like the catalog)."""
     return Bar(
@@ -152,7 +161,11 @@ def _run(
     engine = _engine(symbol)
     engines.append(engine)
     engine.add_data(data)
-    kw: dict[str, Any] = {"instrument_id": iid, "command_release": release, "entry_order": "post_only"}
+    kw: dict[str, Any] = {
+        "instrument_id": iid,
+        "command_release": release,
+        "entry_order": "post_only",
+    }
     if release == "bar":
         kw["command_release_bar_type"] = f"{iid}-1-MINUTE-LAST-EXTERNAL"
     kw.update(config)
@@ -188,7 +201,9 @@ def test_post_only_priced_at_release_not_rejected_on_first_minute_dip(
     # A limit priced at the signal close - 1 tick (100.9) is marketable against the
     # book (bid = ask = 100.5) and NT rejects post-only orders that would take.
     one_m = _one_minute(_REL + 10, ohlc={i: (100.5,) * 4 for i in range(_REL, _REL + 10)})
-    engine, _ = _run(engines, data=_strategy_bars(_SIGNAL_CLOSES[:4]) + one_m, dsl=_dsl("mk_first_dip"))
+    engine, _ = _run(
+        engines, data=_strategy_bars(_SIGNAL_CLOSES[:4]) + one_m, dsl=_dsl("mk_first_dip")
+    )
     (order,) = _entries(engine)
     assert order.status != OrderStatus.REJECTED
     assert order.is_open and order.status == OrderStatus.ACCEPTED
@@ -200,7 +215,11 @@ def test_post_only_priced_at_release_not_rejected_on_first_minute_dip(
 
 
 def test_offset_ticks_and_short_side_price_away_from_release(engines: list[BacktestEngine]) -> None:
-    dsl = _dsl("mk_short", entry_conditions={"short": ["close > 100.5"]}, exit_conditions={"short": ["close < 50"]})
+    dsl = _dsl(
+        "mk_short",
+        entry_conditions={"short": ["close > 100.5"]},
+        exit_conditions={"short": ["close < 50"]},
+    )
     one_m = _one_minute(_REL + 10, ohlc={i: (100.5,) * 4 for i in range(_REL, _REL + 10)})
     engine, _ = _run(
         engines, data=_strategy_bars(_SIGNAL_CLOSES[:4]) + one_m, dsl=dsl, maker_offset_ticks=3
@@ -378,7 +397,7 @@ def test_entry_fill_on_cancel_release_tick_gets_sl_tp(engines: list[BacktestEngi
 # 6. Market mode is unchanged
 # ---------------------------------------------------------------------------
 
-_MARKET_LONG_ENTRY = '''\
+_MARKET_LONG_ENTRY = """\
         order = self.order_factory.market(
             instrument_id=self.instrument_id,
             order_side=OrderSide.BUY,
@@ -387,9 +406,9 @@ _MARKET_LONG_ENTRY = '''\
         )
         self._send_command(self.submit_order, order)
         # SL/TP orders are submitted from on_event(PositionOpened) after fill
-'''
+"""
 _MARKET_SHORT_ENTRY = _MARKET_LONG_ENTRY.replace("OrderSide.BUY", "OrderSide.SELL")
-_MARKET_EXIT = '''\
+_MARKET_EXIT = """\
         order = self.order_factory.market(
             instrument_id=self.instrument_id,
             order_side=exit_side,
@@ -398,7 +417,7 @@ _MARKET_EXIT = '''\
             reduce_only=True,
         )
         self._send_command(self.submit_order, order)
-'''
+"""
 
 
 def test_market_mode_generated_source_unchanged(engines: list[BacktestEngine]) -> None:
@@ -417,7 +436,9 @@ def test_market_mode_generated_source_unchanged(engines: list[BacktestEngine]) -
     engines.append(engine)
     engine.add_data(_strategy_bars(_SIGNAL_CLOSES[:4]) + _one_minute(30))
     cfg = config_cls(
-        instrument_id=_BTC, command_release="bar", command_release_bar_type=f"{_BTC}-1-MINUTE-LAST-EXTERNAL"
+        instrument_id=_BTC,
+        command_release="bar",
+        command_release_bar_type=f"{_BTC}-1-MINUTE-LAST-EXTERNAL",
     )
     assert cfg.entry_order == "market"
     engine.add_strategy(strategy_cls(cfg))
@@ -485,7 +506,10 @@ def test_trade_tick_release_prices_from_the_tick(engines: list[BacktestEngine]) 
 def test_price_uses_the_instruments_own_tick_size(engines: list[BacktestEngine]) -> None:
     # ETHUSDT tick is 0.01 (BTC 0.1): release close 100.55, 2 ticks -> 100.53
     eth = "ETHUSDT-PERP.BINANCE"
-    five = [_bar("5-MINUTE", _M5, i, c, c, c, c, iid=eth, prec=2) for i, c in enumerate(_SIGNAL_CLOSES[:4])]
+    five = [
+        _bar("5-MINUTE", _M5, i, c, c, c, c, iid=eth, prec=2)
+        for i, c in enumerate(_SIGNAL_CLOSES[:4])
+    ]
     one_m = [
         _bar("1-MINUTE", _M, i, *((100.55 if i >= _REL else 100.0,) * 4), iid=eth, prec=2)
         for i in range(_REL + 10)
@@ -541,7 +565,9 @@ def test_rejected_post_only_entry_clears_pending_and_next_signal_enters(
 # ---------------------------------------------------------------------------
 
 
-def test_exit_signal_withdrawing_queued_entry_skips_same_bar_entry(engines: list[BacktestEngine]) -> None:
+def test_exit_signal_withdrawing_queued_entry_skips_same_bar_entry(
+    engines: list[BacktestEngine],
+) -> None:
     # bar 2 queues a long intent; bar 3 has BOTH an entry signal (100.5 < 101 < 101.5)
     # and an exit signal (101 < 101.5): the exit withdraws the intent and the bar is
     # skipped, the entry must not be re-queued in the same pass. Bar 4 (102) has neither.
@@ -618,7 +644,9 @@ def test_timeout_queues_one_cancel_per_order(engines: list[BacktestEngine]) -> N
     assert len(cancels) == 1 and cancels[0][2][0].client_order_id == order.client_order_id
 
 
-def _partial_fill_run(engines: list[BacktestEngine], *, fill_minutes: set[int], timeout: int) -> BacktestEngine:
+def _partial_fill_run(
+    engines: list[BacktestEngine], *, fill_minutes: set[int], timeout: int
+) -> BacktestEngine:
     """A 0.002 maker entry that fills 0.001 per through-bar (thin bar volume)."""
 
     def two_lots(cls: type) -> type:
@@ -633,20 +661,32 @@ def _partial_fill_run(engines: list[BacktestEngine], *, fill_minutes: set[int], 
         if i in fill_minutes:
             bar = _bar("1-MINUTE", _M, i, 100.3, 100.3, 100.3, 100.3)
             bar = Bar(
-                bar_type=bar.bar_type, open=bar.open, high=bar.high, low=bar.low, close=bar.close,
-                volume=Quantity.from_str("0.004"), ts_event=bar.ts_event, ts_init=bar.ts_init,
+                bar_type=bar.bar_type,
+                open=bar.open,
+                high=bar.high,
+                low=bar.low,
+                close=bar.close,
+                volume=Quantity.from_str("0.004"),
+                ts_event=bar.ts_event,
+                ts_init=bar.ts_init,
             )
         else:
             bar = _bar("1-MINUTE", _M, i, 100.5, 100.5, 100.5, 100.5)
         data.append(bar)
     engine, _ = _run(
-        engines, data=data, dsl=_dsl("mk_partial"), strategy_wrap=two_lots, maker_entry_timeout_bars=timeout
+        engines,
+        data=data,
+        dsl=_dsl("mk_partial"),
+        strategy_wrap=two_lots,
+        maker_entry_timeout_bars=timeout,
     )
     return engine
 
 
 @pytest.mark.parametrize(
-    ("fill_minutes", "timeout"), [({16, 17}, 9), ({20}, 1)], ids=["two_fills", "fill_on_cancel_release"]
+    ("fill_minutes", "timeout"),
+    [({16, 17}, 9), ({20}, 1)],
+    ids=["two_fills", "fill_on_cancel_release"],
 )
 def test_partial_maker_fills_keep_one_protective_pair(
     engines: list[BacktestEngine], fill_minutes: set[int], timeout: int

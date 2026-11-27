@@ -304,9 +304,7 @@ class FixedFractionalSizer(PositionSizer):
         raw_size = risk_amount / stop_distance
 
         # Apply limits
-        final_size = self._apply_limits(
-            raw_size, account_equity, entry_price, instrument
-        )
+        final_size = self._apply_limits(raw_size, account_equity, entry_price, instrument)
 
         # NautilusTrader Quantity requires float, not Decimal
         return Quantity(float(final_size), precision=instrument.size_precision)
@@ -405,9 +403,7 @@ class KellySizer(PositionSizer):
         raw_size = position_value / entry_price
 
         # Apply limits
-        final_size = self._apply_limits(
-            raw_size, account_equity, entry_price, instrument
-        )
+        final_size = self._apply_limits(raw_size, account_equity, entry_price, instrument)
 
         # NautilusTrader Quantity requires float, not Decimal
         return Quantity(float(final_size), precision=instrument.size_precision)
@@ -484,9 +480,7 @@ class ATRSizer(PositionSizer):
         raw_size = risk_amount / stop_distance
 
         # Apply limits
-        final_size = self._apply_limits(
-            raw_size, account_equity, entry_price, instrument
-        )
+        final_size = self._apply_limits(raw_size, account_equity, entry_price, instrument)
 
         # NautilusTrader Quantity requires float, not Decimal
         return Quantity(float(final_size), precision=instrument.size_precision)

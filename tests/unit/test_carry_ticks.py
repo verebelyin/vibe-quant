@@ -192,9 +192,9 @@ def test_boundary_prices_window() -> None:
     ) == {boundary: 4.0}
     # exactly at the lower edge -> out; 1 ns later -> in
     assert boundary_prices(_series_at([boundary - 60 * MIN], [1.0]), [boundary], instrument) == {}
-    assert boundary_prices(_series_at([boundary - 60 * MIN + 1], [1.0]), [boundary], instrument) == {
-        boundary: 1.0
-    }
+    assert boundary_prices(
+        _series_at([boundary - 60 * MIN + 1], [1.0]), [boundary], instrument
+    ) == {boundary: 1.0}
     # the last bar at or before B wins; a bar after B is not eligible (but is for the next B)
     two = [boundary, boundary + 1]
     assert boundary_prices(_series_at(two, [7.0, 9.0]), [boundary], instrument) == {boundary: 7.0}
@@ -232,7 +232,9 @@ def test_to_trade_ticks_identity_price_and_size() -> None:
     assert all(float(tick.size) == FILL_TICK_SIZE for tick in out)
     assert all(tick.instrument_id == instrument.id for tick in out)
     assert all(tick.aggressor_side == AggressorSide.NO_AGGRESSOR for tick in out)
-    assert [float(tick.size) for tick in to_trade_ticks(instrument, ticks[:1], size=0.001)] == [0.001]
+    assert [float(tick.size) for tick in to_trade_ticks(instrument, ticks[:1], size=0.001)] == [
+        0.001
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -430,8 +432,11 @@ def test_load_carry_inputs_vol_closes(tmp_path: Path, monkeypatch: pytest.Monkey
 
     equal = load_carry_inputs(_spec(), root, _archive(tmp_path))
     spec = CarrySpec.from_dates(
-        ("BTCUSDT", "ETHUSDT"), "2024-06-03", "2024-07-01",
-        weighting="inverse_vol", vol_lookback_days=3,
+        ("BTCUSDT", "ETHUSDT"),
+        "2024-06-03",
+        "2024-07-01",
+        weighting="inverse_vol",
+        vol_lookback_days=3,
     )
     varied = load_carry_inputs(spec, root, _archive(tmp_path))
 
@@ -478,7 +483,9 @@ def test_preflight_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 
     # 1. bad spec -> ValueError, before any path or symbol is touched
     with pytest.raises(ValueError, match="CarrySpec"):
-        load_carry_inputs({"symbols": ("BTCUSDT", "ETHUSDT")}, tmp_path / "nope", tmp_path / "no.db")
+        load_carry_inputs(
+            {"symbols": ("BTCUSDT", "ETHUSDT")}, tmp_path / "nope", tmp_path / "no.db"
+        )
 
     # 2. missing archive -> CarryDataError naming the archive (before any symbol)
     root2 = tmp_path / "c2"
@@ -683,10 +690,26 @@ def _volume_catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def _cli_run(root: Path, archive: Path, tmp_path: Path) -> int:
     return carry_cli.main(
         [
-            "run", "--symbols", "BTCUSDT", "ETHUSDT", "--start", "2024-06-03",
-            "--end", "2024-07-01", "--engine", "reference", "--min-quote-volume", "1e8",
-            "--catalog", str(root), "--archive", str(archive),
-            "--out", str(tmp_path / "out"), "--trials", str(tmp_path / "trials.jsonl"),
+            "run",
+            "--symbols",
+            "BTCUSDT",
+            "ETHUSDT",
+            "--start",
+            "2024-06-03",
+            "--end",
+            "2024-07-01",
+            "--engine",
+            "reference",
+            "--min-quote-volume",
+            "1e8",
+            "--catalog",
+            str(root),
+            "--archive",
+            str(archive),
+            "--out",
+            str(tmp_path / "out"),
+            "--trials",
+            str(tmp_path / "trials.jsonl"),
         ]
     )
 
@@ -856,7 +879,9 @@ def test_sizing_and_release_lookups_equal_the_full_scan() -> None:
     rng = random.Random(9)
     checked = 0
     for _ in range(60):
-        stamps = sorted(set(rng.randrange(0, 6 * HOUR, MIN // 4) for _ in range(rng.randrange(0, 30))))
+        stamps = sorted(
+            set(rng.randrange(0, 6 * HOUR, MIN // 4) for _ in range(rng.randrange(0, 30)))
+        )
         ticks = tuple(PriceTick(ts, float(index)) for index, ts in enumerate(stamps))
         probes = {0, 7 * HOUR}
         for ts in stamps:
@@ -889,14 +914,14 @@ def test_preflight_requires_strictly_ascending_ticks(
     root = tmp_path / "catalog"
     _valid_catalog(root, prices, START)
     crafted = (PriceTick(D + INIT, 1.0), PriceTick(second_ts, 2.0))
-    monkeypatch.setattr(
-        "vibe_quant.portfolio.ticks.select_ticks", lambda *args, **kwargs: crafted
-    )
+    monkeypatch.setattr("vibe_quant.portfolio.ticks.select_ticks", lambda *args, **kwargs: crafted)
 
     if ascending:
         assert load_carry_inputs(spec, root, _archive(tmp_path)).ticks["BTCUSDT"] == crafted
     else:
-        with pytest.raises(CarryDataError, match="BTCUSDT: decision ticks are not strictly ascending"):
+        with pytest.raises(
+            CarryDataError, match="BTCUSDT: decision ticks are not strictly ascending"
+        ):
             load_carry_inputs(spec, root, _archive(tmp_path))
 
 

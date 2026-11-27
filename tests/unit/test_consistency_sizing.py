@@ -40,8 +40,13 @@ def _screening(
 ) -> int:
     """A completed screening run over WINDOW/SYMBOLS with one sweep row per entry."""
     run_id = state.create_backtest_run(
-        strategy_id=sid, run_mode="screening", symbols=SYMBOLS, timeframe="4h",
-        start_date=WINDOW[0], end_date=WINDOW[1], parameters=parameters or {},
+        strategy_id=sid,
+        run_mode="screening",
+        symbols=SYMBOLS,
+        timeframe="4h",
+        start_date=WINDOW[0],
+        end_date=WINDOW[1],
+        parameters=parameters or {},
     )
     state.update_backtest_run_status(run_id, "completed")
     for row_params, sharpe, trades in rows if rows is not None else [({}, 2.0, 50)]:
@@ -56,7 +61,12 @@ def _screening(
 
 def _scoped(state: StateManager, sid: int, **kwargs: object) -> object:
     return find_screening_reference(
-        state, sid, "s1", val_window=WINDOW, val_symbols=SYMBOLS, **kwargs  # type: ignore[arg-type]
+        state,
+        sid,
+        "s1",
+        val_window=WINDOW,
+        val_symbols=SYMBOLS,
+        **kwargs,  # type: ignore[arg-type]
     )
 
 
@@ -64,7 +74,9 @@ def test_sizing_keys_do_not_block_exact_row_match(state: StateManager) -> None:
     """S28: the validated params match a sweep row once the run-level sizing keys are dropped."""
     sid = state.create_strategy("s1", {"name": "s1"})
     run_id = _screening(
-        state, sid, {"max_position_pct": 1.0},
+        state,
+        sid,
+        {"max_position_pct": 1.0},
         rows=[({"rsi_period": 14}, 2.0, 50), ({"rsi_period": 21}, 9.9, 60)],
     )
     ref = _scoped(state, sid, validated_params={"rsi.period": 14, "max_position_pct": 1.0})
@@ -103,8 +115,13 @@ def test_discovery_fallback_must_share_sizing(state: StateManager) -> None:
     """S29: the discovery champion is only a reference at the same recorded sizing."""
     sid = state.create_strategy("genome_abc123", {"name": "genome_abc123"})
     disc_id = state.create_backtest_run(
-        strategy_id=None, run_mode="discovery", symbols=SYMBOLS, timeframe="4h",
-        start_date=WINDOW[0], end_date=WINDOW[1], parameters={},
+        strategy_id=None,
+        run_mode="discovery",
+        symbols=SYMBOLS,
+        timeframe="4h",
+        start_date=WINDOW[0],
+        end_date=WINDOW[1],
+        parameters={},
     )
     state.update_backtest_run_status(disc_id, "completed")
     state.save_backtest_result(
@@ -122,7 +139,9 @@ def test_discovery_fallback_must_share_sizing(state: StateManager) -> None:
         },
     )
 
-    covered = find_screening_reference(state, sid, "genome_abc123", val_sizing={"max_position_pct": 1.0})
+    covered = find_screening_reference(
+        state, sid, "genome_abc123", val_sizing={"max_position_pct": 1.0}
+    )
     assert covered is not None
     assert covered.source == f"discovery_run:{disc_id}"
 
@@ -147,7 +166,10 @@ def test_default_sizing_matches_legacy_reference(state: StateManager) -> None:
 
     # Other run-level knobs in the column do not read as a sizing.
     legacy = _screening(
-        state, sid, {"initial_balance": 1000, "sweep": {"rsi_period": [7, 14]}}, rows=[({}, 3.0, 50)]
+        state,
+        sid,
+        {"initial_balance": 1000, "sweep": {"rsi_period": [7, 14]}},
+        rows=[({}, 3.0, 50)],
     )
     ref2 = _scoped(state, sid, val_sizing={})
     assert ref2 is not None
@@ -161,7 +183,9 @@ def test_garbage_reference_sizing_is_skipped(state: StateManager) -> None:
     bad_value = _screening(state, sid, {"max_position_pct": -1}, rows=[({}, 9.9, 50)])
     bad_json = _screening(state, sid, {}, rows=[({}, 9.8, 50)])
     bad_shape = _screening(state, sid, {}, rows=[({}, 9.7, 50)])
-    state.conn.execute("UPDATE backtest_runs SET parameters = ? WHERE id = ?", ("{not json", bad_json))
+    state.conn.execute(
+        "UPDATE backtest_runs SET parameters = ? WHERE id = ?", ("{not json", bad_json)
+    )
     state.conn.execute("UPDATE backtest_runs SET parameters = ? WHERE id = ?", ("[]", bad_shape))
     state.conn.commit()
 
@@ -186,8 +210,13 @@ def _champion_notes(**extra: object) -> dict[str, object]:
 def _discovery_with_notes(state: StateManager, notes: dict[str, object]) -> int:
     """A completed discovery run whose persisted notes JSON is exactly ``notes``."""
     disc_id = state.create_backtest_run(
-        strategy_id=None, run_mode="discovery", symbols=SYMBOLS, timeframe="4h",
-        start_date=WINDOW[0], end_date=WINDOW[1], parameters={},
+        strategy_id=None,
+        run_mode="discovery",
+        symbols=SYMBOLS,
+        timeframe="4h",
+        start_date=WINDOW[0],
+        end_date=WINDOW[1],
+        parameters={},
     )
     state.update_backtest_run_status(disc_id, "completed")
     state.save_backtest_result(disc_id, {"sharpe_ratio": 1.8, "notes": json.dumps(notes)})
@@ -225,13 +254,17 @@ def test_max_margin_filtered(state: StateManager) -> None:
     match and a reference at another margin limit is not like-for-like."""
     sid = state.create_strategy("s1", {"name": "s1"})
     limited = _screening(
-        state, sid, {"max_margin_pct": 0.5},
+        state,
+        sid,
+        {"max_margin_pct": 0.5},
         rows=[({"rsi_period": 14}, 2.0, 50), ({"rsi_period": 21}, 9.9, 60)],
     )
     plain = _screening(state, sid, {}, rows=[({}, 7.0, 50)])
     assert plain > limited
     ref = _scoped(
-        state, sid, validated_params={"rsi.period": 14, "max_margin_pct": 0.5},
+        state,
+        sid,
+        validated_params={"rsi.period": 14, "max_margin_pct": 0.5},
         val_sizing={"max_margin_pct": 0.5},
     )
     assert ref is not None

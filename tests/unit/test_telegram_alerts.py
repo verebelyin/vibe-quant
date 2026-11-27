@@ -55,9 +55,7 @@ def test_unconfigured_env_is_none(env: dict[str, str]) -> None:
     ],
     ids=["token-only", "chat-only"],
 )
-def test_half_configured_refuses_naming_the_missing_var(
-    env: dict[str, str], var: str
-) -> None:
+def test_half_configured_refuses_naming_the_missing_var(env: dict[str, str], var: str) -> None:
     """Half-configured refuses, and names the var to fix.
 
     regression: vibe-quant-u2r9r
@@ -158,7 +156,9 @@ def _too_many_response(retry_after: float = 1) -> httpx.Response:
 
 def _raw_429(retry_after_json: str) -> httpx.Response:
     """A 429 whose ``retry_after`` is spliced in as RAW JSON (``1e309``, ``10**400``)."""
-    body = '{"ok": false, "error_code": 429, "parameters": {"retry_after": ' + retry_after_json + "}}"
+    body = (
+        '{"ok": false, "error_code": 429, "parameters": {"retry_after": ' + retry_after_json + "}}"
+    )
     return httpx.Response(429, content=body.encode(), headers={"content-type": "application/json"})
 
 
@@ -179,9 +179,7 @@ async def test_send_alert_posts_to_send_message(bot: TelegramBot) -> None:
     assert "Test error" in payload["text"]
 
 
-async def test_bypass_rate_limit_sends(
-    bot: TelegramBot, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_bypass_rate_limit_sends(bot: TelegramBot, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(telegram_mod.time, "time", lambda: 1_000.0)
     bot._update_rate_limit(AlertType.ERROR)  # criticals pass bypass_rate_limit
     posts: list[int] = []
@@ -206,7 +204,9 @@ def _connect_error(request: httpx.Request) -> httpx.Response:
 
 @pytest.mark.parametrize("handler", [_status_503, _connect_error], ids=["http-503", "transport"])
 async def test_retryable_failure_retries_full_budget_then_gives_up(
-    bot: TelegramBot, monkeypatch: pytest.MonkeyPatch, handler: Callable[[httpx.Request], httpx.Response]
+    bot: TelegramBot,
+    monkeypatch: pytest.MonkeyPatch,
+    handler: Callable[[httpx.Request], httpx.Response],
 ) -> None:
     """Retries 3 attempts, backing off 1 s then 2 s, then returns False."""
     delays: list[float] = []
@@ -276,9 +276,12 @@ async def test_send_trade_formats_the_trade(bot: TelegramBot) -> None:
     assert "BUY 0.5 BTCUSDT @ 50000.00" in texts[0]
 
     # A non-positive quantity/price is refused before the wire.
-    assert await bot.send_trade(
-        symbol="BTCUSDT", side="BUY", quantity=Decimal("0"), price=Decimal("50000")
-    ) is False
+    assert (
+        await bot.send_trade(
+            symbol="BTCUSDT", side="BUY", quantity=Decimal("0"), price=Decimal("50000")
+        )
+        is False
+    )
     assert len(texts) == 1
 
 
@@ -392,9 +395,7 @@ class TestTradeBurstBackpressure:
         bot._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         try:
             breaker = asyncio.create_task(
-                bot.send_circuit_breaker(
-                    "Max drawdown", "Hit 15%", bypass_rate_limit=True
-                )
+                bot.send_circuit_breaker("Max drawdown", "Hit 15%", bypass_rate_limit=True)
             )
             trades = [
                 asyncio.create_task(
@@ -428,8 +429,11 @@ class TestTradeBurstBackpressure:
         ids=["rejected", "transport"],
     )
     async def test_failure_leaves_the_shared_client_open(
-        self, bot: TelegramBot, monkeypatch: pytest.MonkeyPatch,
-        handler: Callable[[httpx.Request], httpx.Response], posts: int,
+        self,
+        bot: TelegramBot,
+        monkeypatch: pytest.MonkeyPatch,
+        handler: Callable[[httpx.Request], httpx.Response],
+        posts: int,
     ) -> None:
         """A 400 (one shot) or a transport error (retried) must not close the client:
         peers are in flight on it, and closing it turns one hiccup into several losses."""

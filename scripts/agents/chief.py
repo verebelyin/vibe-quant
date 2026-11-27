@@ -203,7 +203,8 @@ def running_lines(
     titles = titles or {}
     lines: list[str] = []
     running_beads = [
-        row[4] for row in rows.values()
+        row[4]
+        for row in rows.values()
         if (m := _TS.match(row[6])) is not None and m.group(2).startswith(RUNNING_PREFIXES)
     ]
     for agent in sorted(rows):
@@ -241,7 +242,11 @@ def done_without_handoff_lines(msgs: list[dict[str, object]], job: Path) -> list
     nothing when every done has one. Old-shape messages, so both stores (a raw `vb reply
     '[done] ...'` skips bus.py's own refusal)."""
     hits = _sibling("handoff_lint").done_without_handoff(msgs, job)
-    return ["Done without a linted handoff:", *(f"  {a} {mid}: {why}" for a, mid, why in hits)] if hits else []
+    return (
+        ["Done without a linted handoff:", *(f"  {a} {mid}: {why}" for a, mid, why in hits)]
+        if hits
+        else []
+    )
 
 
 def status_block(
@@ -332,7 +337,11 @@ def _git(*args: str) -> str | None:
     """One git answer from the repo root, or None (a handoff never fails on git)."""
     try:
         proc = subprocess.run(
-            ["git", "-C", str(_REPO), *args], capture_output=True, text=True, timeout=10, check=False
+            ["git", "-C", str(_REPO), *args],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -485,21 +494,33 @@ def main(argv: list[str] | None = None) -> int:
         prog="chief.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     sub = ap.add_subparsers(dest="command", required=True)
-    init_p = sub.add_parser("init", help="create a job dir (bus/, handoffs/, prompts/, brief.md, ledger.md)")
-    init_p.add_argument("--job", required=True, type=Path, help="job dir, or a bare name under data/swarm")
+    init_p = sub.add_parser(
+        "init", help="create a job dir (bus/, handoffs/, prompts/, brief.md, ledger.md)"
+    )
+    init_p.add_argument(
+        "--job", required=True, type=Path, help="job dir, or a bare name under data/swarm"
+    )
     step_p = sub.add_parser("step", help="lint a done handoff, append the row, print status")
-    step_p.add_argument("--job", required=True, type=Path, help="job dir, or a bare name under data/swarm")
+    step_p.add_argument(
+        "--job", required=True, type=Path, help="job dir, or a bare name under data/swarm"
+    )
     step_p.add_argument("--id", required=True, dest="agent")
     step_p.add_argument("--status", required=True)
     for column in ("runtime", "model", "task", "bead", "worktree"):
         step_p.add_argument(f"--{column}")
     step_p.add_argument("--handoff", help="default: <job>/handoffs/<id>.md when it exists")
     status_p = sub.add_parser("status", help="print the status block read-only")
-    status_p.add_argument("--job", required=True, type=Path, help="job dir, or a bare name under data/swarm")
+    status_p.add_argument(
+        "--job", required=True, type=Path, help="job dir, or a bare name under data/swarm"
+    )
     handoff_p = sub.add_parser("handoff", help="write HANDOFF.md with its five fixed sections")
-    handoff_p.add_argument("--job", required=True, type=Path, help="job dir, or a bare name under data/swarm")
+    handoff_p.add_argument(
+        "--job", required=True, type=Path, help="job dir, or a bare name under data/swarm"
+    )
     handoff_p.add_argument("--next", action="append", help="a next step (repeat up to 3)")
-    resume_p = sub.add_parser("resume", help="print HANDOFF.md; exit 1 when a section is missing or empty")
+    resume_p = sub.add_parser(
+        "resume", help="print HANDOFF.md; exit 1 when a section is missing or empty"
+    )
     resume_p.add_argument("--job", required=True, type=Path)
     args = ap.parse_args(argv)
     if args.command == "init":

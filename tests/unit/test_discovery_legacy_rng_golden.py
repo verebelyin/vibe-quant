@@ -112,9 +112,7 @@ def _seeded_run(
     pipe = DiscoveryPipeline(config, mock_backtest, seed_chromosomes=seeds)
     real_evolve = pipe._evolve_generation
 
-    def capture(
-        population: list[StrategyChromosome], fitness_results: Any
-    ) -> Any:
+    def capture(population: list[StrategyChromosome], fitness_results: Any) -> Any:
         populations.append([c.clone() for c in population])
         return real_evolve(population, fitness_results)
 
@@ -162,7 +160,9 @@ def test_random_fallback_is_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_warm_start_is_pinned() -> None:
     random.seed(3)
     seeds = [_random_chromosome(direction_constraint=Direction.LONG) for _ in range(4)]
-    population = initialize_population(8, direction_constraint=Direction.LONG, seed_chromosomes=seeds)
+    population = initialize_population(
+        8, direction_constraint=Direction.LONG, seed_chromosomes=seeds
+    )
     start_pop, start_rng = _population_hash([population]), _rng_hash()
     run_pop, run_rng = _seeded_run(_config(use_crowding=True, direction="long"), seeds)
     assert (_digest(start_pop + run_pop), _digest(start_rng + run_rng)) == GOLDEN["warm_start"]

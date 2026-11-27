@@ -101,6 +101,9 @@ def test_real_catalog_backtest_does_not_shift_the_scratch_root_holdout_sharpe() 
     ]
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", *pair, "-q", "-p", "no:randomly", "-p", "no:xdist"],
-        capture_output=True, text=True, check=False, timeout=300,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=300,
     )
     assert proc.returncode == 0, proc.stdout[-1500:]

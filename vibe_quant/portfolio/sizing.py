@@ -216,7 +216,9 @@ def target_steps(
         leg_notional = abs(weight) * equity
         if leg_notional < required:
             raise CarryEquityTooSmall(symbol, None, leg_notional, required)
-        steps = int((Decimal(abs(weight) * equity) / price_step).to_integral_value(rounding=ROUND_FLOOR))
+        steps = int(
+            (Decimal(abs(weight) * equity) / price_step).to_integral_value(rounding=ROUND_FLOOR)
+        )
         targets[symbol] = steps if weight > 0.0 else -steps
     return targets
 
@@ -349,12 +351,8 @@ def decide(
     try:
         targets = target_steps(weights, equity, prices, specs)
     except CarryEquityTooSmall as error:
-        raise CarryEquityTooSmall(
-            error.symbol, ts, error.leg_notional, error.required
-        ) from error
-    orders, band_skips, min_notional_skips = plan_orders(
-        current, targets, prices, specs, spec.band
-    )
+        raise CarryEquityTooSmall(error.symbol, ts, error.leg_notional, error.required) from error
+    orders, band_skips, min_notional_skips = plan_orders(current, targets, prices, specs, spec.band)
     return Decision(
         ts=ts,
         equity=equity,
@@ -505,12 +503,8 @@ def _decide_time_series(
     budget = Decimal(spec.gross) * Decimal(equity)
     targets, min_leg_skips = _time_series_targets(book.weights, equity, prices, specs)
     targets = _fit_budget(targets, prices, specs, budget)
-    orders, band_skips, min_notional_skips = plan_orders(
-        current, targets, prices, specs, spec.band
-    )
-    orders, band_skips = _cap_bypass(
-        current, targets, orders, band_skips, prices, specs, budget
-    )
+    orders, band_skips, min_notional_skips = plan_orders(current, targets, prices, specs, spec.band)
+    orders, band_skips = _cap_bypass(current, targets, orders, band_skips, prices, specs, budget)
     exposure = _exposure(_after_plan(current, orders), prices, specs)
     return Decision(
         ts=ts,

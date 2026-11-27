@@ -82,6 +82,7 @@ def _ensure_pool() -> None:
         THRESHOLD_RANGES.update(_build_threshold_ranges())
     if not _MA_NAMES:
         from vibe_quant.discovery.genome import MA_POOL
+
         _MA_NAMES.extend(MA_POOL.keys())
     if not _INT_PARAMS:
         from vibe_quant.discovery.genome import MA_POOL as _MA_POOL
@@ -245,7 +246,9 @@ class PriceVsMAConditionGene:
             indicator_type=self.indicator_type,
             parameters=dict(self.parameters),
             op=self.op,
-            parameters_slow=dict(self.parameters_slow) if self.parameters_slow is not None else None,
+            parameters_slow=dict(self.parameters_slow)
+            if self.parameters_slow is not None
+            else None,
         )
 
 
@@ -463,9 +466,7 @@ def canonicalize_gene(gene: StrategyGene) -> StrategyGene:
     """
     _ensure_pool()
     ranges = INDICATOR_POOL.get(gene.indicator_type, {})
-    _round_int_params(
-        gene.parameters, _INT_PARAMS.get(gene.indicator_type, frozenset()), ranges
-    )
+    _round_int_params(gene.parameters, _INT_PARAMS.get(gene.indicator_type, frozenset()), ranges)
     defaults = _PARAM_DEFAULTS.get(gene.indicator_type, {})
     for pname in _dead_params(gene.indicator_type, gene.sub_value):
         if pname in gene.parameters and pname in defaults:
@@ -793,6 +794,7 @@ def is_valid_chromosome(
     if len(chrom.short_ma_exit_genes) > MAX_MA_EXIT_GENES:
         return False
     from vibe_quant.discovery.genome import MA_POOL
+
     for ma_gene in (
         chrom.ma_entry_genes
         + chrom.ma_exit_genes
@@ -928,6 +930,7 @@ def _repair_chromosome(
     # Repair MA genes: clamp params, drop unknown indicators, cap counts,
     # enforce the ma-fast-vs-ma-slow period ordering when in cross shape.
     from vibe_quant.discovery.genome import MA_POOL
+
     for genes, cap in (
         (chrom.ma_entry_genes, MAX_MA_ENTRY_GENES),
         (chrom.ma_exit_genes, MAX_MA_EXIT_GENES),
@@ -1044,14 +1047,30 @@ def crossover(
     dir_b = parent_b.direction if random.random() < 0.5 else parent_a.direction
 
     # Per-direction SL/TP: random pick per child
-    sl_long_a = parent_a.stop_loss_long_pct if random.random() < 0.5 else parent_b.stop_loss_long_pct
-    sl_short_a = parent_a.stop_loss_short_pct if random.random() < 0.5 else parent_b.stop_loss_short_pct
-    tp_long_a = parent_a.take_profit_long_pct if random.random() < 0.5 else parent_b.take_profit_long_pct
-    tp_short_a = parent_a.take_profit_short_pct if random.random() < 0.5 else parent_b.take_profit_short_pct
-    sl_long_b = parent_b.stop_loss_long_pct if random.random() < 0.5 else parent_a.stop_loss_long_pct
-    sl_short_b = parent_b.stop_loss_short_pct if random.random() < 0.5 else parent_a.stop_loss_short_pct
-    tp_long_b = parent_b.take_profit_long_pct if random.random() < 0.5 else parent_a.take_profit_long_pct
-    tp_short_b = parent_b.take_profit_short_pct if random.random() < 0.5 else parent_a.take_profit_short_pct
+    sl_long_a = (
+        parent_a.stop_loss_long_pct if random.random() < 0.5 else parent_b.stop_loss_long_pct
+    )
+    sl_short_a = (
+        parent_a.stop_loss_short_pct if random.random() < 0.5 else parent_b.stop_loss_short_pct
+    )
+    tp_long_a = (
+        parent_a.take_profit_long_pct if random.random() < 0.5 else parent_b.take_profit_long_pct
+    )
+    tp_short_a = (
+        parent_a.take_profit_short_pct if random.random() < 0.5 else parent_b.take_profit_short_pct
+    )
+    sl_long_b = (
+        parent_b.stop_loss_long_pct if random.random() < 0.5 else parent_a.stop_loss_long_pct
+    )
+    sl_short_b = (
+        parent_b.stop_loss_short_pct if random.random() < 0.5 else parent_a.stop_loss_short_pct
+    )
+    tp_long_b = (
+        parent_b.take_profit_long_pct if random.random() < 0.5 else parent_a.take_profit_long_pct
+    )
+    tp_short_b = (
+        parent_b.take_profit_short_pct if random.random() < 0.5 else parent_a.take_profit_short_pct
+    )
 
     child_a = StrategyChromosome(
         entry_genes=child_a_entries,
@@ -1224,19 +1243,21 @@ def mutate(
     if chrom.stop_loss_long_pct is not None and random.random() < mutation_rate * 0.5:
         chrom.stop_loss_long_pct = _perturb(chrom.stop_loss_long_pct, 0.2, sl_range[0], sl_range[1])
     if chrom.stop_loss_short_pct is not None and random.random() < mutation_rate * 0.5:
-        chrom.stop_loss_short_pct = _perturb(chrom.stop_loss_short_pct, 0.2, sl_range[0], sl_range[1])
+        chrom.stop_loss_short_pct = _perturb(
+            chrom.stop_loss_short_pct, 0.2, sl_range[0], sl_range[1]
+        )
     if chrom.take_profit_long_pct is not None and random.random() < mutation_rate * 0.5:
-        chrom.take_profit_long_pct = _perturb(chrom.take_profit_long_pct, 0.2, TP_RANGE[0], TP_RANGE[1])
+        chrom.take_profit_long_pct = _perturb(
+            chrom.take_profit_long_pct, 0.2, TP_RANGE[0], TP_RANGE[1]
+        )
     if chrom.take_profit_short_pct is not None and random.random() < mutation_rate * 0.5:
-        chrom.take_profit_short_pct = _perturb(chrom.take_profit_short_pct, 0.2, TP_RANGE[0], TP_RANGE[1])
+        chrom.take_profit_short_pct = _perturb(
+            chrom.take_profit_short_pct, 0.2, TP_RANGE[0], TP_RANGE[1]
+        )
 
     # Mutate MA genes (no-op if empty pool)
-    chrom.ma_entry_genes = _mutate_ma_genes(
-        chrom.ma_entry_genes, mutation_rate, MAX_MA_ENTRY_GENES
-    )
-    chrom.ma_exit_genes = _mutate_ma_genes(
-        chrom.ma_exit_genes, mutation_rate, MAX_MA_EXIT_GENES
-    )
+    chrom.ma_entry_genes = _mutate_ma_genes(chrom.ma_entry_genes, mutation_rate, MAX_MA_ENTRY_GENES)
+    chrom.ma_exit_genes = _mutate_ma_genes(chrom.ma_exit_genes, mutation_rate, MAX_MA_EXIT_GENES)
 
     # Short-side genes (inydc T2): mutate them only for BOTH and only AFTER every
     # existing draw, so a long/short mutation consumes the same RNG as before
@@ -1542,12 +1563,8 @@ def initialize_population(
                 g for g in clone.short_exit_genes if g.indicator_type in INDICATOR_POOL
             ]
             # Same rule for MA genes: the pool restricts them too (nn7i7).
-            clone.ma_entry_genes = [
-                g for g in clone.ma_entry_genes if g.indicator_type in MA_POOL
-            ]
-            clone.ma_exit_genes = [
-                g for g in clone.ma_exit_genes if g.indicator_type in MA_POOL
-            ]
+            clone.ma_entry_genes = [g for g in clone.ma_entry_genes if g.indicator_type in MA_POOL]
+            clone.ma_exit_genes = [g for g in clone.ma_exit_genes if g.indicator_type in MA_POOL]
             clone.short_ma_entry_genes = [
                 g for g in clone.short_ma_entry_genes if g.indicator_type in MA_POOL
             ]
@@ -1602,7 +1619,8 @@ def initialize_population(
             )
         _logger.info(
             "Warm-start: seeded %d/%d slots from prior chromosomes",
-            len(population), size,
+            len(population),
+            size,
         )
 
     # Fill remaining slots with random chromosomes
@@ -1638,7 +1656,9 @@ def _random_chromosome(
         [1, 2, 3, random.randint(4, MAX_ENTRY_GENES)], weights=[50, 30, 15, 5]
     )[0]
     n_exit = random.choices([1, 2, 3], weights=[60, 30, 10])[0]
-    direction = direction_constraint if direction_constraint is not None else random.choice(list(Direction))
+    direction = (
+        direction_constraint if direction_constraint is not None else random.choice(list(Direction))
+    )
 
     # Modest seeding rates so MA genes don't drown the scalar-threshold
     # search space while MA usefulness is still unproven.
@@ -1713,11 +1733,7 @@ def crowding_replace(
     d_a1_b1 = chromosome_distance(parents[1], offspring[1])
 
     # Match: minimize total distance
-    matches = (
-        [(0, 0), (1, 1)]
-        if d_a0_b0 + d_a1_b1 <= d_a0_b1 + d_a1_b0
-        else [(0, 1), (1, 0)]
-    )
+    matches = [(0, 0), (1, 1)] if d_a0_b0 + d_a1_b1 <= d_a0_b1 + d_a1_b0 else [(0, 1), (1, 0)]
 
     result = list(parents)  # Start with parents
     for p_idx, o_idx in matches:
@@ -1783,7 +1799,13 @@ def _plateau_coordinates(chrom: StrategyChromosome) -> list[_PlateauEntry]:
                 value = gene.parameters.get(name)
                 if value is not None:
                     out.append(
-                        ((slot, index, "parameters", name), float(value), lo, hi, name in int_params)
+                        (
+                            (slot, index, "parameters", name),
+                            float(value),
+                            lo,
+                            hi,
+                            name in int_params,
+                        )
                     )
             threshold_range = THRESHOLD_RANGES.get(gene.indicator_type)
             if threshold_range is not None:

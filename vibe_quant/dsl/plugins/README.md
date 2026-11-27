@@ -31,6 +31,7 @@ Plugins can also live outside this directory:
 
 ```python
 """My custom indicator plugin."""
+
 from __future__ import annotations
 from typing import TYPE_CHECKING
 import numpy as np
@@ -39,11 +40,14 @@ from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
 if TYPE_CHECKING:
     import pandas as pd
 
+
 def compute_my_indicator(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
     import pandas as pd
+
     period = int(params.get("period", 14))
     close = df["close"]
     return pd.Series(close.rolling(period).mean(), index=df.index)
+
 
 indicator_registry.register_spec(
     IndicatorSpec(

@@ -535,9 +535,7 @@ def test_200_data_payload_with_error_field_is_accepted(ua_env: None) -> None:
 
 
 @pytest.mark.parametrize("payload", [[{"title": "timeout strategy"}], None], ids=["list", "null"])
-def test_200_non_dict_json_body_is_not_scanned_or_retried(
-    ua_env: None, payload: Any
-) -> None:
+def test_200_non_dict_json_body_is_not_scanned_or_retried(ua_env: None, payload: Any) -> None:
     """A body that parses as JSON is a payload, never a text error message. JSON
     that is not a dict (a list, string, number or ``null``) has no ``error``
     field to check and must be accepted — even when its raw text mentions

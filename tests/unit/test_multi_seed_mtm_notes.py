@@ -74,7 +74,9 @@ def _champion_entry_notes(result: Any) -> dict[str, Any]:
     )
     notes["top_strategies"] = [
         record.champion_entry(
-            chrom, fitness, timeframe="4h",
+            chrom,
+            fitness,
+            timeframe="4h",
             dsr=result.dsr_records.get(chrom.uid),
             buy_hold=result.buy_hold_records.get(chrom.uid),
         )

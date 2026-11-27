@@ -74,9 +74,7 @@ def _junit_rows(path: Path, rows: list[tuple[str, float]]) -> None:
         parts = node_id.split("::")
         file, name = parts[0], parts[-1]
         cls = parts[1] if len(parts) == 3 else ""
-        cases.append(
-            f'<testcase classname="{_classname(file, cls)}" name="{name}" time="{secs}"/>'
-        )
+        cases.append(f'<testcase classname="{_classname(file, cls)}" name="{name}" time="{secs}"/>')
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         '<?xml version="1.0" encoding="utf-8"?><testsuites>'
@@ -88,7 +86,7 @@ def _junit_path(cmd: Sequence[str], env: Mapping[str, str] | None) -> Path | Non
     args = [*cmd, *shlex.split((env or {}).get("PYTEST_ADDOPTS", ""))]
     for arg in args:
         if str(arg).startswith(JUNIT_OPT):
-            return Path(str(arg)[len(JUNIT_OPT):])
+            return Path(str(arg)[len(JUNIT_OPT) :])
     return None
 
 
@@ -185,7 +183,11 @@ def test_an_added_slow_test_fails_and_names_it_with_both_seconds(tmp_path: Path)
 def test_a_changed_test_with_no_usable_timing_report_fails(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / NEW_FILE).write_text(NEW_SLOW)
-    for mode, wanted in (("missing", "no usable junit"), ("malformed", "no usable junit"), ("foreign", NODE)):
+    for mode, wanted in (
+        ("missing", "no usable junit"),
+        ("malformed", "no usable junit"),
+        ("foreign", NODE),
+    ):
         runner = Runner()
         slow = _slow(repo, runner, {NODE: 3.0}, gate_xml=mode)
         assert slow.status == "FAIL", f"{mode}: {slow.detail}"
@@ -196,7 +198,12 @@ def test_a_changed_test_with_no_usable_timing_report_fails(tmp_path: Path) -> No
 def test_a_serial_rerun_that_fails_or_reports_nothing_is_a_fail_not_noise(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / NEW_FILE).write_text(NEW_SLOW)
-    for rc, has_xml, why in ((1, True, "exited 1"), (1, False, "exited 1"), (124, False, "exited 124"), (0, False, "junit")):
+    for rc, has_xml, why in (
+        (1, True, "exited 1"),
+        (1, False, "exited 1"),
+        (124, False, "exited 124"),
+        (0, False, "junit"),
+    ):
         runner = Runner({NODE: 0.01}, alone_rc=rc, alone_xml=has_xml)
         slow = _slow(repo, runner, {NODE: 3.0})
         assert slow.status == "FAIL", f"rc={rc} xml={has_xml}: {slow.detail}"
@@ -248,7 +255,12 @@ def _real_alone(tmp_path: Path, monkeypatch: object, source: str) -> object:
     (repo / NEW_FILE).write_text(source)
     tools = {"pytest": [sys.executable, "-m", "pytest"]}
     return swarm_check.slow_tests_check(
-        _cfg(repo), _state(NEW_FILE), tools, swarm_check.real_run, LEAN_PYTEST, [_gate_xml(repo, 3.0)]
+        _cfg(repo),
+        _state(NEW_FILE),
+        tools,
+        swarm_check.real_run,
+        LEAN_PYTEST,
+        [_gate_xml(repo, 3.0)],
     )
 
 
@@ -258,7 +270,9 @@ def _gate_xml(repo: Path, secs: float) -> Path:
     return xml
 
 
-def test_a_slow_module_fixture_with_a_fast_body_is_not_slow_alone(tmp_path: Path, monkeypatch: object) -> None:
+def test_a_slow_module_fixture_with_a_fast_body_is_not_slow_alone(
+    tmp_path: Path, monkeypatch: object
+) -> None:
     slow = _real_alone(tmp_path, monkeypatch, SETUP_SLOW)
     assert slow.status == "PASS", slow.detail
     assert "load noise" in slow.detail and NODE in slow.detail
@@ -270,7 +284,9 @@ def test_a_slow_test_body_still_fails_alone(tmp_path: Path, monkeypatch: object)
     assert NODE in slow.detail and "alone" in slow.detail
 
 
-def test_a_first_alone_time_over_the_bar_is_measured_again_and_the_minimum_judged(tmp_path: Path) -> None:
+def test_a_first_alone_time_over_the_bar_is_measured_again_and_the_minimum_judged(
+    tmp_path: Path,
+) -> None:
     """Host load inflates one re-run (2.3-5.9 s for 0.15-0.6 s tests); the second decides."""
     repo = _repo(tmp_path)
     (repo / NEW_FILE).write_text(NEW_SLOW)

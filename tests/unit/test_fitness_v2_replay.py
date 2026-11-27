@@ -52,17 +52,17 @@ def _seed_entry() -> dict[str, object]:
 
 def _seed_run(state: StateManager) -> int:
     """A finished run carrying one chromosome, the warm start of the v2 run."""
-    seed_run = state.create_backtest_run(
-        None, "discovery", ["BTCUSDT"], "4h", START, END, {}
-    )
+    seed_run = state.create_backtest_run(None, "discovery", ["BTCUSDT"], "4h", START, END, {})
     state.update_backtest_run_status(seed_run, "completed")
     state.save_backtest_result(seed_run, {"total_trades": 0}, trades=[])
     state.update_result_notes(
         seed_run,
-        json.dumps({
-            "type": "discovery",
-            "top_strategies": [{"chromosome": _seed_entry()}],
-        }),
+        json.dumps(
+            {
+                "type": "discovery",
+                "top_strategies": [{"chromosome": _seed_entry()}],
+            }
+        ),
     )
     return seed_run
 
@@ -94,8 +94,11 @@ def _v2_discovery(db: Path, seed_run: int) -> int:
     jobs = BacktestJobManager(db)
     try:
         outcome = discovery_run.run_discovery(
-            args, discovery_run.NTBacktests(),
-            discovery_run.StateRecordStore(state, jobs), run_id=run_id, started_at=0.0,
+            args,
+            discovery_run.NTBacktests(),
+            discovery_run.StateRecordStore(state, jobs),
+            run_id=run_id,
+            started_at=0.0,
         )
     finally:
         state.close()

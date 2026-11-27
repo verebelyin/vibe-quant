@@ -135,12 +135,21 @@ def run_screening(
             for p in cache.positions_open()
         ]
         metrics = orig(
-            self, params, bt_result, engine, start_time,
-            starting_balance=starting_balance, cost_ledger=cost_ledger,
+            self,
+            params,
+            bt_result,
+            engine,
+            start_time,
+            starting_balance=starting_balance,
+            cost_ledger=cost_ledger,
         )
         seen.append(
             Run(
-                orders, opened, list(engine.kernel.trader.strategies()), cost_ledger, metrics,
+                orders,
+                opened,
+                list(engine.kernel.trader.strategies()),
+                cost_ledger,
+                metrics,
                 list(cache.positions_open()),
             )
         )
@@ -179,7 +188,8 @@ def entries(run: Run, symbol: str = "BTCUSDT") -> list[Fill]:
 
 def market_exits(run: Run, symbol: str = "BTCUSDT") -> list[Fill]:
     return [
-        f for f in run.orders
+        f
+        for f in run.orders
         if f.symbol == symbol and f.reduce_only and f.type == "MARKET" and f.qty > 0
     ]
 
@@ -222,7 +232,9 @@ def test_validation_own_1m_release_fills_the_reversal_on_the_same_detail_bar(
     assert exit_fill.ts_last == short_entry.ts_last == _RELEASE_TICK_NS
 
 
-def test_one_minute_defer_sends_the_exit_on_the_next_bar_and_the_entry_rides_it(catalog: Path) -> None:
+def test_one_minute_defer_sends_the_exit_on_the_next_bar_and_the_entry_rides_it(
+    catalog: Path,
+) -> None:
     """R2b/R6: 1m screening defers the signal one bar; at dispatch the state is opposite -> reversal.
 
     The short signal is bar 100 (close 10100.5); the dispatch bar is 101 whose close is the
@@ -290,7 +302,9 @@ def test_two_symbols_reversing_on_the_same_tick_count_each_others_positions(
     assert [(e.side, e.qty) for e in entries(run, "ETHUSDT")] == [("BUY", 0.009), ("SELL", 0.039)]
     for symbol in order:  # both exits ran: the refused symbol closed its long and stayed flat
         assert [x.ts for x in market_exits(run, symbol)][0] == _RELEASE_TICK_NS
-    refusals = {s.instrument_id.symbol.value.split("-")[0]: s._margin_refusals for s in run.strategies}
+    refusals = {
+        s.instrument_id.symbol.value.split("-")[0]: s._margin_refusals for s in run.strategies
+    }
     assert refusals == {"BTCUSDT": 1, "ETHUSDT": 0}
 
 
@@ -312,19 +326,30 @@ def _flat_catalog(root: Path) -> Path:
     klines: list[Any] = [
         {
             "open_time": _DAY0_MS + i * _MIN_MS,
-            "open": px, "high": px, "low": px, "close": px,
+            "open": px,
+            "high": px,
+            "low": px,
+            "close": px,
             "volume": 10.0,
             "close_time": _DAY0_MS + i * _MIN_MS + 59_999,
         }
         for i in range(5 * 1440)
         for px in [10_480.0 if i >= 90 else 10_100.0]
     ]
-    bars_1m = klines_to_bars(klines, inst.id, get_bar_type("BTCUSDT", "1m"),
-                             inst.size_precision, inst.price_precision)
+    bars_1m = klines_to_bars(
+        klines, inst.id, get_bar_type("BTCUSDT", "1m"), inst.size_precision, inst.price_precision
+    )
     cm.write_bars(bars_1m)
     for tf, minutes in (("15m", 15), ("1h", 60), ("4h", 240)):
-        cm.write_bars(aggregate_bars(bars_1m, get_bar_type("BTCUSDT", tf), minutes,
-                                     inst.size_precision, inst.price_precision))
+        cm.write_bars(
+            aggregate_bars(
+                bars_1m,
+                get_bar_type("BTCUSDT", tf),
+                minutes,
+                inst.size_precision,
+                inst.price_precision,
+            )
+        )
     return root
 
 
@@ -355,7 +380,9 @@ def test_a_settlement_on_the_reversal_instant_is_paid_by_the_old_side_only(tmp_p
 
     run = run_screening(
         _flat_catalog(tmp_path / "catalog"),
-        reverse_dsl("rev_r8a", long=("close < 10100.5",), short=("close >= 10470", "close < 10490")),
+        reverse_dsl(
+            "rev_r8a", long=("close < 10100.5",), short=("close >= 10470", "close < 10490")
+        ),
         risk_per_trade=0.0202,  # 20.2 USDT risk / 20% stop = 0.010 qty at 10 100
         funding_archive=_funding_archive(tmp_path / "f.db", _REVERSAL_NS),
     )
@@ -369,17 +396,24 @@ def test_a_settlement_on_the_reversal_instant_is_paid_by_the_old_side_only(tmp_p
     (short_pos,) = run.open_pos
     assert short_pos.ts_opened == _REVERSAL_NS
     # settled at the entry instant, the short pays nothing even after 10 minutes of holding
-    assert accrue_position_funding(
-        run.ledger.model.funding, short_pos, exit_ns=_REVERSAL_NS + 10 * _MIN_NS
-    ).total == 0.0
+    assert (
+        accrue_position_funding(
+            run.ledger.model.funding, short_pos, exit_ns=_REVERSAL_NS + 10 * _MIN_NS
+        ).total
+        == 0.0
+    )
     # the sizing ledger's view at the reversal instant is the long's cost and nothing more
     assert run.ledger.paid_through(_REVERSAL_NS, run.open_pos) == pytest.approx(0.0101, rel=1e-12)
 
 
-def test_a_reversal_pays_two_taker_commissions_and_slips_each_fill(catalog: Path, tmp_path: Path) -> None:
+def test_a_reversal_pays_two_taker_commissions_and_slips_each_fill(
+    catalog: Path, tmp_path: Path
+) -> None:
     """R8b: the exit and the opposite entry each pay the taker rate on their own notional; both
     SELL fills sit at the 10105.5 tick or one tick worse (never better)."""
-    run = run_screening(catalog, reverse_dsl("rev_r8b"), funding_archive=empty_archive(tmp_path / "f.db"))
+    run = run_screening(
+        catalog, reverse_dsl("rev_r8b"), funding_archive=empty_archive(tmp_path / "f.db")
+    )
 
     from vibe_quant.fees import FeeSchedule
 

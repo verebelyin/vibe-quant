@@ -126,9 +126,7 @@ def test_q95_spread_iid_n(n: int, expected: float) -> None:
 
 
 def _decisions(values: list[float], spread: float | None, n: int = 88) -> bool:
-    _result, _record, reasons = apply_discovery_dsr_returns(
-        values, n, null_spread=spread
-    )
+    _result, _record, reasons = apply_discovery_dsr_returns(values, n, null_spread=spread)
     return not reasons
 
 
@@ -296,8 +294,7 @@ def test_q95_stored_candidate() -> None:
     )
     assert fail_reasons and fail_reasons[0].startswith("DSR q95 not significant: stat=")
     assert fail_reasons == [
-        "DSR q95 not significant: stat=1.2267 < spread=1.5275 "
-        "(SR=2.409 ann √365, T=875, N=88)"
+        "DSR q95 not significant: stat=1.2267 < spread=1.5275 (SR=2.409 ann √365, T=875, N=88)"
     ]
     assert fail_record is not None and fail_record["crit"] == 1.5275
 
@@ -307,7 +304,9 @@ def test_q95_stored_candidate() -> None:
     assert emax_record["p_value"] == pytest.approx(0.1098, abs=1e-3)
 
     # The rule switch, end to end: same null_spread, emax ignores it.
-    fit = _fitness(mtm_daily_returns=DailyReturns(_FIRST_DAY, array("d", np.array(values).tobytes())))
+    fit = _fitness(
+        mtm_daily_returns=DailyReturns(_FIRST_DAY, array("d", np.array(values).tobytes()))
+    )
     emax = apply_guardrails(
         fit, 2, GuardrailConfig(require_wfa=False, require_bootstrap_ci=False, dsr_rule="emax"),
         num_trials=88, daily_returns=values, null_spread=0.8206,
@@ -365,14 +364,20 @@ def test_q95_flag_off_is_bit_identical() -> None:
     assert record["psr_stat"] == legacy.deflated_sharpe
     assert record["crit"] == LEGACY_SPREAD
     assert record["null_spread"] is None
-    assert reasons == ([] if legacy.is_significant else [
-        f"DSR not significant: p={legacy.p_value:.4f} >= 0.05 "
-        f"(pooled daily SR={sharpe * math.sqrt(365.0):.3f} ann √365, "
-        f"T={len(values)}, N=88)"
-    ])
+    assert reasons == (
+        []
+        if legacy.is_significant
+        else [
+            f"DSR not significant: p={legacy.p_value:.4f} >= 0.05 "
+            f"(pooled daily SR={sharpe * math.sqrt(365.0):.3f} ann √365, "
+            f"T={len(values)}, N=88)"
+        ]
+    )
 
     # emax ignores a passed spread end to end (the rule switch is the only gate).
-    fit = _fitness(mtm_daily_returns=DailyReturns(_FIRST_DAY, array("d", np.array(values).tobytes())))
+    fit = _fitness(
+        mtm_daily_returns=DailyReturns(_FIRST_DAY, array("d", np.array(values).tobytes()))
+    )
     emax_cfg = GuardrailConfig(require_wfa=False, require_bootstrap_ci=False, dsr_rule="emax")
     with_spread = apply_guardrails(
         fit, 2, emax_cfg, num_trials=88, daily_returns=values, null_spread=0.90,
@@ -399,10 +404,7 @@ def test_q95_rule_absent_defaults_to_q95() -> None:
     assert "dsr_rule" not in DiscoveryLaunchRequest.model_fields
     assert "dsr_rule" not in DiscoveryLaunchRequest().model_dump()
     assert build_parser().parse_args(["--run-id", "1"]).dsr_rule == "q95"
-    assert (
-        build_parser().parse_args(["--run-id", "1", "--dsr-rule", "emax"]).dsr_rule
-        == "emax"
-    )
+    assert build_parser().parse_args(["--run-id", "1", "--dsr-rule", "emax"]).dsr_rule == "emax"
 
 
 # ---------------------------------------------------------------------------
@@ -434,9 +436,7 @@ def test_q95_prior_n_charges_gate_n_with_run_spread() -> None:
             mtm_daily_returns=DailyReturns(_FIRST_DAY, array("d", row.tobytes()))
         )
     chrom = _chrom()
-    fit = _fitness(
-        mtm_daily_returns=DailyReturns(_FIRST_DAY, array("d", rows[0].tobytes()))
-    )
+    fit = _fitness(mtm_daily_returns=DailyReturns(_FIRST_DAY, array("d", rows[0].tobytes())))
     pipe.gates.screen([(chrom, fit)], TrialBudget(88, pool))
 
     trials = pipe.gates.dsr_trials
@@ -450,9 +450,9 @@ def test_q95_prior_n_charges_gate_n_with_run_spread() -> None:
     record = pipe.gates.dsr_records[chrom.uid]
     sharpe, skew, kurt = daily_sharpe_inputs(list(rows[0]))
     stat = {
-        n: DeflatedSharpeRatio().calculate(
-            sharpe, n, len(rows[0]), min(skew, 0.0), max(kurt, 3.0)
-        ).deflated_sharpe
+        n: DeflatedSharpeRatio()
+        .calculate(sharpe, n, len(rows[0]), min(skew, 0.0), max(kurt, 3.0))
+        .deflated_sharpe
         for n in (83, 133)
     }
     assert stat[133] != pytest.approx(stat[83], abs=1e-9)
@@ -500,7 +500,9 @@ def test_q95_neff_null_forwards_per_rep_spread(monkeypatch: pytest.MonkeyPatch) 
     queue = [_eff(1.25), _eff(None), _eff(0.99)]
     monkeypatch.setattr(neff_null, "effective_trials", lambda rows, raw, **kw: queue.pop(0))
     flat = DailyReturns(_FIRST_DAY, array("d", np.zeros(10).tobytes()))
-    monkeypatch.setattr(layer1, "_null_fitness", lambda sched, chrom, tf: _fitness(mtm_daily_returns=flat))
+    monkeypatch.setattr(
+        layer1, "_null_fitness", lambda sched, chrom, tf: _fitness(mtm_daily_returns=flat)
+    )
     monkeypatch.setattr(layer1, "select_picks", lambda scored, **kw: list(scored))
     seen: list[float | None] = []
 
@@ -550,9 +552,7 @@ def test_q95_layer1_selection_null_forwards_spread(monkeypatch: pytest.MonkeyPat
     closes = {"BTCUSDT": {0: 100.0}}
     for rule, expected in (("q95", 0.77), ("q95", None), ("emax", None)):
         before = len(seen)
-        layer1.selection_null(
-            "W3", 0.0, 1, closes, settings, candidates=3, dsr_rule=rule
-        )
+        layer1.selection_null("W3", 0.0, 1, closes, settings, candidates=3, dsr_rule=rule)
         _seen_spread(before, seen, expected)
 
 

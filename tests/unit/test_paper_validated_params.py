@@ -72,9 +72,7 @@ def test_paper_runs_validated_dotted_overrides(tmp_path: Path) -> None:
 def test_paper_runs_validated_suffix_alias(tmp_path: Path) -> None:
     dsl = _dsl("1m")
     dsl["take_profit"] = {"type": "risk_reward", "risk_reward_ratio": 2.0}
-    config_cls, params = _resolve(
-        tmp_path, {"take_profit.risk_reward_ratio": 3.0}, dsl_dict=dsl
-    )
+    config_cls, params = _resolve(tmp_path, {"take_profit.risk_reward_ratio": 3.0}, dsl_dict=dsl)
     effective = config_cls(instrument_id="BTCUSDT-PERP.BINANCE", **params)
     assert effective.take_profit_risk_reward == 3.0
 

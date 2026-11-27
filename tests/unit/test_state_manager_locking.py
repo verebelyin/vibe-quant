@@ -104,7 +104,9 @@ def _state_manager_methods(tree: ast.Module) -> dict[str, ast.FunctionDef]:
         if isinstance(node, ast.ClassDef) and node.name == "StateManager"
     )
     return {
-        node.name: node for node in cls.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        node.name: node
+        for node in cls.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
 
 
@@ -315,9 +317,7 @@ def test_close_waits_for_connection_initialization(
     closer.join(timeout=5)
     assert not opener.is_alive(), "conn did not finish after init_schema was released"
     assert closed.is_set(), "close() did not run after initialization finished"
-    assert opened == initialized and opened, (
-        "conn returned a connection that was never initialized"
-    )
+    assert opened == initialized and opened, "conn returned a connection that was never initialized"
     assert sm._conn is None
     assert sm.list_strategies() == []  # reopens lazily through conn
     sm.close()
@@ -595,9 +595,7 @@ def test_completed_discovery_notes_match_old_inline_query(
 
     old_like = [
         tuple(r)
-        for r in sm.conn.execute(
-            base + " AND res.notes LIKE ? ORDER BY br.id DESC", ("%other%",)
-        )
+        for r in sm.conn.execute(base + " AND res.notes LIKE ? ORDER BY br.id DESC", ("%other%",))
     ]
     new_like = sm.list_completed_discovery_notes("%other%")
     assert new_like == old_like
@@ -613,8 +611,13 @@ def test_merge_replay_drift_payload_prefers_result_notes(
 ) -> None:
     sm = tmp_state_manager
     run_id = sm.create_backtest_run(
-        strategy_id=None, run_mode="screening", symbols=["BTCUSDT"], timeframe="1h",
-        start_date="2025-01-01", end_date="2025-06-01", parameters={"keep": 1},
+        strategy_id=None,
+        run_mode="screening",
+        symbols=["BTCUSDT"],
+        timeframe="1h",
+        start_date="2025-01-01",
+        end_date="2025-06-01",
+        parameters={"keep": 1},
     )
     sm.conn.execute(
         "INSERT INTO backtest_results (run_id, notes) VALUES (?, ?)",
@@ -633,8 +636,13 @@ def test_merge_replay_drift_payload_falls_back_to_run_parameters(
 ) -> None:
     sm = tmp_state_manager
     run_id = sm.create_backtest_run(
-        strategy_id=None, run_mode="screening", symbols=["BTCUSDT"], timeframe="1h",
-        start_date="2025-01-01", end_date="2025-06-01", parameters={"keep": 1},
+        strategy_id=None,
+        run_mode="screening",
+        symbols=["BTCUSDT"],
+        timeframe="1h",
+        start_date="2025-01-01",
+        end_date="2025-06-01",
+        parameters={"keep": 1},
     )
     sm.merge_replay_drift_payload(run_id, _drift_payload())
     assert sm.get_backtest_run(run_id)["parameters"] == {  # type: ignore[index]
@@ -648,8 +656,13 @@ def test_merge_replay_drift_payload_replaces_garbage_notes(
 ) -> None:
     sm = tmp_state_manager
     run_id = sm.create_backtest_run(
-        strategy_id=None, run_mode="screening", symbols=["BTCUSDT"], timeframe="1h",
-        start_date="2025-01-01", end_date="2025-06-01", parameters={},
+        strategy_id=None,
+        run_mode="screening",
+        symbols=["BTCUSDT"],
+        timeframe="1h",
+        start_date="2025-01-01",
+        end_date="2025-06-01",
+        parameters={},
     )
     sm.conn.execute("INSERT INTO backtest_results (run_id, notes) VALUES (?, ?)", (run_id, "[1]"))
     sm.conn.commit()
@@ -660,8 +673,13 @@ def test_merge_replay_drift_payload_replaces_garbage_notes(
 
 def _screening_run(sm: StateManager) -> int:
     return sm.create_backtest_run(
-        strategy_id=None, run_mode="screening", symbols=["BTCUSDT"], timeframe="1h",
-        start_date="2025-01-01", end_date="2025-06-01", parameters={"keep": 1},
+        strategy_id=None,
+        run_mode="screening",
+        symbols=["BTCUSDT"],
+        timeframe="1h",
+        start_date="2025-01-01",
+        end_date="2025-06-01",
+        parameters={"keep": 1},
     )
 
 

@@ -33,9 +33,7 @@ BINANCE_VISION_MARK_BASE = "https://data.binance.vision/data/futures/um/monthly/
 # such a hole. Same zip/CSV layout as the monthly files (2020 files have no
 # header row, 2023+ do).
 BINANCE_VISION_DAILY_BASE = "https://data.binance.vision/data/futures/um/daily/klines"
-BINANCE_VISION_DAILY_MARK_BASE = (
-    "https://data.binance.vision/data/futures/um/daily/markPriceKlines"
-)
+BINANCE_VISION_DAILY_MARK_BASE = "https://data.binance.vision/data/futures/um/daily/markPriceKlines"
 
 # Binance Vision base URL for funding-rate archives. Unlike the kline layouts
 # there is no interval path segment: <base>/<SYMBOL>/<SYMBOL>-fundingRate-YYYY-MM.zip,
@@ -95,9 +93,7 @@ def _is_retryable(exc: Exception) -> bool:
     if isinstance(exc, httpx.HTTPStatusError):
         code = exc.response.status_code
         return code >= 500 or code == 429
-    return isinstance(
-        exc, (httpx.TransportError, zipfile.BadZipFile, zlib.error, EOFError)
-    )
+    return isinstance(exc, (httpx.TransportError, zipfile.BadZipFile, zlib.error, EOFError))
 
 
 def _call_with_retry[T](fn: Callable[[], T], label: str) -> T:
@@ -114,9 +110,7 @@ def _call_with_retry[T](fn: Callable[[], T], label: str) -> T:
             if not _is_retryable(exc):
                 raise DownloadError(f"{label}: {exc!r}") from exc
             if attempt == attempts - 1:
-                raise DownloadError(
-                    f"{label}: gave up after {attempts} attempts: {exc!r}"
-                ) from exc
+                raise DownloadError(f"{label}: gave up after {attempts} attempts: {exc!r}") from exc
             delay = MONTHLY_RETRY_DELAYS[attempt]
             logger.warning(
                 "%s: transient error %r, retry %d/%d in %.1fs",
@@ -223,9 +217,7 @@ def download_daily_klines(
         DailyDownloadError: Transient failures persisted through the retry
             schedule, or a non-retryable error (e.g. 403) occurred.
     """
-    return _download_daily_zip(
-        BINANCE_VISION_DAILY_BASE, symbol, interval, day, timeout, client
-    )
+    return _download_daily_zip(BINANCE_VISION_DAILY_BASE, symbol, interval, day, timeout, client)
 
 
 def download_daily_mark_klines(
@@ -605,9 +597,7 @@ def download_recent_klines(
         RestDownloadError: a page failed after retries (carries the partial
             result and the start of the failed page).
     """
-    return _page_klines(
-        symbol, interval, start_time, end_time, _rest_kline_tuple, timeout
-    )
+    return _page_klines(symbol, interval, start_time, end_time, _rest_kline_tuple, timeout)
 
 
 KlineRaw = tuple[int, str, str, str, str, str, int]

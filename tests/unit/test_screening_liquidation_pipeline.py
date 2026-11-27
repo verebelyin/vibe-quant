@@ -115,17 +115,13 @@ class _PlainBoomRunner:
         raise ValueError("ordinary strategy failure")
 
 
-def _install_fake_runner(
-    monkeypatch: pytest.MonkeyPatch, runner_cls: type, workers: int
-) -> None:
+def _install_fake_runner(monkeypatch: pytest.MonkeyPatch, runner_cls: type, workers: int) -> None:
     """Route the real factory onto ``runner_cls`` and force ``workers``."""
     from vibe_quant.screening import pipeline as pipeline_mod
 
     real_factory = pipeline_mod.create_screening_pipeline
     monkeypatch.setattr(pipeline_mod, "resolve_parent_fill_ticks", lambda *a, **k: None)
-    monkeypatch.setattr(
-        "vibe_quant.screening.nt_runner.NTScreeningRunner", runner_cls
-    )
+    monkeypatch.setattr("vibe_quant.screening.nt_runner.NTScreeningRunner", runner_cls)
 
     def fake_factory(dsl: Any, **kwargs: Any) -> ScreeningPipeline:
         kwargs["max_workers"] = workers
@@ -173,9 +169,7 @@ def _run_cli(db: Path, run_id: int) -> int:
 # ---------------------------------------------------------------------------
 
 
-def test_mode_on_mark_missing_fails_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_mode_on_mark_missing_fails_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """I1: mode on, MarkDataMissing -> failed run, prefix message, 0 sweep rows, exit 1."""
     db = tmp_path / "i1.db"
     run_id = _make_run(db, {"liquidation_mode": "isolated"})
@@ -284,9 +278,18 @@ def test_save_results_writes_liquidation_only_when_on(tmp_path: Path) -> None:
         )
         on.save_results(
             ScreeningResult(
-                "liq_probe", 1, 1, 0.1,
-                [BacktestMetrics(parameters={"a": 1}, sharpe_ratio=1.0,
-                                 liquidation_count=3, liquidation_forfeited=12.5)],
+                "liq_probe",
+                1,
+                1,
+                0.1,
+                [
+                    BacktestMetrics(
+                        parameters={"a": 1},
+                        sharpe_ratio=1.0,
+                        liquidation_count=3,
+                        liquidation_forfeited=12.5,
+                    )
+                ],
                 [0],
             ),
             state,
@@ -294,7 +297,10 @@ def test_save_results_writes_liquidation_only_when_on(tmp_path: Path) -> None:
         )
         on.save_results(
             ScreeningResult(
-                "liq_probe", 1, 1, 0.1,
+                "liq_probe",
+                1,
+                1,
+                0.1,
                 [BacktestMetrics(parameters={"a": 1}, sharpe_ratio=1.0)],
                 [0],
             ),
@@ -303,9 +309,18 @@ def test_save_results_writes_liquidation_only_when_on(tmp_path: Path) -> None:
         )
         ScreeningPipeline(dsl=_dsl()).save_results(
             ScreeningResult(
-                "liq_probe", 1, 1, 0.1,
-                [BacktestMetrics(parameters={"a": 1}, sharpe_ratio=1.0,
-                                 liquidation_count=3, liquidation_forfeited=12.5)],
+                "liq_probe",
+                1,
+                1,
+                0.1,
+                [
+                    BacktestMetrics(
+                        parameters={"a": 1},
+                        sharpe_ratio=1.0,
+                        liquidation_count=3,
+                        liquidation_forfeited=12.5,
+                    )
+                ],
                 [0],
             ),
             state,
@@ -353,7 +368,10 @@ def test_save_results_leaves_liquidation_null_for_sentinel_row(tmp_path: Path) -
             dsl=_dsl(), liquidation=LiquidationSettings(mode="isolated", leverage=50.0)
         ).save_results(
             ScreeningResult(
-                "liq_probe", 2, 1, 0.1,
+                "liq_probe",
+                2,
+                1,
+                0.1,
                 [
                     BacktestMetrics(
                         parameters={"a": 1},
@@ -468,7 +486,10 @@ async def test_save_results_writes_exit_timing_only_when_on(
             dsl=_dsl(), liquidation=LiquidationSettings(mode="isolated", leverage=50.0)
         ).save_results(
             ScreeningResult(
-                "liq_probe", 1, 1, 0.1,
+                "liq_probe",
+                1,
+                1,
+                0.1,
                 [BacktestMetrics(parameters={"a": 1}, sharpe_ratio=1.0, exit_timing=notes)],
                 [0],
             ),
@@ -477,7 +498,10 @@ async def test_save_results_writes_exit_timing_only_when_on(
         )
         ScreeningPipeline(dsl=_dsl()).save_results(
             ScreeningResult(
-                "liq_probe", 1, 1, 0.1,
+                "liq_probe",
+                1,
+                1,
+                0.1,
                 [BacktestMetrics(parameters={"a": 1}, sharpe_ratio=1.0)],
                 [0],
             ),
@@ -532,7 +556,10 @@ async def test_exit_timing_round_trips_db_and_api(tmp_path: Path) -> None:
             dsl=_dsl(), liquidation=LiquidationSettings(mode="isolated", leverage=50.0)
         ).save_results(
             ScreeningResult(
-                "liq_probe", 1, 1, 0.1,
+                "liq_probe",
+                1,
+                1,
+                0.1,
                 [BacktestMetrics(parameters={"a": 1}, sharpe_ratio=1.0, exit_timing=notes)],
                 [0],
             ),
@@ -579,7 +606,10 @@ def test_save_results_leaves_exit_timing_null_for_sentinel_row(tmp_path: Path) -
             dsl=_dsl(), liquidation=LiquidationSettings(mode="isolated", leverage=50.0)
         ).save_results(
             ScreeningResult(
-                "liq_probe", 2, 1, 0.1,
+                "liq_probe",
+                2,
+                1,
+                0.1,
                 [
                     BacktestMetrics(
                         parameters={"a": 1},

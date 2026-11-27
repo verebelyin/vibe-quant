@@ -92,8 +92,6 @@ def _stub_chain(monkeypatch: pytest.MonkeyPatch, passing: object = None) -> None
     monkeypatch.setattr(gatechain, "evaluate_candidate", fake)
 
 
-
-
 def test_clopper_pearson_upper_matches_scipy() -> None:
     # The one-sided 95% Clopper-Pearson upper bound, against scipy's own
     # beta.ppf, at the design's two named counts (12/400 passes, 13/400 does not)
@@ -109,7 +107,9 @@ def test_clopper_pearson_upper_matches_scipy() -> None:
     assert neff_null.clopper_pearson_upper(0, 400) == pytest.approx(
         beta.ppf(0.95, 1, 400), rel=1e-12
     )
-    assert neff_null.clopper_pearson_upper(0, 400) == pytest.approx(1.0 - 0.05 ** (1 / 400), rel=1e-12)
+    assert neff_null.clopper_pearson_upper(0, 400) == pytest.approx(
+        1.0 - 0.05 ** (1 / 400), rel=1e-12
+    )
     assert neff_null.clopper_pearson_upper(0, 10) == pytest.approx(beta.ppf(0.95, 1, 10), rel=1e-12)
     assert neff_null.clopper_pearson_upper(400, 400) == 1.0
     assert neff_null.clopper_pearson_upper(10, 10) == 1.0
@@ -178,9 +178,12 @@ def test_verdict_threshold_and_marginal_escalation() -> None:
     assert failed.failing == ("W3:rho=0.5",)
     assert failed.line.endswith("(top-up decided: W3:rho=0.5=0.0513)")
     # a point-rate failure is a FAIL even if a top-up number is supplied
-    assert neff_null.build_verdict(
-        [_cell("W3:rho=0.5", 21, 400)], reps=400, topup={"W3:rho=0.5": 0.01}
-    ).exit_code == 1
+    assert (
+        neff_null.build_verdict(
+            [_cell("W3:rho=0.5", 21, 400)], reps=400, topup={"W3:rho=0.5": 0.01}
+        ).exit_code
+        == 1
+    )
 
 
 def test_topup_runs_only_for_marginal_configs(
@@ -234,14 +237,14 @@ def test_topup_runs_only_for_marginal_configs(
     def clean_grid(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
         cfgs = cast("list[neff_null.Config]", args[0])
         reps = cast("int", args[1])
-        calls.append((tuple(c.key for c in cfgs), reps, cast("neff_null.SeedStreams", kwargs["streams"])))
+        calls.append(
+            (tuple(c.key for c in cfgs), reps, cast("neff_null.SeedStreams", kwargs["streams"]))
+        )
         return [_cell(c.key, 0, reps) for c in cfgs]
 
     monkeypatch.setattr(neff_null, "run_grid", clean_grid)
     assert neff_null.main(["--reps", "400", "--workers", "1", "--out", str(out)]) == 0
     assert len(calls) == 1
-
-
 
 
 def test_null_feeds_production_estimator(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -271,9 +274,7 @@ def test_null_feeds_production_estimator(monkeypatch: pytest.MonkeyPatch) -> Non
     timeframe = gatechain.settings_for(cfg.window).config.timeframe
     expected = [
         np.frombuffer(cand.fitness.mtm_daily_returns.values, dtype=np.float64)  # type: ignore[union-attr]
-        for cand in (
-            neff_null.build_candidate(cfg, 0, i, common, timeframe) for i in range(40)
-        )
+        for cand in (neff_null.build_candidate(cfg, 0, i, common, timeframe) for i in range(40))
         if cand.fitness.mtm_daily_returns is not None
     ]
     # the production rule keeps only the positive-total-return survivors: strictly
@@ -452,9 +453,7 @@ def test_replicate_drift_is_negative_only_and_hits_the_target() -> None:
         common = neff_null.common_returns(cfg, index, neff_null.GRID_SEEDS)
         drift, count = neff_null.replicate_drift(cfg, index, common)
         assert drift >= 0.0
-        schedules = [
-            neff_null.candidate_schedule(cfg, index, i, common)[1] for i in range(167)
-        ]
+        schedules = [neff_null.candidate_schedule(cfg, index, i, common)[1] for i in range(167)]
         unshifted = neff_null.survivor_count(schedules, 0.0, cfg.window)
         assert neff_null.survivor_count(schedules, drift, cfg.window) == count
         if unshifted > 17:
@@ -488,9 +487,7 @@ def test_sparse_streams_are_separate_namespaces() -> None:
     )
     assert neff_null.stream_seed(base, 0, neff_null.GRID_SEEDS.rep) == expected
     # distinct across sparse configs too
-    seeds = {
-        neff_null.stream_seed(c, 0, neff_null.GRID_SEEDS.rep) for c in _GRID if c.sparse
-    }
+    seeds = {neff_null.stream_seed(c, 0, neff_null.GRID_SEEDS.rep) for c in _GRID if c.sparse}
     assert len(seeds) == 4
 
 
@@ -514,8 +511,6 @@ def test_survival_surrogate_matches_the_keep_rule(key: str) -> None:
             kept += int(real)
             dropped += int(not real)
     assert kept > 0 and dropped > 0  # both sides of the rule are exercised
-
-
 
 
 @pytest.mark.parametrize(
@@ -574,9 +569,7 @@ def _quick_args(out: Path, workers: int, reps: int = 1, candidates: int = 2) -> 
 
 
 @pytest.mark.slow(reason="two real quick power runs compared for equality")
-def test_quick_run_is_deterministic(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_quick_run_is_deterministic(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # The --quick report JSON is byte-identical across reruns and for
     # workers 1 vs 2, and it prints the V2-neff line. The JSON carries no wall
     # clock at all (the timestamp goes to stdout), so the files compare byte for

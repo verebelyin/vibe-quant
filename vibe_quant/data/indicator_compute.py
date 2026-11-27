@@ -168,9 +168,7 @@ def _compute_single(
     if upper == "STOCH":
         k_period = params.get("period", params.get("period_k", 14))
         d_period = params.get("d_period", 3)
-        result = df.ta.stoch(
-            high=high, low=low, close=close, k=k_period, d=d_period, smooth_k=1
-        )
+        result = df.ta.stoch(high=high, low=low, close=close, k=k_period, d=d_period, smooth_k=1)
         if result is None:
             return []
         cols = result.columns.tolist()
@@ -249,13 +247,9 @@ def _compute_single(
         logger.warning("Unknown indicator type for computation: %s", indicator_type)
         raise _UnsupportedIndicatorError("unknown indicator type")
     if spec.needs_context:
-        raise _UnsupportedIndicatorError(
-            "needs external context (not available in chart overlays)"
-        )
+        raise _UnsupportedIndicatorError("needs external context (not available in chart overlays)")
     if spec.compute_fn is None:
-        raise _UnsupportedIndicatorError(
-            "computed by NautilusTrader at runtime; no chart formula"
-        )
+        raise _UnsupportedIndicatorError("computed by NautilusTrader at runtime; no chart formula")
 
     # Merge the spec's defaults under the request params — the same base the
     # compiler's StrategyCompiler._merge_effective_params starts from. Without

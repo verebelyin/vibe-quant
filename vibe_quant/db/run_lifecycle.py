@@ -123,9 +123,7 @@ def finish(
                        WHERE run_id = ?""",
             (status, err, run_id),
         )
-        update_run = run is not None and (
-            not reconcile or run_status in ("running", "pending")
-        )
+        update_run = run is not None and (not reconcile or run_status in ("running", "pending"))
         if update_run:
             conn.execute(
                 """UPDATE backtest_runs
@@ -141,9 +139,7 @@ def finish(
     return True
 
 
-def claim(
-    conn: sqlite3.Connection, run_id: int, pid: int, identity: str | None
-) -> str | None:
+def claim(conn: sqlite3.Connection, run_id: int, pid: int, identity: str | None) -> str | None:
     """The job's own process records its pid + start time (vibe-quant-qgtdz).
 
     Returns None once the job row is 'running' with (pid, identity); otherwise the
@@ -157,14 +153,11 @@ def claim(
             "SELECT status, pid, pid_start_time FROM background_jobs WHERE run_id = ?",
             (run_id,),
         ).fetchone()
-        run = conn.execute(
-            "SELECT status FROM backtest_runs WHERE id = ?", (run_id,)
-        ).fetchone()
+        run = conn.execute("SELECT status FROM backtest_runs WHERE id = ?", (run_id,)).fetchone()
         refusal: str | None = None
         if job is None or run is None:
             refusal = (
-                f"Refusing to trade: run {run_id} has no job or run row "
-                "to record this process in"
+                f"Refusing to trade: run {run_id} has no job or run row to record this process in"
             )
         elif int(job["pid"]) not in (0, pid) or (
             int(job["pid"]) == pid and job["pid_start_time"] not in (None, identity)
@@ -239,29 +232,29 @@ def open_attempt(
     """Commit the fresh-attempt reset of the job and run rows (caller holds the lock)."""
     if exists:
         conn.execute(
-                """UPDATE background_jobs
+            """UPDATE background_jobs
                    SET pid = 0, pid_start_time = NULL, job_type = ?, status = 'pending',
                        log_file = ?, started_at = datetime('now'),
                        heartbeat_at = datetime('now'), completed_at = NULL,
                        error_message = NULL
                    WHERE run_id = ?""",
-                (job_type, log_file, run_id),
+            (job_type, log_file, run_id),
         )
     else:
         conn.execute(
-                """INSERT INTO background_jobs
+            """INSERT INTO background_jobs
                    (run_id, pid, pid_start_time, job_type, status, log_file,
                     started_at, heartbeat_at)
                    VALUES (?, 0, NULL, ?, 'pending', ?, datetime('now'), datetime('now'))""",
-                (run_id, job_type, log_file),
+            (run_id, job_type, log_file),
         )
     conn.execute(
-            """UPDATE backtest_runs
+        """UPDATE backtest_runs
                SET status = 'running', pid = NULL, started_at = datetime('now'),
                    heartbeat_at = datetime('now'), completed_at = NULL,
                    error_message = NULL
                WHERE id = ?""",
-            (run_id,),
+        (run_id,),
     )
     conn.commit()
 
@@ -278,8 +271,7 @@ def restore_attempt(
     else:
         cols = [c for c in prior_job if c not in ("id", "run_id")]
         conn.execute(
-            f"UPDATE background_jobs SET {', '.join(f'{c} = ?' for c in cols)} "
-            "WHERE run_id = ?",
+            f"UPDATE background_jobs SET {', '.join(f'{c} = ?' for c in cols)} WHERE run_id = ?",
             [prior_job[c] for c in cols] + [run_id],
         )
     if prior_run is not None:
@@ -312,7 +304,7 @@ def register_spawned(
         ValueError: If the job row belongs to another live attempt.
     """
     cursor = conn.execute(
-            """UPDATE background_jobs
+        """UPDATE background_jobs
                    SET pid = ?,
                        pid_start_time = COALESCE(?, CASE WHEN pid = ?
                                                          THEN pid_start_time END),
@@ -320,7 +312,7 @@ def register_spawned(
                        heartbeat_at = CASE WHEN status = 'pending'
                                            THEN datetime('now') ELSE heartbeat_at END
                    WHERE run_id = ? AND pid IN (0, ?)""",
-            (pid, pid_start, pid, run_id, pid),
+        (pid, pid_start, pid, run_id, pid),
     )
     if cursor.rowcount == 0:
         owner = conn.execute(
@@ -331,12 +323,12 @@ def register_spawned(
             f"Run {run_id} already has an active job (pid={owner['pid'] if owner else 0})"
         )
     conn.execute(
-            """UPDATE backtest_runs
+        """UPDATE backtest_runs
                    SET pid = ?,
                        heartbeat_at = CASE WHEN status = 'running'
                                            THEN datetime('now') ELSE heartbeat_at END
                    WHERE id = ?""",
-            (pid, run_id),
+        (pid, run_id),
     )
     conn.commit()
 
@@ -400,9 +392,7 @@ def set_run_status(
             params.append(error_message)
 
     params.append(run_id)
-    conn.execute(
-        f"UPDATE backtest_runs SET {', '.join(updates)} WHERE id = ?{guard}", params
-    )
+    conn.execute(f"UPDATE backtest_runs SET {', '.join(updates)} WHERE id = ?{guard}", params)
     conn.commit()
 
 
@@ -423,9 +413,7 @@ def fail_open_job(conn: sqlite3.Connection, run_id: int, reason: str) -> bool:
     return cursor.rowcount == 1
 
 
-def claim_job_row(
-    conn: sqlite3.Connection, run_id: int, pid: int, identity: str
-) -> bool:
+def claim_job_row(conn: sqlite3.Connection, run_id: int, pid: int, identity: str) -> bool:
     """Record the job's own pid + start time and mark it running (no commit).
 
     Only an open row that is unclaimed (pid 0) or already this pid is written,

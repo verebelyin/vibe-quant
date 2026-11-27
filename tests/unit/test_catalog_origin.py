@@ -89,7 +89,9 @@ def _arrays(frame: pd.DataFrame, t0: int = 1_600_000_000_000_000_000) -> dict[st
     return out
 
 
-def _slice(arrays: dict[str, np.ndarray], start: int, stop: int | None = None) -> dict[str, np.ndarray]:
+def _slice(
+    arrays: dict[str, np.ndarray], start: int, stop: int | None = None
+) -> dict[str, np.ndarray]:
     return {key: value[start:stop] for key, value in arrays.items()}
 
 
@@ -172,7 +174,10 @@ def test_origin_timeframes_of_mixed_layouts() -> None:
     )
     assert mixed._pta_origin_tfs == ("1h", "4h")
     only_4h = _strategy(
-        {"kama": {"type": "KAMA", "period": 25}, "adx": {"type": "ADX", "period": 30, "timeframe": "4h"}},
+        {
+            "kama": {"type": "KAMA", "period": 25},
+            "adx": {"type": "ADX", "period": 30, "timeframe": "4h"},
+        },
         "1h",
         ["4h"],
     )
@@ -189,7 +194,9 @@ def test_strategies_without_origin_kinds_compile_without_origin_code() -> None:
     assert not hasattr(type(kama_only), "_PTA_KINDS") and not hasattr(kama_only, "_pta_origin_tfs")
     adx = _strategy({"adx": {"type": "ADX", "period": 12}})
     assert adx._pta_origin_tfs == ()
-    assert _strategy({"adx": {"type": "ADX", "period": 12}}, adx_period=17)._pta_origin_tfs == ("1h",)
+    assert _strategy({"adx": {"type": "ADX", "period": 12}}, adx_period=17)._pta_origin_tfs == (
+        "1h",
+    )
 
 
 # ------------------------------------------------------------------------ origin_offset (R5)
@@ -203,7 +210,8 @@ def test_origin_offset_finds_the_run_suffix() -> None:
 
 
 @pytest.mark.parametrize(
-    "case", ["close_changed", "ts_changed", "run_longer", "run_ends_early", "start_missing", "empty"]
+    "case",
+    ["close_changed", "ts_changed", "run_longer", "run_ends_early", "start_missing", "empty"],
 )
 def test_origin_offset_fails_closed(case: str) -> None:
     """Any difference between ``hist[k:]`` and the run fails, never guesses."""
@@ -337,7 +345,9 @@ def _stress_cases() -> list[tuple[str, str, dict[str, object], pd.DataFrame]]:
             "ADX",
             {"period": 30},
             # short enough that the Wilder x Wilder start still shows (the negative control)
-            _frame(np.r_[walk[:300], np.full(60, walk[299]), walk[299] + np.sin(np.arange(60))], 0.4),
+            _frame(
+                np.r_[walk[:300], np.full(60, walk[299]), walk[299] + np.sin(np.arange(60))], 0.4
+            ),
         ),
         (
             "walk",
@@ -380,7 +390,9 @@ def test_origin_stress_cases(
 def test_vidya_flat_run_holds_value() -> None:
     """A full window of equal closes (CMO 0/0) holds the previous value and resumes on the
     next move; bit-equal to the library (which masks the same denominator since 0.9)."""
-    frame = _frame(np.r_[np.linspace(10.0, 20.0, 143), np.full(40, 20.0), 19.0 + np.sin(np.arange(180))])
+    frame = _frame(
+        np.r_[np.linspace(10.0, 20.0, 143), np.full(40, 20.0), 19.0 + np.sin(np.arange(180))]
+    )
     port = _vidya_port(frame, 14)
     assert port is not None
     fixed = port.to_numpy()
@@ -456,13 +468,33 @@ def test_paper_adx_bounds_and_caps_unchanged(period: int, rows: int, admitted: b
 @pytest.mark.parametrize(
     ("layout", "indicators", "extra", "admitted"),
     [
-        ("vidya_4h", {"r": {"type": "RSI"}, "v": {"type": "VIDYA", "timeframe": "4h"}}, ["4h"], False),
+        (
+            "vidya_4h",
+            {"r": {"type": "RSI"}, "v": {"type": "VIDYA", "timeframe": "4h"}},
+            ["4h"],
+            False,
+        ),
         ("arsi", {"a": {"type": "ADAPTIVE_RSI", "period": 10, "alpha": 0.7}}, [], False),
         ("adx20_kama", {"a": {"type": "ADX", "period": 20}, "k": {"type": "KAMA"}}, [], False),
-        ("adx12_kama_pp", {"a": {"type": "ADX", "period": 12}, "k": {"type": "KAMA", "period": 48},
-                           "p": {"type": "PRICE_POSITION", "period": 133}}, [], True),
-        ("adx14_on_4h", {"e": {"type": "EMA", "period": 20},
-                         "a": {"type": "ADX", "period": 14, "timeframe": "4h"}}, ["4h"], True),
+        (
+            "adx12_kama_pp",
+            {
+                "a": {"type": "ADX", "period": 12},
+                "k": {"type": "KAMA", "period": 48},
+                "p": {"type": "PRICE_POSITION", "period": 133},
+            },
+            [],
+            True,
+        ),
+        (
+            "adx14_on_4h",
+            {
+                "e": {"type": "EMA", "period": 20},
+                "a": {"type": "ADX", "period": 14, "timeframe": "4h"},
+            },
+            ["4h"],
+            True,
+        ),
         ("no_kind", {"e": {"type": "EMA", "period": 50}, "r": {"type": "RSI"}}, [], True),
     ],
 )
@@ -495,7 +527,10 @@ def test_install_origin_seeds_only_the_installed_timeframe() -> None:
     the cap-0 replay of the 1h prefix."""
     frame = _flat_to_moving()
     strategy = _strategy(
-        {"v": {"type": "VIDYA", "period": 14}, "kama": {"type": "KAMA", "period": 25, "timeframe": "4h"}},
+        {
+            "v": {"type": "VIDYA", "period": 14},
+            "kama": {"type": "KAMA", "period": 25, "timeframe": "4h"},
+        },
         "1h",
         ["4h"],
     )

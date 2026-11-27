@@ -17,5 +17,7 @@ if TYPE_CHECKING:
 
 def test_missing_bar_type_raises(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match=r"BTCUSDT-PERP\.BINANCE-1-DAY-LAST-EXTERNAL") as ei:
-        require_bars_in_window(str(tmp_path), "BTCUSDT-PERP.BINANCE-1-DAY-LAST-EXTERNAL", "2024-01-01", "2024-06-01")
+        require_bars_in_window(
+            str(tmp_path), "BTCUSDT-PERP.BINANCE-1-DAY-LAST-EXTERNAL", "2024-01-01", "2024-06-01"
+        )
     assert "2024-01-01" in str(ei.value)

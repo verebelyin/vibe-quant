@@ -130,9 +130,7 @@ class _Claims:
         monkeypatch.setattr(PaperCommandQueue, "claim_pending", claim)
 
 
-def _fail_write(
-    monkeypatch: pytest.MonkeyPatch, error: Exception, **match: object
-) -> None:
+def _fail_write(monkeypatch: pytest.MonkeyPatch, error: Exception, **match: object) -> None:
     """Make the traced journal's write raise for the matching event, as a real one can.
 
     ``FakeJournal`` stands in for the journal here, so the failure is its write failing;
@@ -273,7 +271,9 @@ def test_health_texts_are_exact() -> None:
         "new entries blocked"
     )
     assert failed_alert_text(_TRADER, 5, "OperationalError", "new entries blocked") == _FAILED_5
-    assert failed_alert_text("P-9", 7, "no answer within 1 s", "entries already blocked (paused)") == (
+    assert failed_alert_text(
+        "P-9", 7, "no answer within 1 s", "entries already blocked (paused)"
+    ) == (
         "paper P-9: command channel failing (7 consecutive claim failures, last no answer "
         "within 1 s); entries already blocked (paused); queued halt/kill/close_all commands "
         "are not being read - use the system kill switch or SIGUSR1"
@@ -285,8 +285,6 @@ def test_health_texts_are_exact() -> None:
         "paper P-9: command channel restored after 7 failed claims; "
         "entries stay blocked (halted/kill_switch)"
     )
-
-
 
 
 async def test_persistent_claim_failure_blocks_entries_at_fifth_poll(
@@ -340,8 +338,6 @@ async def test_persistent_claim_failure_blocks_entries_at_fifth_poll(
     assert len(failed_logs) >= claims.calls - 1, "every failed poll is still logged"
 
 
-
-
 async def test_four_failures_then_success_never_blocks(
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
@@ -358,8 +354,6 @@ async def test_four_failures_then_success_never_blocks(
         assert node._cmd_channel.owns_pause is False
         assert _channel_calls(trace, "command_channel_failed") == []
         assert _channel_calls(trace) == []
-
-
 
 
 def _halt_kill(node: PaperTradingNode) -> None:
@@ -455,8 +449,6 @@ async def test_restored_error_halt_is_never_weakened_by_a_failing_startup_drain(
         ]
 
 
-
-
 class _EngagedSnapshot:
     error_class = None
     engaged = True
@@ -489,8 +481,6 @@ async def test_system_kill_switch_halts_while_blocked(
         assert node.status.state == NodeState.HALTED
 
 
-
-
 async def test_health_without_guard(
     seeded: dict[str, Any],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
@@ -515,8 +505,6 @@ async def test_health_without_guard(
         await node._shutdown()
 
 
-
-
 async def test_channel_texts_are_class_only(
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
@@ -535,8 +523,6 @@ async def test_channel_texts_are_class_only(
         assert "ZZLEAK1" not in everything
         assert "ZZLEAK2" not in everything
         assert all(r.exc_info is None for r in caplog.records)
-
-
 
 
 async def test_alert_write_failure_keeps_claim_error(
@@ -619,8 +605,6 @@ async def test_failed_pause_is_not_owned(
         assert [c[2] for c in _channel_calls(trace)] == [
             _FAILED_5.replace("new entries blocked", "new entries NOT blocked (pause failed)")
         ], "the alert never claims a block that did not happen"
-
-
 
 
 async def test_startup_drain_failure_starts_blocked_real_nt(
@@ -707,8 +691,6 @@ class _StaleSnapshot:
         return 30.0
 
 
-
-
 async def test_block_lifts_after_recovered_batch(
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
@@ -746,7 +728,9 @@ async def test_block_lifts_after_recovered_batch(
         assert node._cmd_channel.owns_pause is False
         assert [_row(seeded["db"], cid).status for cid in ids] == ["done", "done"]
         assert [c[2] for c in _channel_calls(trace)] == [_FAILED_5, _RESTORED_5]
-        assert [c[3] for c in _channel_calls(trace)] == [True, True], "restored bypasses the 60 s limit"
+        assert [c[3] for c in _channel_calls(trace)] == [True, True], (
+            "restored bypasses the 60 s limit"
+        )
         restored = _channel_calls(trace, "command_channel_restored")
         assert [c[2] for c in restored] == [
             {
@@ -759,8 +743,6 @@ async def test_block_lifts_after_recovered_batch(
         ]
         assert _transitions(trace)[-2:] == ["paused", "running"]
         assert node.status.state == NodeState.RUNNING
-
-
 
 
 async def test_queued_kill_runs_on_recovery_and_stays_halted(
@@ -828,8 +810,6 @@ async def test_resume_after_recovered_kill_returns_running(
 # `test_a_foreign_block_is_never_weakened_nor_lifted`.
 
 
-
-
 async def test_recovery_lift_refused_when_kill_snapshot_stale(
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
@@ -859,8 +839,6 @@ async def test_recovery_lift_refused_when_kill_snapshot_stale(
         assert node._cmd_channel.owns_pause is False
         assert len(_restored_calls(trace)) == 1
         assert len(_channel_calls(trace)) == 2, "one failed + one restored alert in total"
-
-
 
 
 async def test_recovery_batch_pause_keeps_operator_pause(
@@ -941,8 +919,6 @@ async def test_recovery_close_all_runs_blocked(
         assert _row(seeded["db"], close_id).status == "done"
         assert node._guard.guard_state == GuardState.RUNNING
         assert [c[2] for c in _restored_calls(trace)] == [_RESTORED_5]
-
-
 
 
 async def test_recovery_owed_alert_after_outcome_write_failure(
@@ -1153,8 +1129,6 @@ async def test_stop_fails_unrun_tail_rows(
         assert executed == ["close_all"]
 
 
-
-
 async def test_daily_loss_rollover_while_blocked_reblocks(
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
@@ -1228,8 +1202,6 @@ async def test_sigusr2_resume_while_blocked_reblocks(
         assert node._guard.guard_state == GuardState.PAUSED
         assert node.status.state == NodeState.PAUSED
         assert node._cmd_channel.owns_pause is True
-
-
 
 
 async def test_each_streak_has_its_own_alert_pair(
@@ -1406,7 +1378,9 @@ async def test_stop_with_inflight_claim_fails_rows(
     async with _started(monkeypatch, seeded, "C", interval=interval) as (node, _trace, claims):
         await _until(lambda: claims.calls == 1 and _row(seeded["db"], cid).status == "running")
         if stall_s < 1:
-            await _until(lambda: node._claim_inflight is not None and node._cmd_channel.failures == 1)
+            await _until(
+                lambda: node._claim_inflight is not None and node._cmd_channel.failures == 1
+            )
         threading.Timer(0.5, claims.hold.set).start()
 
     row = _row(seeded["db"], cid)

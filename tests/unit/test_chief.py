@@ -43,7 +43,7 @@ def _fast_bd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     bin_dir.mkdir()
     shim = bin_dir / "bd"
     shim.write_text(
-        '#!/bin/sh\n'
+        "#!/bin/sh\n"
         'if [ "$1" = "show" ]; then printf "%s\\n" "$VQ_TEST_BD_SHOW";'
         ' else printf "%s\\n" "$VQ_TEST_BD_READY"; fi\n'
     )
@@ -71,7 +71,22 @@ def test_step_refuses_a_dirty_done_handoff_and_appends_no_row(
     job = tmp_path / "20261029-x"
     handoff = tmp_path / "h.md"
     handoff.write_text(DIRTY_HANDOFF)
-    assert chief.main(["step", "--job", str(job), "--id", "cc-a-1", "--status", "done GATE PASS", "--handoff", str(handoff)]) == 1
+    assert (
+        chief.main(
+            [
+                "step",
+                "--job",
+                str(job),
+                "--id",
+                "cc-a-1",
+                "--status",
+                "done GATE PASS",
+                "--handoff",
+                str(handoff),
+            ]
+        )
+        == 1
+    )
     out = capsys.readouterr().out
     assert "MISSING improve" in out
     assert "step refused: handoff not lint-clean" in out

@@ -121,9 +121,7 @@ def test_window_read_matches_full_series_slice_and_leaves_bar_cache_untouched(
     series = load_bar_windows(catalog, _BAR_TYPE, windows)
     assert series is not None
 
-    expected_ts = np.array(
-        [_START_NS + i * _MINUTE_NS for i in range(4)], dtype=np.int64
-    )
+    expected_ts = np.array([_START_NS + i * _MINUTE_NS for i in range(4)], dtype=np.int64)
     _assert_matches_full_slice(series, full, expected_ts)
 
     assert list(extraction._BAR_CACHE) == cache_keys
@@ -200,9 +198,7 @@ def test_overlapping_windows_dedupe_and_sort_by_ts_init(tmp_path: Path) -> None:
 
     assert len(series) == 5
     assert series.ts.tolist() == sorted(series.ts.tolist())
-    expected_ts = np.array(
-        [_START_NS + i * _MINUTE_NS for i in range(5)], dtype=np.int64
-    )
+    expected_ts = np.array([_START_NS + i * _MINUTE_NS for i in range(5)], dtype=np.int64)
     _assert_matches_full_slice(series, full, expected_ts)
 
 
@@ -239,9 +235,7 @@ def test_real_catalog_windows_match_full_read() -> None:
 
     series = load_bar_windows(_REAL_CATALOG, _REAL_BAR_TYPE, windows)
     assert series is not None
-    parts = [
-        full.ts[(full.ts >= start) & (full.ts <= end)] for start, end in windows
-    ]
+    parts = [full.ts[(full.ts >= start) & (full.ts <= end)] for start, end in windows]
     expected_ts = np.unique(np.concatenate(parts))
     _assert_matches_full_slice(series, full, expected_ts)
 

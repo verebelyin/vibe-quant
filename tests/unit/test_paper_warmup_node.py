@@ -285,7 +285,10 @@ async def test_two_timeframes_are_seeded_per_bar_type(
     """A secondary-timeframe indicator gets its own 8,000-row seed, keyed by its bar type."""
     source = _source(
         "15m",
-        {"ema": {"type": "EMA", "period": 20}, "slow": {"type": "EMA", "period": 20, "timeframe": "4h"}},
+        {
+            "ema": {"type": "EMA", "period": 20},
+            "slow": {"type": "EMA", "period": 20, "timeframe": "4h"},
+        },
     )
     source["additional_timeframes"] = ["4h"]
     node = _make(tmp_path, source, ["BTCUSDT"])
@@ -331,7 +334,9 @@ def test_seed_bar_stamps_match_what_the_live_adapter_delivers() -> None:
 
 
 def test_interval_of_bar_type_and_closed_boundary() -> None:
-    assert [warmup.interval_of(get_bar_type("BTCUSDT", tf)) for tf in ("1m", "15m", "4h", "1d")] == [
+    assert [
+        warmup.interval_of(get_bar_type("BTCUSDT", tf)) for tf in ("1m", "15m", "4h", "1d")
+    ] == [
         "1m",
         "15m",
         "4h",
@@ -432,7 +437,9 @@ async def test_progress_on_a_hole_is_not_counted_against_the_cap(
     assert len(strategy.fed) == 7
 
 
-def test_gap_fetch_keeps_only_bars_strictly_between_the_edges(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_gap_fetch_keeps_only_bars_strictly_between_the_edges(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The REST page may carry the watermark bar or the queued bar: neither is fed twice."""
     rows = synthetic_klines("BTCUSDT", "15m", 1_700_000_100_000, 1_700_000_100_000 + 6 * 900_000)
     asked: list[tuple[int, int]] = []
@@ -480,7 +487,9 @@ def test_compute_fn_buffer_cap_must_fit_the_seed(cap: int, ok: bool) -> None:
         warmup.check_warmup("BTCUSDT", needs, rows, {"15m": cap})
         warmup.check_warmup("BTCUSDT", needs, rows, {"15m": 0})
         return
-    with pytest.raises(ConfigurationError, match=r"needs 8001 bars \(buffer cap\), seed holds 8000"):
+    with pytest.raises(
+        ConfigurationError, match=r"needs 8001 bars \(buffer cap\), seed holds 8000"
+    ):
         warmup.check_warmup("BTCUSDT", needs, rows, {"15m": cap})
 
 
@@ -519,6 +528,8 @@ async def test_price_only_strategy_fetch_failure_refuses_with_a_configuration_er
     _fake_fetch(monkeypatch, fetch)
     text = await _refused(node)
 
-    assert text == "paper warm-up refused: BTCUSDT 15m (price only): fetch failed: RestDownloadError"
+    assert (
+        text == "paper warm-up refused: BTCUSDT 15m (price only): fetch failed: RestDownloadError"
+    )
     assert builds.count == 0
     assert _critical_failed_alerts(journal) == [("error", f"Paper node failed: {text}", True)]

@@ -88,7 +88,9 @@ class DiscoveryLaunchRequest(BaseModel):
     direction: str | None = None  # "long", "short", "both", or None (random)
     start_date: str | None = None
     end_date: str | None = None
-    eval_windows: int = Field(default=3, ge=0)  # worst-of-N sub-windows; 1=single, 0=not sent (CLI default 3)
+    eval_windows: int = Field(
+        default=3, ge=0
+    )  # worst-of-N sub-windows; 1=single, 0=not sent (CLI default 3)
     # "worst": each symbol backtested alone, genome scored by its worst symbol; "pooled"
     # (vibe-quant-clmmc.5): each symbol on its own account, scored as one equal-weight pool
     # of their daily MTM returns (needs 2+ symbols and evaluator "nt": 422 otherwise)
@@ -96,20 +98,28 @@ class DiscoveryLaunchRequest(BaseModel):
     # TRAIN fraction; default 0.8 = last 20% is a holdout used once as the final
     # pass/fail gate (vibe-quant-e70tl.5). 0 explicitly disables the holdout.
     train_test_split: float = Field(default=0.8, ge=0, lt=1)
-    cross_window_months: list[int] | None = None  # e.g. [1, 2]: train sub-windows starting +1mo/+2mo
+    cross_window_months: list[int] | None = (
+        None  # e.g. [1, 2]: train sub-windows starting +1mo/+2mo
+    )
     # Min Sharpe on each shifted window, typed in 365-day units like the on-screen Sharpe;
     # None = the stored default 0.5 (shown 0.60). Converted once in DiscoveryRunSpec.
     cross_window_min_sharpe_365: float | None = None
     num_seeds: int = Field(default=1, ge=1)  # >1 enables multi-seed ensemble
-    wfa_oos_step_days: int = Field(default=0, ge=0)  # >0 enables rolling-window stability check over the TRAIN range
+    wfa_oos_step_days: int = Field(
+        default=0, ge=0
+    )  # >0 enables rolling-window stability check over the TRAIN range
     wfa_min_consistency: float = Field(default=0.75, ge=0, le=1)  # min profitable fraction for WFA
     immigrant_fraction: float = 0.15  # fraction of pop replaced when entropy low; 0 disables
     entropy_threshold: float = 0.4  # population entropy below this triggers immigrant injection
     crowding_enabled: bool = True  # deterministic crowding selection (vs classic tournament)
     seed_run_id: int | None = None  # warm-start GA from top chromosomes of prior run
     no_bootstrap_ci: bool = False  # True disables bootstrap-CI hard gate (low-budget regimes)
-    bootstrap_min_sharpe: float | None = None  # None = the CLI's timeframe default (1m 0.5, 4h/1d 0.0, else 1.0)
-    seed: int | None = Field(default=None, ge=0, lt=2**32)  # RNG seed to replay a run; None = random
+    bootstrap_min_sharpe: float | None = (
+        None  # None = the CLI's timeframe default (1m 0.5, 4h/1d 0.0, else 1.0)
+    )
+    seed: int | None = Field(
+        default=None, ge=0, lt=2**32
+    )  # RNG seed to replay a run; None = random
     max_workers: int = Field(default=4, ge=1, le=64)  # backtest processes for this run
     # GA fitness evaluator (bead vibe-quant-z8vqv.5): "fast" scores genomes with the
     # numpy fast tier and re-runs every gate input on NT before any gate (a mismatch
@@ -350,9 +360,7 @@ class DiscoveryLaunchRequest(BaseModel):
         grid = self.bankroll_grid
         if grid is None:
             return []
-        return build_cells(
-            grid.modes, grid.leverages, grid.max_margin_pcts, self.sizing_settings()
-        )
+        return build_cells(grid.modes, grid.leverages, grid.max_margin_pcts, self.sizing_settings())
 
     def liquidation_settings(self) -> LiquidationSettings:
         """The run's validated settings (the launch router's single source)."""

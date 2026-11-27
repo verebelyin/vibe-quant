@@ -524,7 +524,6 @@ async def test_start_warning_not_refusal(
     ]
 
 
-
 from fractions import Fraction  # noqa: E402
 
 from nautilus_trader.model.enums import AccountType, OmsType, OrderStatus  # noqa: E402

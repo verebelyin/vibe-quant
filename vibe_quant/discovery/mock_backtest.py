@@ -57,8 +57,7 @@ def mock_backtest(chromosome: StrategyChromosome) -> dict[str, float | int]:
     # Std must be small relative to mean for bootstrap CI to pass.
     mean_ret = total_return / max(1, total_trades)
     trade_returns = tuple(
-        rng.gauss(mean_ret, abs(mean_ret) * 0.5 + 0.0001)
-        for _ in range(total_trades)
+        rng.gauss(mean_ret, abs(mean_ret) * 0.5 + 0.0001) for _ in range(total_trades)
     )
 
     return {

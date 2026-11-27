@@ -203,7 +203,10 @@ def test_reset_failure_does_not_stop_teardown(
     cleaned: list[Path] = []
     monkeypatch.setattr("vibe_quant.data.catalog.cleanup_epoch_parquet", cleaned.append)
 
-    assert run_engine(_spec(cleanup_dirs=(tmp_path / "a",)), lambda _run: "kept", costs=_COSTS) == "kept"
+    assert (
+        run_engine(_spec(cleanup_dirs=(tmp_path / "a",)), lambda _run: "kept", costs=_COSTS)
+        == "kept"
+    )
 
     assert ("reset", "e2") in calls
     assert calls.index(("reset", "e2")) < calls.index(("dispose",))
@@ -468,7 +471,9 @@ def test_every_engine_gets_one_ledger_on_every_strategy(monkeypatch: pytest.Monk
     first, second = _Engine(calls, "e1"), _Engine(calls, "e2")
     first.strategies = [SimpleNamespace(), SimpleNamespace()]
     second.strategies = [SimpleNamespace()]
-    monkeypatch.setattr(nt_node, "BacktestNode", _node_factory(calls, [first, second], engine=first))
+    monkeypatch.setattr(
+        nt_node, "BacktestNode", _node_factory(calls, [first, second], engine=first)
+    )
     monkeypatch.setattr("vibe_quant.data.catalog.cleanup_epoch_parquet", lambda _p: None)
 
     received: list[EngineRun] = []

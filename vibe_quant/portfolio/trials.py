@@ -104,7 +104,9 @@ def git_sha() -> str:
             check=False,
         )
     except OSError as error:
-        logger.warning("git rev-parse failed (%s); trial git_sha recorded as unknown", type(error).__name__)
+        logger.warning(
+            "git rev-parse failed (%s); trial git_sha recorded as unknown", type(error).__name__
+        )
         return "unknown"
     return result.stdout.strip() if result.returncode == 0 else "unknown"
 
@@ -137,9 +139,7 @@ def _line(
     )
 
 
-def completion_line(
-    engine: str, spec: CarrySpec, summary: Mapping[str, Any], sha: str
-) -> str:
+def completion_line(engine: str, spec: CarrySpec, summary: Mapping[str, Any], sha: str) -> str:
     """A completed run's line: headline metrics, ``outcome "completed"``, ``failed_at null``."""
     return _line(engine, spec, sha, {key: summary[key] for key in METRIC_KEYS}, COMPLETED, None)
 
@@ -210,9 +210,7 @@ def _parse_record(text: str, path: Path, number: int) -> dict[str, Any]:
         or outcome_of(record) not in OUTCOMES
         or not _sharpe_ok(record.get("weekly_sharpe"))
     ):
-        raise CarryLedgerError(
-            f"trial ledger {path} line {number}: malformed (not a trial record)"
-        )
+        raise CarryLedgerError(f"trial ledger {path} line {number}: malformed (not a trial record)")
     return record
 
 
@@ -305,9 +303,7 @@ def _append_bytes(fd: int, payload: bytes) -> None:
         raise OSError(f"short write: {written} of {len(payload)} bytes")
 
 
-def _register(
-    path: Path, line: str, should_append: Callable[[list[dict[str, Any]]], bool]
-) -> bool:
+def _register(path: Path, line: str, should_append: Callable[[list[dict[str, Any]]], bool]) -> bool:
     """Lock, read + validate every line, decide, append one whole record. True = appended.
 
     The ledger WITH the new record must still be valid (finite DSR variance), so a

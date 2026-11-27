@@ -32,7 +32,7 @@ from pathlib import Path
 
 STEPS = ("S1", "S2", "S3", "S4", "LEAKS")
 
-CHILD = r'''
+CHILD = r"""
 import asyncio, json, logging, sqlite3, sys, tempfile
 from pathlib import Path
 
@@ -155,7 +155,7 @@ async def main():
 
 
 asyncio.run(main())
-'''
+"""
 
 
 def child_python(repo: Path) -> str:
@@ -190,8 +190,12 @@ def compare(results: dict[str, dict[str, dict[str, object]]]) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument("--rev", action="append", required=True, help="git rev; repeat (the first is the reference)")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawTextHelpFormatter
+    )
+    parser.add_argument(
+        "--rev", action="append", required=True, help="git rev; repeat (the first is the reference)"
+    )
     parser.add_argument("--repo", default=str(Path(__file__).resolve().parents[2]))
     parser.add_argument("--json", action="store_true", help="also print the raw records")
     args = parser.parse_args(argv)

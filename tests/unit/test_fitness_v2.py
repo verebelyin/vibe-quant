@@ -344,7 +344,10 @@ def test_bankrupt_genome_scores_a_quiet_zero_not_a_missing_series_error() -> Non
         assert fr.adjusted_score == 0.0
         assert fr.fitness_v2 == FitnessV2(0.0, None, None)
     # the edge: anything above -1.0 (or no return at all) still has a series to lose
-    assert _score(_bt(None, trades=80, ret=-0.9999), fitness="v2").error == "FitnessV2Error: no MTM series"
+    assert (
+        _score(_bt(None, trades=80, ret=-0.9999), fitness="v2").error
+        == "FitnessV2Error: no MTM series"
+    )
     assert _score(_bt(None, trades=80, ret=float("nan")), fitness="v2").error == (
         "FitnessV2Error: no MTM series"
     )

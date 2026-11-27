@@ -34,8 +34,7 @@ def _make_discovery_run(
         parameters={},
     )
     top: list[dict[str, object]] = [
-        {"dsl": {"name": f"ga_{i}"}, "sharpe": 1.0, "trades": 10}
-        for i in range(strategy_index + 1)
+        {"dsl": {"name": f"ga_{i}"}, "sharpe": 1.0, "trades": 10} for i in range(strategy_index + 1)
     ]
     entry: dict[str, object] = {
         "dsl": {"name": f"ga_{strategy_index}"},
@@ -251,9 +250,7 @@ def test_missing_discovery_result_returns_none(state: StateManager) -> None:
         timeframe="1h",
         start_date="2025-09-01",
         end_date="2026-02-28",
-        parameters={
-            "promote_source": {"discovery_run_id": 99999, "strategy_index": 0}
-        },
+        parameters={"promote_source": {"discovery_run_id": 99999, "strategy_index": 0}},
     )
     assert check_replay_drift(state, run_id) is None
 

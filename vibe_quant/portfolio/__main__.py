@@ -304,8 +304,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--draws", type=int, default=200, help="Null draws (funding: random rank; trend: rotation)"
     )
     evaluate.add_argument("--seed", type=int, default=0, help="Null seed (draw i uses seed + i)")
-    evaluate.add_argument("--out", default=None, help=f"Output dir (default: {DEFAULT_OUT_ROOT}/...)")
-    evaluate.add_argument("--force", action="store_true", help="Overwrite an existing research.json")
+    evaluate.add_argument(
+        "--out", default=None, help=f"Output dir (default: {DEFAULT_OUT_ROOT}/...)"
+    )
+    evaluate.add_argument(
+        "--force", action="store_true", help="Overwrite an existing research.json"
+    )
     evaluate.add_argument("--catalog", default=DEFAULT_CATALOG)
     evaluate.add_argument("--archive", default=DEFAULT_ARCHIVE)
     evaluate.add_argument(
@@ -395,14 +399,9 @@ def _frames(run: CarryRun, report: CarryReport) -> dict[str, pd.DataFrame]:
     trend = run.spec.signal == "trend"
     return {
         "daily.parquet": pd.DataFrame(
-            [
-                {"ts": ts, "equity": equity, "return": move}
-                for ts, equity, move in report.daily
-            ]
+            [{"ts": ts, "equity": equity, "return": move} for ts, equity, move in report.daily]
         ),
-        "weekly.parquet": pd.DataFrame(
-            [{"ts": ts, "return": move} for ts, move in report.weekly]
-        ),
+        "weekly.parquet": pd.DataFrame([{"ts": ts, "return": move} for ts, move in report.weekly]),
         "fills.parquet": pd.DataFrame(
             [
                 {
@@ -824,7 +823,9 @@ def _cmd_evaluate(args: argparse.Namespace) -> int:
         longer = load_carry_inputs(research.lag_spec(spec, lag), catalog, archive)
         inputs = replace(
             inputs,
-            trend_closes=research.extend_closes(inputs.trend_closes or {}, longer.trend_closes or {}),
+            trend_closes=research.extend_closes(
+                inputs.trend_closes or {}, longer.trend_closes or {}
+            ),
         )
 
     started = time.perf_counter()
@@ -844,9 +845,7 @@ def _cmd_evaluate(args: argparse.Namespace) -> int:
     if spec.signal != "trend" and universe is not None:
         payload["universe"] = universe
     out_dir.mkdir(parents=True, exist_ok=True)
-    research_file.write_text(
-        dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    research_file.write_text(dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     if spec.signal == "trend":
         print("\n".join(_trend_research_lines(result, out_dir, elapsed)))
     else:

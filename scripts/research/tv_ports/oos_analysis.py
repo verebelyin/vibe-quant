@@ -146,12 +146,16 @@ def universe() -> list[Setting]:
         port = Path(cand["port"]).name
         vals = ",".join(f"{k}={v}" for k, v in sorted(cand["values"].items()))
         add(port, cand["timeframe"], cand["values"], "U1", f"{port}@{cand['timeframe']} {vals}")
-    presets = {p.name: {e["name"]: e["values"] for e in preset_grid.load_presets(p)}
-               for p in preset_grid.port_dirs("all")}
+    presets = {
+        p.name: {e["name"]: e["values"] for e in preset_grid.load_presets(p)}
+        for p in preset_grid.port_dirs("all")
+    }
     for port, tf, preset in report_picks(SWARM / "presets-grid" / "report.md"):
         add(port, tf, presets[port][preset], "U2", f"{port}@{tf} {preset}")
     return [
-        Setting(sid, e["port"], e["tf"], e["values"], tuple(sorted(e["unis"])), " | ".join(e["labels"]))
+        Setting(
+            sid, e["port"], e["tf"], e["values"], tuple(sorted(e["unis"])), " | ".join(e["labels"])
+        )
         for sid, e in sorted(found.items(), key=lambda kv: (kv[1]["port"], kv[1]["tf"], kv[0]))
     ]
 
@@ -170,7 +174,9 @@ def coin_spans(coins: Sequence[str]) -> dict[str, tuple[str, str]]:
         first = date.fromordinal(EPOCH.toordinal() + min(closes[coin]))
         # isolated liquidation needs MARK bars to the end (BTC LAST runs past its MARK, 2026-11-10)
         mark = load_catalog_bars(CATALOG, f"{coin}-PERP.BINANCE-1-MINUTE-MARK-EXTERNAL")
-        mark_end = int(mark.ts[-1] + 1_000_000) // DAY_NS if mark is not None else max(closes[coin]) + 1
+        mark_end = (
+            int(mark.ts[-1] + 1_000_000) // DAY_NS if mark is not None else max(closes[coin]) + 1
+        )
         end = iso_of(min(max(closes[coin]) + 1, mark_end))
         start, _ = preset_grid.clip_window(RUN_START, end, first)
         out[coin] = (start.isoformat(), end)
@@ -267,7 +273,9 @@ def bootstrap_sharpe_ci(
     n = len(x)
     if n < 10:
         return float("-inf"), float("inf")
-    idx = stationary_bootstrap_indices(n, float(default_block_length(n)), n_boot, np.random.default_rng(seed))
+    idx = stationary_bootstrap_indices(
+        n, float(default_block_length(n)), n_boot, np.random.default_rng(seed)
+    )
     samples = x[idx]
     std = samples.std(axis=1, ddof=1)
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -291,13 +299,17 @@ def _capturing_backtest_fn(coin: str, tf: str, start: str, end: str) -> Any:
     from vibe_quant.trade_ledger import split_positions
 
     class CapturingRunner(NTScreeningRunner):
-        def _extract_metrics(self, params: Any, bt_result: Any, engine: Any, *a: Any, **kw: Any) -> Any:
+        def _extract_metrics(
+            self, params: Any, bt_result: Any, engine: Any, *a: Any, **kw: Any
+        ) -> Any:
             closed, still_open = split_positions(engine)
             _CAPTURED[:] = [_position_row(p) for p in [*closed, *still_open]]
             return super()._extract_metrics(params, bt_result, engine, *a, **kw)
 
     class CapturingFn(NTBacktestFn):
-        def _make_runner(self, dsl_dict: Any, start_date: str, end_date: str, symbols: Any = None) -> Any:
+        def _make_runner(
+            self, dsl_dict: Any, start_date: str, end_date: str, symbols: Any = None
+        ) -> Any:
             return CapturingRunner(
                 dsl_dict=dsl_dict,
                 symbols=self.symbols if symbols is None else symbols,
@@ -336,31 +348,42 @@ def _position_row(p: Any) -> dict[str, Any]:
 def run_task(task: dict[str, Any]) -> dict[str, Any]:
     """One full-history backtest; never raises."""
     row: dict[str, Any] = {
-        "kind": task.get("kind", "run"), "key": task["key"], "sid": task["sid"],
-        "coin": task["coin"], "tf": task["tf"], "start": task["start"], "end": task["end"],
-        "values": task["values"], "port": task["port"], "error": None,
+        "kind": task.get("kind", "run"),
+        "key": task["key"],
+        "sid": task["sid"],
+        "coin": task["coin"],
+        "tf": task["tf"],
+        "start": task["start"],
+        "end": task["end"],
+        "values": task["values"],
+        "port": task["port"],
+        "error": None,
     }
     try:
         os.chdir(REPO_ROOT)
         from vibe_quant.discovery.param_genome import ParamGenome
         from vibe_quant.discovery.port import load_port
 
-        port = _PORTS.get(task["port"]) or _PORTS.setdefault(task["port"], load_port(HERE / task["port"]))
+        port = _PORTS.get(task["port"]) or _PORTS.setdefault(
+            task["port"], load_port(HERE / task["port"])
+        )
         fn = _capturing_backtest_fn(task["coin"], task["tf"], task["start"], task["end"])
         _CAPTURED.clear()
         res = fn(ParamGenome(port, dict(task["values"])))
         series = res.get("mtm_daily_returns")
-        row.update({
-            "ret": preset_grid._finite(res.get("total_return", 0.0)),
-            "trades": int(res.get("total_trades", 0)),
-            "sharpe": preset_grid._finite(res.get("sharpe_ratio", 0.0)),
-            "dd": preset_grid._finite(res["max_drawdown"]) if "max_drawdown" in res else None,
-            "fees": float(res.get("total_fees", 0.0)),
-            "first_day": None if series is None else int(series.first_day),
-            "daily": None if series is None else [float(v) for v in series.values],
-            "positions": list(_CAPTURED),
-            "error": res.get("error"),
-        })
+        row.update(
+            {
+                "ret": preset_grid._finite(res.get("total_return", 0.0)),
+                "trades": int(res.get("total_trades", 0)),
+                "sharpe": preset_grid._finite(res.get("sharpe_ratio", 0.0)),
+                "dd": preset_grid._finite(res["max_drawdown"]) if "max_drawdown" in res else None,
+                "fees": float(res.get("total_fees", 0.0)),
+                "first_day": None if series is None else int(series.first_day),
+                "daily": None if series is None else [float(v) for v in series.values],
+                "positions": list(_CAPTURED),
+                "error": res.get("error"),
+            }
+        )
         if series is None and not row["error"]:
             row["error"] = "no daily MTM series"
     except Exception as exc:
@@ -401,14 +424,38 @@ def cmd_run(args: argparse.Namespace) -> int:
     settings = universe()
     if args.only:
         settings = [s for s in settings if s.sid in args.only.split(",")]
-    (out / "universe.json").write_text(json.dumps(
-        [{"sid": s.sid, "port": s.port, "tf": s.tf, "values": s.values, "universes": s.universes,
-          "label": s.label} for s in universe()], indent=1) + "\n")
+    (out / "universe.json").write_text(
+        json.dumps(
+            [
+                {
+                    "sid": s.sid,
+                    "port": s.port,
+                    "tf": s.tf,
+                    "values": s.values,
+                    "universes": s.universes,
+                    "label": s.label,
+                }
+                for s in universe()
+            ],
+            indent=1,
+        )
+        + "\n"
+    )
     spans = coin_spans(COINS)
     tasks = [
-        {"key": f"run|{s.sid}|{c}", "sid": s.sid, "port": s.port, "tf": s.tf, "values": s.values,
-         "coin": c, "start": spans[c][0], "end": spans[c][1]}
-        for s in settings for c in COINS if f"run|{s.sid}|{c}" not in present
+        {
+            "key": f"run|{s.sid}|{c}",
+            "sid": s.sid,
+            "port": s.port,
+            "tf": s.tf,
+            "values": s.values,
+            "coin": c,
+            "start": spans[c][0],
+            "end": spans[c][1],
+        }
+        for s in settings
+        for c in COINS
+        if f"run|{s.sid}|{c}" not in present
     ]
     tasks.sort(key=lambda t: {"15m": 0, "1h": 1, "4h": 2}[str(t["tf"])])
     run_tasks(tasks, results, args.parallel)
@@ -430,7 +477,11 @@ def bars(coin: str, tf: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         if b is None:
             raise ValueError(f"no {tf} bars for {coin}")
         ts = np.asarray(b.ts, dtype=np.int64) + 1_000_000 - TF_NS[tf]
-        _BARS[(coin, tf)] = (ts, np.asarray(b.open, dtype=np.float64), np.asarray(b.close, dtype=np.float64))
+        _BARS[(coin, tf)] = (
+            ts,
+            np.asarray(b.open, dtype=np.float64),
+            np.asarray(b.close, dtype=np.float64),
+        )
     return _BARS[(coin, tf)]
 
 
@@ -463,8 +514,13 @@ class CoinOOS:
 
 
 def coin_oos(
-    row: Row, uni: str, coin_daily: Mapping[int, float], closes: Mapping[int, float],
-    draws: int, fee: float, seed: int,
+    row: Row,
+    uni: str,
+    coin_daily: Mapping[int, float],
+    closes: Mapping[int, float],
+    draws: int,
+    fee: float,
+    seed: int,
 ) -> CoinOOS | None:
     """Every per-(setting, coin) OOS number and the coin's null draws."""
     from vibe_quant.metrics import profit_factor
@@ -480,13 +536,9 @@ def coin_oos(
     spans = trade_spans(row, end_ns)
     seg_ns = [(a * DAY_NS, b * DAY_NS) for a, b in segs]
     in_oos = [t for t in spans if any(a <= t[1] < b for a, b in seg_ns)]
-    exposure_ns = sum(
-        max(0, min(t[2], b) - max(t[1], a)) for t in spans for a, b in seg_ns
-    )
+    exposure_ns = sum(max(0, min(t[2], b) - max(t[1], a)) for t in spans for a, b in seg_ns)
     total_ns = sum(b - a for a, b in seg_ns)
-    pnl_rets = [
-        trade_multiplier(t[0], t[3], t[4], fee) - 1.0 for t in in_oos if t[4] is not None
-    ]
+    pnl_rets = [trade_multiplier(t[0], t[3], t[4], fee) - 1.0 for t in in_oos if t[4] is not None]
     x = [coin_daily.get(d) for d in oos_days]
     pairs = [(v, c) for v, c in zip(vals, x, strict=True) if c is not None]
     alpha, beta = alpha_beta([p[0] for p in pairs], [p[1] for p in pairs])
@@ -503,7 +555,7 @@ def coin_oos(
     null_total = np.ones(draws)
     cell_names = list(cells)
     null_cells = {h: np.ones(draws) for h in cell_names}
-    for (a_ns, b_ns) in seg_ns:
+    for a_ns, b_ns in seg_ns:
         sel = np.nonzero((o_ns >= a_ns) & (o_ns < b_ns))[0]
         if len(sel) == 0:
             continue
@@ -516,8 +568,13 @@ def coin_oos(
             holds[int(np.argmax(holds))] -= 1
         sides = np.array([t[0] for t in seg_trades], dtype=np.float64)
         bar_cell = np.array(
-            [cell_names.index(half_of(int(t // DAY_NS))) if half_of(int(t // DAY_NS)) in cells else -1
-             for t in o_ns[sel]], dtype=np.int64,
+            [
+                cell_names.index(half_of(int(t // DAY_NS)))
+                if half_of(int(t // DAY_NS)) in cells
+                else -1
+                for t in o_ns[sel]
+            ],
+            dtype=np.int64,
         )
         tot, per_cell = null_draws(prices, holds, sides, fee, draws, rng, bar_cell, len(cell_names))
         null_total *= 1.0 + tot
@@ -531,17 +588,33 @@ def coin_oos(
     for a, b in segs:
         base, last = closes.get(a - 1), closes.get(b - 1)
         bh_parts.append(None if base is None or last is None else last / base - 1.0)
-    bh = None if any(p is None for p in bh_parts) else compound([p for p in bh_parts if p is not None])
+    bh = (
+        None
+        if any(p is None for p in bh_parts)
+        else compound([p for p in bh_parts if p is not None])
+    )
     return CoinOOS(
-        coin=row["coin"], ret=ret, trades=len(in_oos), sharpe=annual_sharpe(vals),
-        pf=profit_factor(pnl_rets), dd=max_drawdown(vals),
-        exposure=exposure_ns / total_ns if total_ns else 0.0, alpha=alpha, beta=beta,
-        days=len(vals), cells=cells, null=null_total, null_cells=null_cells,
-        null_pct=null_percentile(ret, null_total), bh=bh,
+        coin=row["coin"],
+        ret=ret,
+        trades=len(in_oos),
+        sharpe=annual_sharpe(vals),
+        pf=profit_factor(pnl_rets),
+        dd=max_drawdown(vals),
+        exposure=exposure_ns / total_ns if total_ns else 0.0,
+        alpha=alpha,
+        beta=beta,
+        days=len(vals),
+        cells=cells,
+        null=null_total,
+        null_cells=null_cells,
+        null_pct=null_percentile(ret, null_total),
+        bh=bh,
     )
 
 
-def judge(coins: Sequence[CoinOOS], pooled_series: Mapping[str, Mapping[int, float]], seed: int) -> dict[str, Any]:
+def judge(
+    coins: Sequence[CoinOOS], pooled_series: Mapping[str, Mapping[int, float]], seed: int
+) -> dict[str, Any]:
     """ROBUST / BEATS-NULL / candidate of one setting + the chance rate from its null."""
     tested = len(coins)
     need = math.ceil(MIN_COIN_SHARE * tested - 1e-9)
@@ -570,14 +643,30 @@ def judge(coins: Sequence[CoinOOS], pooled_series: Mapping[str, Mapping[int, flo
     cell_stack = [c.null_cells[h] > 0 for c in coins for h in c.cells]
     null_cell_share = np.mean(np.vstack(cell_stack), axis=0) if cell_stack else np.zeros(draws)
     null_rank = np.array([np.mean(null_port < v) for v in null_port])
-    chance_rate = float(np.mean((null_pos >= need) & (null_cell_share >= MIN_CELL_SHARE) & (null_rank >= NULL_PCT)))
+    chance_rate = float(
+        np.mean((null_pos >= need) & (null_cell_share >= MIN_CELL_SHARE) & (null_rank >= NULL_PCT))
+    )
     return {
-        "tested": tested, "need": need, "positive": positive, "cells": len(cells),
-        "cell_share": cell_share, "pooled_sharpe": sharpe, "ci_lo": lo, "ci_hi": hi,
-        "robust": robust, "dsr_p": None if dsr is None else dsr.p_value, "port_ret": real_port, "port_null_pct": port_pct,
-        "null_port_median": float(np.median(null_port)), "null_port_p95": float(np.quantile(null_port, NULL_PCT)),
-        "beats_null": beats, "candidate": robust and beats, "chance_rate": chance_rate,
-        "null_robust_parts_rate": float(np.mean((null_pos >= need) & (null_cell_share >= MIN_CELL_SHARE))),
+        "tested": tested,
+        "need": need,
+        "positive": positive,
+        "cells": len(cells),
+        "cell_share": cell_share,
+        "pooled_sharpe": sharpe,
+        "ci_lo": lo,
+        "ci_hi": hi,
+        "robust": robust,
+        "dsr_p": None if dsr is None else dsr.p_value,
+        "port_ret": real_port,
+        "port_null_pct": port_pct,
+        "null_port_median": float(np.median(null_port)),
+        "null_port_p95": float(np.quantile(null_port, NULL_PCT)),
+        "beats_null": beats,
+        "candidate": robust and beats,
+        "chance_rate": chance_rate,
+        "null_robust_parts_rate": float(
+            np.mean((null_pos >= need) & (null_cell_share >= MIN_CELL_SHARE))
+        ),
     }
 
 
@@ -586,9 +675,13 @@ def seed_of(*parts: str) -> int:
 
 
 def analyze_setting(
-    setting: Mapping[str, Any], rows: Mapping[str, Row], uni: str,
-    coin_daily: Mapping[str, Mapping[int, float]], closes: Mapping[str, Mapping[int, float]],
-    draws: int, fee: float,
+    setting: Mapping[str, Any],
+    rows: Mapping[str, Row],
+    uni: str,
+    coin_daily: Mapping[str, Mapping[int, float]],
+    closes: Mapping[str, Mapping[int, float]],
+    draws: int,
+    fee: float,
 ) -> dict[str, Any]:
     per: list[CoinOOS] = []
     pooled: dict[str, dict[int, float]] = {}
@@ -598,19 +691,28 @@ def analyze_setting(
         if row is None or row.get("error"):
             errors.append(coin)
             continue
-        c = coin_oos(row, uni, coin_daily[coin], closes[coin], draws, fee, seed_of(setting["sid"], coin, uni))
+        c = coin_oos(
+            row, uni, coin_daily[coin], closes[coin], draws, fee, seed_of(setting["sid"], coin, uni)
+        )
         if c is None:
             continue
         per.append(c)
         first = int(row["first_day"])
         segs = oos_segments(uni, row["start"], row["end"])
         pooled[coin] = {
-            first + i: v for i, v in enumerate(row["daily"])
+            first + i: v
+            for i, v in enumerate(row["daily"])
             if any(a <= first + i < b for a, b in segs)
         }
     verdict = judge(per, pooled, seed_of(setting["sid"], uni, "boot")) if per else {}
-    return {"sid": setting["sid"], "label": setting["label"], "uni": uni, "errors": errors,
-            "coins": per, **verdict}
+    return {
+        "sid": setting["sid"],
+        "label": setting["label"],
+        "uni": uni,
+        "errors": errors,
+        "coins": per,
+        **verdict,
+    }
 
 
 def load_results(path: Path) -> dict[str, dict[str, Row]]:
@@ -637,13 +739,20 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     settings = json.loads((out / "universe.json").read_text())
     rows = load_results(out / "results.jsonl")
     closes = load_daily_closes(list(COINS), CATALOG)
-    coin_daily = {c: {d: v / closes[c][d - 1] - 1.0 for d, v in closes[c].items() if d - 1 in closes[c]} for c in COINS}
+    coin_daily = {
+        c: {d: v / closes[c][d - 1] - 1.0 for d, v in closes[c].items() if d - 1 in closes[c]}
+        for c in COINS
+    }
     fee = float(FeeSchedule().taker_rate)
     results: list[dict[str, Any]] = []
     for uni in ("U1", "U2"):
         for s in settings:
             if uni in s["universes"]:
-                results.append(analyze_setting(s, rows.get(s["sid"], {}), uni, coin_daily, closes, args.draws, fee))
+                results.append(
+                    analyze_setting(
+                        s, rows.get(s["sid"], {}), uni, coin_daily, closes, args.draws, fee
+                    )
+                )
                 print(f"{uni} {s['label'][:60]} done", flush=True)
     text, summary = build_report(results, settings, rows, fee, args.draws)
     (out / "report.md").write_text(text)
@@ -652,8 +761,13 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     return 0
 
 
-def build_report(results: Sequence[Mapping[str, Any]], settings: Sequence[Mapping[str, Any]],
-                 rows: Mapping[str, Mapping[str, Row]], fee: float, draws: int) -> tuple[str, dict[str, Any]]:
+def build_report(
+    results: Sequence[Mapping[str, Any]],
+    settings: Sequence[Mapping[str, Any]],
+    rows: Mapping[str, Mapping[str, Row]],
+    fee: float,
+    draws: int,
+) -> tuple[str, dict[str, Any]]:
     lines = ["# TradingView ports -- every setting judged out of sample, without buy-and-hold", ""]
     lines.append(
         f"{len(settings)} distinct settings, {sum(len(v) for v in rows.values())} coin runs, "
@@ -668,13 +782,20 @@ def build_report(results: Sequence[Mapping[str, Any]], settings: Sequence[Mappin
         robust = sum(1 for r in res if r.get("robust"))
         beats = sum(1 for r in res if r.get("beats_null"))
         summary["universes"][uni] = {
-            "settings": len(res), "robust": robust, "beats_null": beats,
-            "candidates": [r["label"] for r in cands], "expected_false_candidates": expected,
-            "expected_robust_parts_by_chance": sum(r.get("null_robust_parts_rate", 0.0) for r in res),
+            "settings": len(res),
+            "robust": robust,
+            "beats_null": beats,
+            "candidates": [r["label"] for r in cands],
+            "expected_false_candidates": expected,
+            "expected_robust_parts_by_chance": sum(
+                r.get("null_robust_parts_rate", 0.0) for r in res
+            ),
         }
         oos = "2023-01-01..2026-01-01 + 2026-08-01..end" if uni == "U1" else "2026-01-01..end"
         lines += [
-            "", f"## {uni} (OOS {oos})", "",
+            "",
+            f"## {uni} (OOS {oos})",
+            "",
             f"- settings {len(res)}; ROBUST {robust}; BEATS-NULL {beats}; candidates {len(cands)}; "
             f"expected false candidates under chance {expected:.2f} (null-estimated, Sharpe-CI part not "
             f"modelled: an upper bound)",
@@ -696,7 +817,11 @@ def build_report(results: Sequence[Mapping[str, Any]], settings: Sequence[Mappin
                 f"{'YES' if r['robust'] else 'no'} | "
                 f"{'YES' if r['beats_null'] else 'no'} |"
             )
-        lines += ["", f"### {uni} per-coin detail (return, trades, Sharpe, PF, max DD, exposure, alpha/yr, beta, null pct, B&H context)", ""]
+        lines += [
+            "",
+            f"### {uni} per-coin detail (return, trades, Sharpe, PF, max DD, exposure, alpha/yr, beta, null pct, B&H context)",
+            "",
+        ]
         for r in res:
             if not r["coins"]:
                 continue
@@ -708,11 +833,25 @@ def build_report(results: Sequence[Mapping[str, Any]], settings: Sequence[Mappin
                     f"null pct {c.null_pct * 100:.1f}, B&H {_pct(c.bh)}"
                 )
         summary["universes"][uni]["rows"] = [
-            {k: v for k, v in r.items() if k != "coins"} | {
-                "per_coin": {c.coin: {"ret": c.ret, "trades": c.trades, "sharpe": c.sharpe, "pf": c.pf,
-                                      "dd": c.dd, "exposure": c.exposure, "alpha": c.alpha, "beta": c.beta,
-                                      "null_pct": c.null_pct, "bh": c.bh, "cells": c.cells}
-                             for c in r["coins"]}}
+            {k: v for k, v in r.items() if k != "coins"}
+            | {
+                "per_coin": {
+                    c.coin: {
+                        "ret": c.ret,
+                        "trades": c.trades,
+                        "sharpe": c.sharpe,
+                        "pf": c.pf,
+                        "dd": c.dd,
+                        "exposure": c.exposure,
+                        "alpha": c.alpha,
+                        "beta": c.beta,
+                        "null_pct": c.null_pct,
+                        "bh": c.bh,
+                        "cells": c.cells,
+                    }
+                    for c in r["coins"]
+                }
+            }
             for r in res
         ]
     return "\n".join(lines) + "\n", summary
@@ -721,23 +860,35 @@ def build_report(results: Sequence[Mapping[str, Any]], settings: Sequence[Mappin
 # --------------------------------------------------------------------------- forward (FWD)
 
 
-def forward_coin(row: Row, coin_daily: Mapping[int, float], closes: Mapping[int, float],
-                 draws: int, fee: float) -> dict[str, Any] | None:
+def forward_coin(
+    row: Row, coin_daily: Mapping[int, float], closes: Mapping[int, float], draws: int, fee: float
+) -> dict[str, Any] | None:
     """One coin's FWD numbers; ``carried`` = a position already open at FORWARD_FROM.
 
     The null only re-times trades that enter inside FWD, so a carried position is in the real
     return but not in the null.
     """
-    c = coin_oos(row, "FWD", coin_daily, closes, draws, fee, seed_of(row["sid"], row["coin"], "FWD"))
+    c = coin_oos(
+        row, "FWD", coin_daily, closes, draws, fee, seed_of(row["sid"], row["coin"], "FWD")
+    )
     if c is None:
         return None
     a_ns = day_of(FORWARD_FROM) * DAY_NS
     carried = any(
-        p["ts_open"] < a_ns and (p["ts_close"] is None or p["ts_close"] > a_ns) for p in row["positions"]
+        p["ts_open"] < a_ns and (p["ts_close"] is None or p["ts_close"] > a_ns)
+        for p in row["positions"]
     )
-    return {"ret": c.ret, "trades": c.trades, "dd": c.dd, "null_pct": c.null_pct, "days": c.days,
-            "exposure": c.exposure, "carried": carried, "bh": c.bh,
-            "window": f"{FORWARD_FROM}..{row['end']}"}
+    return {
+        "ret": c.ret,
+        "trades": c.trades,
+        "dd": c.dd,
+        "null_pct": c.null_pct,
+        "days": c.days,
+        "exposure": c.exposure,
+        "carried": carried,
+        "bh": c.bh,
+        "window": f"{FORWARD_FROM}..{row['end']}",
+    }
 
 
 def cmd_forward(args: argparse.Namespace) -> int:
@@ -750,7 +901,10 @@ def cmd_forward(args: argparse.Namespace) -> int:
     labels = {s["sid"]: s["label"] for s in json.loads((out / "universe.json").read_text())}
     rows = load_results(out / "results.jsonl")
     closes = load_daily_closes(list(COINS), CATALOG)
-    coin_daily = {c: {d: v / closes[c][d - 1] - 1.0 for d, v in closes[c].items() if d - 1 in closes[c]} for c in COINS}
+    coin_daily = {
+        c: {d: v / closes[c][d - 1] - 1.0 for d, v in closes[c].items() if d - 1 in closes[c]}
+        for c in COINS
+    }
     fee = float(FeeSchedule().taker_rate)
     table = []
     for sid in sorted(rows, key=lambda s: labels[s]):
@@ -764,17 +918,30 @@ def cmd_forward(args: argparse.Namespace) -> int:
             if fc is not None:
                 per[coin] = fc
         rets = [v["ret"] for v in per.values() if "ret" in v]
-        table.append({"sid": sid, "label": labels[sid], "per_coin": per,
-                      "mean_ret": statistics.fmean(rets) if rets else None,
-                      "coins_pos": f"{sum(r > 0 for r in rets)}/{len(rets)}"})
-    lines = [f"# TradingView ports -- forward window from {FORWARD_FROM} (anecdotal, no bar)", "",
-             f"{len(table)} settings. Per coin: return, trades entered, max DD, null pct ({args.draws} "
-             f"draws; * = position open at {FORWARD_FROM}, not in the null).", "",
-             "| setting | coins>0 | mean | per coin |", "|---|---|---|---|"]
+        table.append(
+            {
+                "sid": sid,
+                "label": labels[sid],
+                "per_coin": per,
+                "mean_ret": statistics.fmean(rets) if rets else None,
+                "coins_pos": f"{sum(r > 0 for r in rets)}/{len(rets)}",
+            }
+        )
+    lines = [
+        f"# TradingView ports -- forward window from {FORWARD_FROM} (anecdotal, no bar)",
+        "",
+        f"{len(table)} settings. Per coin: return, trades entered, max DD, null pct ({args.draws} "
+        f"draws; * = position open at {FORWARD_FROM}, not in the null).",
+        "",
+        "| setting | coins>0 | mean | per coin |",
+        "|---|---|---|---|",
+    ]
     for t in sorted(table, key=lambda t: -(t["mean_ret"] or -9.0)):
         cells = " ".join(
             f"{c[:-4]} {_pct(v['ret'])}/{v['trades']}tr/DD {_pct(v['dd'])}/{v['null_pct'] * 100:.0f}"
-            f"{'*' if v['carried'] else ''}" if "ret" in v else f"{c[:-4]} ERR"
+            f"{'*' if v['carried'] else ''}"
+            if "ret" in v
+            else f"{c[:-4]} ERR"
             for c, v in t["per_coin"].items()
         )
         lines.append(f"| {t['label']} | {t['coins_pos']} | {_pct(t['mean_ret'])} | {cells} |")
@@ -786,7 +953,9 @@ def cmd_forward(args: argparse.Namespace) -> int:
     return 0
 
 
-def append_forward(path: Path, table: Sequence[Mapping[str, Any]], scored: str, source: str) -> None:
+def append_forward(
+    path: Path, table: Sequence[Mapping[str, Any]], scored: str, source: str
+) -> None:
     """Append a forward[] row to every watchlist pick/candidate whose setting was scored.
 
     A row for the same window replaces the old one (re-runs are idempotent).
@@ -799,11 +968,24 @@ def append_forward(path: Path, table: Sequence[Mapping[str, Any]], scored: str, 
         if t is None:
             return
         windows = {v["window"] for v in t["per_coin"].values() if "window" in v}
-        fwd = {"scored": scored, "windows": sorted(windows), "source": source, "sid": sid,
-               "anecdotal": True, "coins_pos": t["coins_pos"], "mean_ret": t["mean_ret"],
-               "per_coin": {c: {k: v[k] for k in ("ret", "trades", "dd", "null_pct", "carried")}
-                            if "ret" in v else v for c, v in t["per_coin"].items()}}
-        entry["forward"] = [f for f in entry["forward"] if f.get("windows") != fwd["windows"]] + [fwd]
+        fwd = {
+            "scored": scored,
+            "windows": sorted(windows),
+            "source": source,
+            "sid": sid,
+            "anecdotal": True,
+            "coins_pos": t["coins_pos"],
+            "mean_ret": t["mean_ret"],
+            "per_coin": {
+                c: {k: v[k] for k in ("ret", "trades", "dd", "null_pct", "carried")}
+                if "ret" in v
+                else v
+                for c, v in t["per_coin"].items()
+            },
+        }
+        entry["forward"] = [f for f in entry["forward"] if f.get("windows") != fwd["windows"]] + [
+            fwd
+        ]
 
     for pick in watch["oos_analysis_20261110"]["picks"]:
         add(pick, pick["sid"])
@@ -855,9 +1037,21 @@ def cmd_neighbours(args: argparse.Namespace) -> int:
         for c in COINS:
             key = f"nb|{args.sid}|{nsid}|{c}"
             if key not in present:
-                tasks.append({"kind": "nb", "key": key, "sid": nsid, "port": s["port"], "tf": s["tf"],
-                              "values": vals, "coin": c, "start": spans[c][0], "end": spans[c][1],
-                              "parent": args.sid, "nb": label})
+                tasks.append(
+                    {
+                        "kind": "nb",
+                        "key": key,
+                        "sid": nsid,
+                        "port": s["port"],
+                        "tf": s["tf"],
+                        "values": vals,
+                        "coin": c,
+                        "start": spans[c][0],
+                        "end": spans[c][1],
+                        "parent": args.sid,
+                        "nb": label,
+                    }
+                )
     run_tasks(tasks, path, args.parallel)
     # summary per neighbour: OOS return per coin for each universe of the parent
     by: dict[str, dict[str, Row]] = {}
@@ -873,12 +1067,20 @@ def cmd_neighbours(args: argparse.Namespace) -> int:
                     continue
                 first = int(nr["first_day"])
                 segs = oos_segments(uni, nr["start"], nr["end"])
-                rets.append(compound(v for i, v in enumerate(nr["daily"]) if any(a <= first + i < b for a, b in segs)))
+                rets.append(
+                    compound(
+                        v
+                        for i, v in enumerate(nr["daily"])
+                        if any(a <= first + i < b for a, b in segs)
+                    )
+                )
             pos = sum(1 for x in rets if x > 0)
             need = math.ceil(MIN_COIN_SHARE * len(rets) - 1e-9)
             good += pos >= need
-            print(f"{uni} neighbour {nsid} {json.dumps(next(iter(coins.values()))['values'])}: "
-                  f"coins>0 {pos}/{len(rets)} mean {_pct(statistics.fmean(rets) if rets else None)}")
+            print(
+                f"{uni} neighbour {nsid} {json.dumps(next(iter(coins.values()))['values'])}: "
+                f"coins>0 {pos}/{len(rets)} mean {_pct(statistics.fmean(rets) if rets else None)}"
+            )
         print(f"{uni}: {good}/{len(by)} neighbours positive on >= 75% of coins")
     return 0
 
@@ -897,8 +1099,13 @@ def _validation_job(task: dict[str, Any]) -> dict[str, Any]:
     try:
         dsl = dict(load_port(HERE / task["port"]).render(task["values"], timeframe=task["tf"]))
         dsl["name"] = f"tvp_oos_{task['sid']}"
-        params = {"liquidation_mode": "isolated", "leverage": 1, "max_position_pct": 1.0,
-                  "risk_per_trade": 0.5, "max_margin_pct": 1.0}
+        params = {
+            "liquidation_mode": "isolated",
+            "leverage": 1,
+            "max_position_pct": 1.0,
+            "risk_per_trade": 0.5,
+            "max_margin_pct": 1.0,
+        }
         db = tmp / "v.db"
         src = sqlite3.connect("file:data/state/vibe_quant.db?mode=ro", uri=True)
         dst = sqlite3.connect(db)
@@ -906,12 +1113,22 @@ def _validation_job(task: dict[str, Any]) -> dict[str, Any]:
         dst.close()
         src.close()
         con = sqlite3.connect(db)
-        sid = con.execute("INSERT INTO strategies(name, dsl_config) VALUES (?, ?)",
-                          (f"{dsl['name']}_{task['coin']}_{task['start']}", json.dumps(dsl))).lastrowid
+        sid = con.execute(
+            "INSERT INTO strategies(name, dsl_config) VALUES (?, ?)",
+            (f"{dsl['name']}_{task['coin']}_{task['start']}", json.dumps(dsl)),
+        ).lastrowid
         rid = con.execute(
             "INSERT INTO backtest_runs(strategy_id, run_mode, symbols, timeframe, start_date, end_date, parameters) "
             "VALUES (?,?,?,?,?,?,?)",
-            (sid, "validation", json.dumps([task["coin"]]), task["tf"], task["start"], task["end"], json.dumps(params)),
+            (
+                sid,
+                "validation",
+                json.dumps([task["coin"]]),
+                task["tf"],
+                task["start"],
+                task["end"],
+                json.dumps(params),
+            ),
         ).lastrowid
         con.commit()
         con.close()
@@ -921,8 +1138,15 @@ def _validation_job(task: dict[str, Any]) -> dict[str, Any]:
             m = runner.run(rid)
         finally:
             runner.close()
-        row.update({"ret": m.total_return, "trades": m.total_trades, "sharpe": m.sharpe_ratio,
-                    "dd": m.max_drawdown, "error": None})
+        row.update(
+            {
+                "ret": m.total_return,
+                "trades": m.total_trades,
+                "sharpe": m.sharpe_ratio,
+                "dd": m.max_drawdown,
+                "error": None,
+            }
+        )
     except Exception as exc:
         row["error"] = f"{type(exc).__name__}: {exc}"[:400]
     finally:
@@ -943,8 +1167,19 @@ def cmd_validate(args: argparse.Namespace) -> int:
             for a, b in oos_segments(uni, *spans[c]):
                 key = f"val|{s['sid']}|{c}|{iso_of(a)}"
                 if key not in present:
-                    tasks.append({"key": key, "sid": s["sid"], "port": s["port"], "tf": s["tf"],
-                                  "values": s["values"], "coin": c, "start": iso_of(a), "end": iso_of(b), "uni": uni})
+                    tasks.append(
+                        {
+                            "key": key,
+                            "sid": s["sid"],
+                            "port": s["port"],
+                            "tf": s["tf"],
+                            "values": s["values"],
+                            "coin": c,
+                            "start": iso_of(a),
+                            "end": iso_of(b),
+                            "uni": uni,
+                        }
+                    )
     import multiprocessing
 
     with multiprocessing.get_context("spawn").Pool(processes=max(1, args.parallel)) as pool:
@@ -955,7 +1190,9 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawTextHelpFormatter
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
     run = sub.add_parser("run")
     run.add_argument("--out", required=True)

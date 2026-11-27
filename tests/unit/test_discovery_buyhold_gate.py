@@ -56,8 +56,13 @@ _DAY = buyhold.DAY_NS
 # ---------------------------------------------------------------------------
 
 
-def _gene(ind: str, params: dict[str, float], cond: ConditionType = ConditionType.LT,
-          thr: float = 30.0, sub: str | None = None) -> StrategyGene:
+def _gene(
+    ind: str,
+    params: dict[str, float],
+    cond: ConditionType = ConditionType.LT,
+    thr: float = 30.0,
+    sub: str | None = None,
+) -> StrategyGene:
     return StrategyGene(ind, params, cond, thr, sub)
 
 
@@ -72,17 +77,29 @@ def _chrom(**kw: Any) -> StrategyChromosome:
     base.update(kw)
     # inydc: a BOTH chromosome carries its own short-side genes
     if base["direction"] == Direction.BOTH:
-        base.setdefault("short_entry_genes", [_gene("RSI", {"period": 14.0}, ConditionType.GT, 70.0)])
-        base.setdefault("short_exit_genes", [_gene("RSI", {"period": 14.0}, ConditionType.LT, 30.0)])
+        base.setdefault(
+            "short_entry_genes", [_gene("RSI", {"period": 14.0}, ConditionType.GT, 70.0)]
+        )
+        base.setdefault(
+            "short_exit_genes", [_gene("RSI", {"period": 14.0}, ConditionType.LT, 30.0)]
+        )
     return StrategyChromosome(**base)
 
 
 def _fit(**kw: Any) -> FitnessResult:
     base: dict[str, Any] = {
-        "sharpe_ratio": 2.0, "max_drawdown": 0.1, "profit_factor": 1.8,
-        "total_trades": 150, "total_return": 0.4, "complexity_penalty": 0.0,
-        "overtrade_penalty": 0.0, "sl_tp_penalty": 0.0, "raw_score": 0.6,
-        "adjusted_score": 0.6, "passed_filters": True, "filter_results": {},
+        "sharpe_ratio": 2.0,
+        "max_drawdown": 0.1,
+        "profit_factor": 1.8,
+        "total_trades": 150,
+        "total_return": 0.4,
+        "complexity_penalty": 0.0,
+        "overtrade_penalty": 0.0,
+        "sl_tp_penalty": 0.0,
+        "raw_score": 0.6,
+        "adjusted_score": 0.6,
+        "passed_filters": True,
+        "filter_results": {},
     }
     base.update(kw)
     return FitnessResult(**base)
@@ -90,10 +107,17 @@ def _fit(**kw: Any) -> FitnessResult:
 
 def _cfg(**kw: Any) -> DiscoveryConfig:
     base: dict[str, Any] = {
-        "population_size": 6, "max_generations": 2, "elite_count": 1, "top_k": 5,
-        "min_trades": 50, "max_workers": None, "timeframe": "1d",
-        "start_date": "2024-01-01", "end_date": "2025-01-01",
-        "require_bootstrap_ci": False, "require_dsr": False,
+        "population_size": 6,
+        "max_generations": 2,
+        "elite_count": 1,
+        "top_k": 5,
+        "min_trades": 50,
+        "max_workers": None,
+        "timeframe": "1d",
+        "start_date": "2024-01-01",
+        "end_date": "2025-01-01",
+        "require_bootstrap_ci": False,
+        "require_dsr": False,
     }
     base.update(kw)
     return DiscoveryConfig(**base)
@@ -105,11 +129,17 @@ def _nt(symbols: Sequence[str], agg: str = "portfolio") -> NTBacktestFn:
 
 def _gates(pipe: DiscoveryPipeline, top: list[tuple[StrategyChromosome, FitnessResult]]) -> Any:
     return pipe._apply_validation_gates(
-        top, generations=[], total_evaluated=10, converged=False, convergence_gen=None,
+        top,
+        generations=[],
+        total_evaluated=10,
+        converged=False,
+        convergence_gen=None,
     )
 
 
-def _flat_trending_prices(symbols: Sequence[str], first: int, n: int, seed: int) -> dict[str, list[float]]:
+def _flat_trending_prices(
+    symbols: Sequence[str], first: int, n: int, seed: int
+) -> dict[str, list[float]]:
     """Strong positive-drift closes -> a positive buy-and-hold bar."""
     rng = np.random.default_rng(seed)
     out: dict[str, list[float]] = {}
@@ -119,12 +149,12 @@ def _flat_trending_prices(symbols: Sequence[str], first: int, n: int, seed: int)
     return out
 
 
-def _drift_closes(symbols: Sequence[str], mu: float, n: int = 60, seed: int = 7) -> dict[str, dict[int, float]]:
+def _drift_closes(
+    symbols: Sequence[str], mu: float, n: int = 60, seed: int = 7
+) -> dict[str, dict[int, float]]:
     """Daily closes with drift ``mu`` (positive -> B&H Sharpe > 0, negative -> < 0)."""
     rng = np.random.default_rng(seed)
-    prices = {
-        s: list(100.0 * np.cumprod(1.0 + rng.normal(mu, 0.005, size=n + 1))) for s in symbols
-    }
+    prices = {s: list(100.0 * np.cumprod(1.0 + rng.normal(mu, 0.005, size=n + 1))) for s in symbols}
     return _closes_from(prices, _FIX_BASE)
 
 
@@ -213,13 +243,20 @@ def _beta_fixture() -> tuple[
         trades = _fix_sim(p)
         bars = BarSeries(
             ts=np.array([_fix_day(i) for i in range(_FIX_N)], dtype=np.int64),
-            open=p[1:].copy(), high=p[1:].copy(), low=p[1:].copy(), close=p[1:].copy(),
+            open=p[1:].copy(),
+            high=p[1:].copy(),
+            low=p[1:].copy(),
+            close=p[1:].copy(),
         )
         events = []
         real_events = []
         for ebar, epx, xbar, xpx, q in trades:
-            events.append(LedgerEvent(ts=_fix_day(ebar), qty=q, price=epx, cash=-_FIX_FEE * q * epx))
-            events.append(LedgerEvent(ts=_fix_day(xbar), qty=-q, price=xpx, cash=-_FIX_FEE * q * xpx))
+            events.append(
+                LedgerEvent(ts=_fix_day(ebar), qty=q, price=epx, cash=-_FIX_FEE * q * epx)
+            )
+            events.append(
+                LedgerEvent(ts=_fix_day(xbar), qty=-q, price=xpx, cash=-_FIX_FEE * q * xpx)
+            )
             real_events.append((_fix_day(ebar), -_FIX_FEE * q * epx))
             real_events.append((_fix_day(xbar), q * (xpx - epx) - _FIX_FEE * q * xpx))
         pc, pm = pnl_path(bars, events)
@@ -281,8 +318,9 @@ def test_worst_mode_beta_leg_rejected_despite_pooled_pass() -> None:
     leg_b = pool
     fit = _fit(mtm_daily_returns=pool, symbol_mtm_daily={"AAAUSDT": leg_a, "BBBUSDT": leg_b})
     cfg = _cfg(symbol_agg="worst")
-    pipe = DiscoveryPipeline(cfg, backtest_fn=_nt(symbols, "worst"),
-                             buy_hold_closes_fn=lambda syms: closes)
+    pipe = DiscoveryPipeline(
+        cfg, backtest_fn=_nt(symbols, "worst"), buy_hold_closes_fn=lambda syms: closes
+    )
     res = _gates(pipe, [(_chrom(), fit)])
 
     assert res.top_strategies == []
@@ -295,9 +333,14 @@ def test_worst_mode_beta_leg_rejected_despite_pooled_pass() -> None:
     assert "symbols" in rej["buy_hold"]  # type: ignore[operator]
 
 
-def _worst_gate(fit: FitnessResult, symbols: Sequence[str], closes: dict[str, dict[int, float]]) -> Any:
-    pipe = DiscoveryPipeline(_cfg(symbol_agg="worst"), backtest_fn=_nt(symbols, "worst"),
-                             buy_hold_closes_fn=lambda syms: closes)
+def _worst_gate(
+    fit: FitnessResult, symbols: Sequence[str], closes: dict[str, dict[int, float]]
+) -> Any:
+    pipe = DiscoveryPipeline(
+        _cfg(symbol_agg="worst"),
+        backtest_fn=_nt(symbols, "worst"),
+        buy_hold_closes_fn=lambda syms: closes,
+    )
     return _gates(pipe, [(_chrom(), fit)])
 
 
@@ -307,8 +350,9 @@ def test_worst_mode_missing_symbol_map_rejects_despite_pooled_pass() -> None:
     pool = _dr(_FIX_BASE + 1, [0.030 + 0.001 * (i % 2) for i in range(60)])  # Sharpe ~ 30
 
     # Control: same pooled series with a passing leg for every symbol survives.
-    ok = _worst_gate(_fit(mtm_daily_returns=pool, symbol_mtm_daily={s: pool for s in symbols}),
-                     symbols, closes)
+    ok = _worst_gate(
+        _fit(mtm_daily_returns=pool, symbol_mtm_daily={s: pool for s in symbols}), symbols, closes
+    )
     assert len(ok.top_strategies) == 1
 
     res = _worst_gate(_fit(mtm_daily_returns=pool, symbol_mtm_daily=None), symbols, closes)
@@ -326,8 +370,9 @@ def test_worst_mode_missing_one_leg_rejects_despite_pooled_pass() -> None:
     closes = _closes_from(_flat_trending_prices(symbols, _FIX_BASE, 60, seed=7), _FIX_BASE)
     pool = _dr(_FIX_BASE + 1, [0.030 + 0.001 * (i % 2) for i in range(60)])
 
-    res = _worst_gate(_fit(mtm_daily_returns=pool, symbol_mtm_daily={"BBBUSDT": pool}),
-                      symbols, closes)
+    res = _worst_gate(
+        _fit(mtm_daily_returns=pool, symbol_mtm_daily={"BBBUSDT": pool}), symbols, closes
+    )
     assert res.top_strategies == []
     (rej,) = res.guardrail_rejections
     assert rej["reasons"] == ["Buy-hold: AAAUSDT has no daily series"]  # type: ignore[comparison-overlap]
@@ -346,7 +391,8 @@ _STRONG = [0.030 + 0.001 * (i % 2) for i in range(60)]  # Sharpe >> any bar
 def _direction_gate(direction: Direction, mu: float, values: Sequence[float]) -> Any:
     closes = _drift_closes(["AAAUSDT"], mu)
     pipe = DiscoveryPipeline(
-        _cfg(direction=direction.value), backtest_fn=_nt(["AAAUSDT"]),
+        _cfg(direction=direction.value),
+        backtest_fn=_nt(["AAAUSDT"]),
         buy_hold_closes_fn=lambda syms: closes,
     )
     chrom = _chrom(direction=direction)
@@ -430,7 +476,9 @@ def test_closes_load_failure_rejects_all() -> None:
     assert len(res.guardrail_rejections) == 2
     for rej in res.guardrail_rejections:
         assert rej["stage"] == "buy_hold"
-        assert rej["reasons"][0].startswith("Buy-hold: benchmark closes unavailable: corrupt catalog")  # type: ignore[index]
+        assert rej["reasons"][0].startswith(
+            "Buy-hold: benchmark closes unavailable: corrupt catalog"
+        )  # type: ignore[index]
 
 
 def test_non_nt_fn_records_not_enforced() -> None:
@@ -460,8 +508,10 @@ def test_buy_hold_runs_before_cross_window() -> None:
     flat = _dr(first, [0.001 * (1 if i % 2 else -1) for i in range(60)])
     closes = _closes_from(_flat_trending_prices(_FIX_SYMS, _FIX_BASE, 60, seed=7), _FIX_BASE)
     pipe = DiscoveryPipeline(
-        _cfg(cross_window_months=[1]), backtest_fn=_nt(_FIX_SYMS),
-        backtest_fn_factory=factory, buy_hold_closes_fn=lambda syms: closes,
+        _cfg(cross_window_months=[1]),
+        backtest_fn=_nt(_FIX_SYMS),
+        backtest_fn_factory=factory,
+        buy_hold_closes_fn=lambda syms: closes,
     )
     res = _gates(pipe, [(_chrom(), _fit(mtm_daily_returns=flat))])
 
@@ -475,7 +525,8 @@ def test_no_buy_hold_gate_flag_disables() -> None:
     flat = _dr(first, [0.001 * (1 if i % 2 else -1) for i in range(60)])
     chrom, fit = _chrom(), _fit(mtm_daily_returns=flat)
     pipe = DiscoveryPipeline(
-        _cfg(require_buy_hold=False), backtest_fn=_nt(_FIX_SYMS),
+        _cfg(require_buy_hold=False),
+        backtest_fn=_nt(_FIX_SYMS),
         buy_hold_closes_fn=lambda syms: {},
     )
     res = _gates(pipe, [(chrom, fit)])
@@ -493,11 +544,15 @@ def test_daily_returns_collected_when_dsr_off() -> None:
     assert pipe._dsr_requires_returns is False
 
     # both off -> nothing collected
-    pipe2 = DiscoveryPipeline(_cfg(require_dsr=False, require_buy_hold=False), backtest_fn=_nt(["A"]))
+    pipe2 = DiscoveryPipeline(
+        _cfg(require_dsr=False, require_buy_hold=False), backtest_fn=_nt(["A"])
+    )
     assert pipe2._backtest_fn.collect_daily_returns is False
 
     # dsr on -> collect + DSR flag
-    pipe3 = DiscoveryPipeline(_cfg(require_dsr=True, require_buy_hold=False), backtest_fn=_nt(["A"]))
+    pipe3 = DiscoveryPipeline(
+        _cfg(require_dsr=True, require_buy_hold=False), backtest_fn=_nt(["A"])
+    )
     assert pipe3._backtest_fn.collect_daily_returns is True
     assert pipe3._dsr_requires_returns is True
 
@@ -527,14 +582,31 @@ def test_champion_entry_and_notes_have_buy_hold() -> None:
     assert record["series"] == "mtm"
 
     notes = provenance_notes(
-        res, use_mock=False, eval_windows_count=1, eval_windows=None, symbol_agg="portfolio",
-        split_ratio=0.0, direction=None, cross_window_months=[], cross_window_min_sharpe=0.5,
-        wfa_oos_step_days=0, wfa_min_consistency=0.75, num_seeds=1, seed=42,
-        bootstrap_min_sharpe=0.0, holdout_min_sharpe=0.0, symbols=["AAAUSDT"],
+        res,
+        use_mock=False,
+        eval_windows_count=1,
+        eval_windows=None,
+        symbol_agg="portfolio",
+        split_ratio=0.0,
+        direction=None,
+        cross_window_months=[],
+        cross_window_min_sharpe=0.5,
+        wfa_oos_step_days=0,
+        wfa_min_consistency=0.75,
+        num_seeds=1,
+        seed=42,
+        bootstrap_min_sharpe=0.0,
+        holdout_min_sharpe=0.0,
+        symbols=["AAAUSDT"],
     )
     gate = notes["buy_hold_gate"]
     assert set(gate) == {  # type: ignore[arg-type]
-        "enforced", "benchmark", "candidate_series", "symbols", "ann_factor", "per_symbol",
+        "enforced",
+        "benchmark",
+        "candidate_series",
+        "symbols",
+        "ann_factor",
+        "per_symbol",
     }
     assert gate["enforced"] is True  # type: ignore[index]
     assert gate["benchmark"] == "equal_weight_daily_rebalanced_1d_close"  # type: ignore[index]
@@ -551,10 +623,24 @@ def test_multi_seed_merges_records(monkeypatch: MonkeyPatch, tmp_path: Any) -> N
     rec_a = {chrom_a.uid: {"series": "mtm", "passed": True}}
     rec_b = {chrom_b.uid: {"series": "mtm", "passed": False}}
     canned = [
-        DiscoveryResult([], [(chrom_a, fit_a)], 1, False, None, buy_hold_records=rec_a,
-                        buy_hold_gate={"enforced": True}),
-        DiscoveryResult([], [(chrom_b, fit_b)], 1, False, None, buy_hold_records=rec_b,
-                        buy_hold_gate={"enforced": True}),
+        DiscoveryResult(
+            [],
+            [(chrom_a, fit_a)],
+            1,
+            False,
+            None,
+            buy_hold_records=rec_a,
+            buy_hold_gate={"enforced": True},
+        ),
+        DiscoveryResult(
+            [],
+            [(chrom_b, fit_b)],
+            1,
+            False,
+            None,
+            buy_hold_records=rec_b,
+            buy_hold_gate={"enforced": True},
+        ),
     ]
     monkeypatch.setattr(DiscoveryPipeline, "run", lambda self: canned.pop(0))
 
@@ -572,7 +658,8 @@ def test_rejected_buy_hold_candidate_keeps_dsl() -> None:
     closes = _closes_from(_flat_trending_prices(["AAAUSDT"], _FIX_BASE, 60, seed=7), _FIX_BASE)
     chrom = _chrom(stop_loss_pct=3.5)
     pipe = DiscoveryPipeline(
-        _cfg(timeframe="1h"), backtest_fn=_nt(["AAAUSDT"], "portfolio"),
+        _cfg(timeframe="1h"),
+        backtest_fn=_nt(["AAAUSDT"], "portfolio"),
         buy_hold_closes_fn=lambda syms: closes,
     )
     res = _gates(pipe, [(chrom, _fit(mtm_daily_returns=flat))])
@@ -606,8 +693,9 @@ def _run_main(
 
     db = tmp_path / "s.db"
     sm = StateManager(db)
-    run_id = sm.create_backtest_run(None, "discovery", ["BTCUSDT"], "1d",
-                                    "2024-01-01", "2024-07-01", {})
+    run_id = sm.create_backtest_run(
+        None, "discovery", ["BTCUSDT"], "1d", "2024-01-01", "2024-07-01", {}
+    )
     sm.close()
 
     configs: list[DiscoveryConfig] = []
@@ -619,12 +707,35 @@ def _run_main(
 
     monkeypatch.setattr(DiscoveryPipeline, "__init__", init)
     monkeypatch.setattr(DiscoveryPipeline, "run", lambda self: canned)
-    monkeypatch.setattr("sys.argv", [
-        "prog", "--run-id", str(run_id), "--population-size", "6", "--max-generations", "2",
-        "--elite-count", "1", "--max-workers", "-1", "--symbols", "BTCUSDT", "--timeframe", "1d",
-        "--start-date", "2024-01-01", "--end-date", "2024-07-01", "--no-dsr", "--db", str(db),
-        "--mock", *extra,
-    ])
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prog",
+            "--run-id",
+            str(run_id),
+            "--population-size",
+            "6",
+            "--max-generations",
+            "2",
+            "--elite-count",
+            "1",
+            "--max-workers",
+            "-1",
+            "--symbols",
+            "BTCUSDT",
+            "--timeframe",
+            "1d",
+            "--start-date",
+            "2024-01-01",
+            "--end-date",
+            "2024-07-01",
+            "--no-dsr",
+            "--db",
+            str(db),
+            "--mock",
+            *extra,
+        ],
+    )
     assert cli.main() == 0
     sm = StateManager(db)
     row = sm.get_backtest_result(run_id)
@@ -638,11 +749,21 @@ def test_main_persists_champion_buy_hold_record_and_gate_notes(
 ) -> None:
     kept, dropped = _chrom(stop_loss_pct=1.0), _chrom(stop_loss_pct=9.0)
     record: dict[str, object] = {
-        "series": "mtm", "sharpe_daily": 1.5, "bh_sharpe_daily": 0.5, "bar_daily": 0.5,
-        "direction": "long", "observations": 60, "first_day": _FIX_BASE + 1, "passed": True,
+        "series": "mtm",
+        "sharpe_daily": 1.5,
+        "bh_sharpe_daily": 0.5,
+        "bar_daily": 0.5,
+        "direction": "long",
+        "observations": 60,
+        "first_day": _FIX_BASE + 1,
+        "passed": True,
     }
     canned = DiscoveryResult(
-        [], [(kept, _fit())], 1, False, None,
+        [],
+        [(kept, _fit())],
+        1,
+        False,
+        None,
         buy_hold_records={kept.uid: record, dropped.uid: {"series": "mtm", "passed": False}},
         buy_hold_gate={"enforced": True},
     )

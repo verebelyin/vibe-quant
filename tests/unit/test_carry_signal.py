@@ -209,9 +209,7 @@ def test_settlements_hours_default_and_mismatch() -> None:
 
     assert default.hours is None
     assert trailing_funding(default, _D) == _ON_GRID_SUM
-    assert (
-        trailing_funding(Settlements(tuple(grid), (0.0001,) * 21, (8,) * 21), _D) == _ON_GRID_SUM
-    )
+    assert trailing_funding(Settlements(tuple(grid), (0.0001,) * 21, (8,) * 21), _D) == _ON_GRID_SUM
     with pytest.raises(ValueError, match=r"^Settlements\.hours has 3 entries for 4 settlements$"):
         Settlements(tuple(grid[:4]), (0.0001,) * 4, (2, 2, 2))
 
@@ -434,7 +432,9 @@ def test_trailing_vol_numbers() -> None:
     """R16: closes 100, 110, 99, 99 (L=3) -> sigma 0.10000000000000003 (chronological fsum)."""
     assert trailing_vol(_closes(100.0, 110.0, 99.0, 99.0), _D, 3) == 0.10000000000000003
     # an unrelated input: two alternating returns, literal value
-    assert trailing_vol(_closes(50.0, 55.0, 50.0), _D, 2) == 0.13499311277197734  # statistics.stdev agrees
+    assert (
+        trailing_vol(_closes(50.0, 55.0, 50.0), _D, 2) == 0.13499311277197734
+    )  # statistics.stdev agrees
     # extra older closes beyond the lookback are never read
     assert trailing_vol({**_closes(100.0, 110.0, 99.0, 99.0), _B0 - 9 * _DAY_NS: 1.0}, _D, 3) == (
         0.10000000000000003
@@ -511,7 +511,10 @@ def test_trailing_vol_boundary_and_overflow() -> None:
 @pytest.mark.parametrize("lookback", [3, 12])
 def test_trailing_vol_never_overflows_when_max_over_l_rounds_up(lookback: int) -> None:
     """R18a: float max / L rounds up for L = 3, 12; L squares just under it must not overflow fsum."""
-    closes = {_B0 - j * _DAY_NS: (1.0 if j % 2 == 0 else 7.741001517595157e153) for j in range(lookback + 1)}
+    closes = {
+        _B0 - j * _DAY_NS: (1.0 if j % 2 == 0 else 7.741001517595157e153)
+        for j in range(lookback + 1)
+    }
     vol = trailing_vol(closes, _D, lookback)  # must not raise OverflowError
     assert vol is None or math.isfinite(vol)
 

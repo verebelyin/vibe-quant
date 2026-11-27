@@ -173,9 +173,7 @@ def test_second_symbol_missing_bars_fails_before_any_evaluation(
     fn = _RecordingBacktestFn(symbols=["BTCUSDT", "ETHUSDT"])
     holdout_fn = _holdout_fn(symbols=["BTCUSDT", "ETHUSDT"])
 
-    def _second_symbol_missing(
-        catalog_path: str, bar_type: str, start: str, end: str
-    ) -> None:
+    def _second_symbol_missing(catalog_path: str, bar_type: str, start: str, end: str) -> None:
         if bar_type.startswith("ETHUSDT"):
             raise MissingBarDataError(f"No catalog bars for {bar_type} in window {start}..{end}")
 
@@ -199,16 +197,12 @@ def test_eval_subwindow_missing_bars_fails_before_any_evaluation(
     holdout_fn = _holdout_fn()
     bars_lo, bars_hi = "2024-02-20", _TRAIN[1]  # last sub-window only
 
-    def _bars_only_last_part(
-        catalog_path: str, bar_type: str, start: str, end: str
-    ) -> None:
+    def _bars_only_last_part(catalog_path: str, bar_type: str, start: str, end: str) -> None:
         if end < bars_lo or start > bars_hi:
             raise MissingBarDataError(f"No catalog bars for {bar_type} in window {start}..{end}")
 
     monkeypatch.setattr(nt_runner, "require_bars_in_window", _bars_only_last_part)
-    pipe = DiscoveryPipeline(
-        _cfg(eval_windows=3), fn, holdout_backtest_fn=holdout_fn
-    )
+    pipe = DiscoveryPipeline(_cfg(eval_windows=3), fn, holdout_backtest_fn=holdout_fn)
     with pytest.raises(MissingBarDataError, match=windows[0][0]):
         pipe.run()
     assert fn.calls == 0

@@ -47,7 +47,10 @@ COINS = preset_grid.COINS
 TFS = ("1m", "5m", "15m", "1h", "4h", "1d")
 TF_MIN = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
 H1_START, H2_START = "2026-01-01", "2026-07-01"
-HALVES: dict[str, tuple[str, str | None]] = {"H1": (H1_START, H2_START), "H2": (H2_START, None)}  # None = data end
+HALVES: dict[str, tuple[str, str | None]] = {
+    "H1": (H1_START, H2_START),
+    "H2": (H2_START, None),
+}  # None = data end
 MIN_WARM_DAYS = 2
 
 # Settings come from DIR/settings.json (private, gitignored): {name: {"port": folder, "values": {...},
@@ -101,7 +104,21 @@ def _genome(port: Any, values: Mapping[str, Any]) -> tuple[Any, bool]:
 
 def run_task(task: dict[str, Any]) -> dict[str, Any]:
     """One backtest; never raises."""
-    row: dict[str, Any] = {k: task[k] for k in ("key", "strategy", "variant", "tf", "coin", "half", "start", "end", "values", "port")}
+    row: dict[str, Any] = {
+        k: task[k]
+        for k in (
+            "key",
+            "strategy",
+            "variant",
+            "tf",
+            "coin",
+            "half",
+            "start",
+            "end",
+            "values",
+            "port",
+        )
+    }
     row.update({"kind": "run", "error": None})
     t0 = time.perf_counter()
     try:
@@ -114,14 +131,16 @@ def run_task(task: dict[str, Any]) -> dict[str, Any]:
         oa._CAPTURED.clear()
         res = fn(genome)
         series = res.get("mtm_daily_returns")
-        row.update({
-            "trades_total": int(res.get("total_trades", 0)),
-            "fees": float(res.get("total_fees", 0.0)),
-            "first_day": None if series is None else int(series.first_day),
-            "daily": None if series is None else [float(v) for v in series.values],
-            "positions": list(oa._CAPTURED),
-            "error": res.get("error"),
-        })
+        row.update(
+            {
+                "trades_total": int(res.get("total_trades", 0)),
+                "fees": float(res.get("total_fees", 0.0)),
+                "first_day": None if series is None else int(series.first_day),
+                "daily": None if series is None else [float(v) for v in series.values],
+                "positions": list(oa._CAPTURED),
+                "error": res.get("error"),
+            }
+        )
         if series is None and not row["error"]:
             row["error"] = "no daily MTM series"
     except Exception as exc:
@@ -130,7 +149,9 @@ def run_task(task: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
-def plan(tfs: Sequence[str], coins: Sequence[str], strategies: Sequence[str]) -> list[dict[str, Any]]:
+def plan(
+    tfs: Sequence[str], coins: Sequence[str], strategies: Sequence[str]
+) -> list[dict[str, Any]]:
     from vibe_quant.discovery.buyhold import load_daily_closes
 
     spans = oa.coin_spans(coins)
@@ -139,20 +160,33 @@ def plan(tfs: Sequence[str], coins: Sequence[str], strategies: Sequence[str]) ->
     for name in strategies:
         spec = STRATEGIES[name]
         for tf in tfs:
-            variants = {"literal": dict(spec["values"]), "matched": time_matched(spec["values"], spec["scaled"], tf)}
+            variants = {
+                "literal": dict(spec["values"]),
+                "matched": time_matched(spec["values"], spec["scaled"], tf),
+            }
             if tf == "1h":
                 variants = {"literal": variants["literal"]}  # identical by construction; shared
             for variant, values in variants.items():
                 for half, (a, b) in HALVES.items():
                     ws = warm_start(a, tf, lookback_bars(spec["port"], values, spec["scaled"]))
                     for coin in coins:
-                        first_ok = date.fromordinal(oa.EPOCH.toordinal() + min(closes[coin]) + 1).isoformat()
-                        tasks.append({
-                            "key": f"run|{name}|{variant}|{tf}|{coin}|{half}", "strategy": name,
-                            "variant": variant, "tf": tf, "coin": coin, "half": half,
-                            "start": max(ws, first_ok), "end": b or spans[coin][1],
-                            "values": values, "port": spec["port"],
-                        })
+                        first_ok = date.fromordinal(
+                            oa.EPOCH.toordinal() + min(closes[coin]) + 1
+                        ).isoformat()
+                        tasks.append(
+                            {
+                                "key": f"run|{name}|{variant}|{tf}|{coin}|{half}",
+                                "strategy": name,
+                                "variant": variant,
+                                "tf": tf,
+                                "coin": coin,
+                                "half": half,
+                                "start": max(ws, first_ok),
+                                "end": b or spans[coin][1],
+                                "values": values,
+                                "port": spec["port"],
+                            }
+                        )
     return tasks
 
 
@@ -163,13 +197,19 @@ def cmd_run(args: argparse.Namespace) -> int:
     results = out / "results.jsonl"
     present = preset_grid.done_keys(results, retry_errors=True)
     coins = args.only_coins.split(",") if args.only_coins else list(COINS)
-    tasks = [t for t in plan(args.tfs.split(","), coins, args.strategies.split(",")) if t["key"] not in present]
+    tasks = [
+        t
+        for t in plan(args.tfs.split(","), coins, args.strategies.split(","))
+        if t["key"] not in present
+    ]
     tasks.sort(key=lambda t: TF_MIN[t["tf"]])  # slowest (1m) first
     t0 = time.perf_counter()
     print(f"{len(tasks)} backtests to run", flush=True)
     import multiprocessing
 
-    with multiprocessing.get_context("spawn").Pool(processes=max(1, args.parallel), maxtasksperchild=4) as pool:
+    with multiprocessing.get_context("spawn").Pool(
+        processes=max(1, args.parallel), maxtasksperchild=4
+    ) as pool:
         for i, row in enumerate(pool.imap_unordered(run_task, tasks), 1):
             preset_grid._append(results, row)
             print(f"  {i}/{len(tasks)} {row['key']} {row['secs']}s err={row['error']}", flush=True)
@@ -187,9 +227,18 @@ def half_stats(row: Mapping[str, Any], a: str, b: str) -> dict[str, Any]:
     vals = [v for i, v in enumerate(row["daily"]) if da <= first + i < db]
     lo, hi = da * oa.DAY_NS, db * oa.DAY_NS
     opened = sum(1 for p in row["positions"] if lo <= p["ts_open"] < hi)
-    carried = any(p["ts_open"] < lo and (p["ts_close"] is None or p["ts_close"] > lo) for p in row["positions"])
-    return {"ret": oa.compound(vals), "sharpe": oa.annual_sharpe(vals) if len(vals) > 1 else float("nan"),
-            "dd": oa.max_drawdown(vals), "trades": opened, "days": len(vals), "carried_in": carried}
+    carried = any(
+        p["ts_open"] < lo and (p["ts_close"] is None or p["ts_close"] > lo)
+        for p in row["positions"]
+    )
+    return {
+        "ret": oa.compound(vals),
+        "sharpe": oa.annual_sharpe(vals) if len(vals) > 1 else float("nan"),
+        "dd": oa.max_drawdown(vals),
+        "trades": opened,
+        "days": len(vals),
+        "carried_in": carried,
+    }
 
 
 def _scale(v: float | None, k: float) -> float | None:
@@ -215,65 +264,128 @@ def cmd_report(args: argparse.Namespace) -> int:
             a, b = halves[key[4]]
             stats[key] = half_stats(r, a, b or r["end"])
     closes = load_daily_closes(list(COINS), oa.CATALOG)
-    bh = {(c, h): preset_grid.bh_return(closes[c], date.fromisoformat(a), date.fromisoformat(b or ends.get(c, end_all[-1])))
-          for c in COINS for h, (a, b) in halves.items()}
-    L = ["# TV ports: 2026 H1 vs H2", "",
-         f"H1 = [{H1_START}, {H2_START}), H2 = [{H2_START}, end) with end (exclusive) per coin: "
-         + ", ".join(f"{c[:-4]} {e}" for c, e in sorted(ends.items())), "",
-         "Sharpe = oos_analysis.annual_sharpe (daily MTM mean / std ddof=1 x sqrt(365)); return = compounded "
-         "daily MTM; trades = positions opened in the half; DD = max drawdown of daily MTM equity. "
-         "1h literal == 1h time-matched (one run, shown in both).", ""]
+    bh = {
+        (c, h): preset_grid.bh_return(
+            closes[c], date.fromisoformat(a), date.fromisoformat(b or ends.get(c, end_all[-1]))
+        )
+        for c in COINS
+        for h, (a, b) in halves.items()
+    }
+    L = [
+        "# TV ports: 2026 H1 vs H2",
+        "",
+        f"H1 = [{H1_START}, {H2_START}), H2 = [{H2_START}, end) with end (exclusive) per coin: "
+        + ", ".join(f"{c[:-4]} {e}" for c, e in sorted(ends.items())),
+        "",
+        "Sharpe = oos_analysis.annual_sharpe (daily MTM mean / std ddof=1 x sqrt(365)); return = compounded "
+        "daily MTM; trades = positions opened in the half; DD = max drawdown of daily MTM equity. "
+        "1h literal == 1h time-matched (one run, shown in both).",
+        "",
+    ]
     errs = [r for r in rows if r.get("error")]
     reasons: dict[tuple[str, str, str], set[str]] = {}
     for r in errs:
-        reasons.setdefault((r["strategy"], r["variant"], r["tf"]), set()).add(r["error"].replace("\n", " "))
+        reasons.setdefault((r["strategy"], r["variant"], r["tf"]), set()).add(
+            r["error"].replace("\n", " ")
+        )
     for (s, v, tf), why in sorted(reasons.items()):
         L.append(f"- n/a {s} {v} {tf}(engine refused): {' / '.join(sorted(why))}")
-    metrics = [("sharpe", "Sharpe", ".2f", 1.0), ("ret", "Return %", "+.1f", 100.0),
-               ("trades", "Trades", "d", 1.0), ("dd", "Max DD %", ".1f", 100.0)]
+    metrics = [
+        ("sharpe", "Sharpe", ".2f", 1.0),
+        ("ret", "Return %", "+.1f", 100.0),
+        ("trades", "Trades", "d", 1.0),
+        ("dd", "Max DD %", ".1f", 100.0),
+    ]
     for name in STRATEGIES:
         for variant in ("literal", "matched"):
             L += ["", f"## {name} {variant}", ""]
             for m, title, fmt, k in metrics:
-                L += [f"### {title}", "",
-                      "| tf | params | " + " | ".join(f"{c[:-4]} H1 | {c[:-4]} H2" for c in COINS) + " | mean H1 | mean H2 |",
-                      "|---|---|" + "---|" * (2 * len(COINS) + 2)]
+                L += [
+                    f"### {title}",
+                    "",
+                    "| tf | params | "
+                    + " | ".join(f"{c[:-4]} H1 | {c[:-4]} H2" for c in COINS)
+                    + " | mean H1 | mean H2 |",
+                    "|---|---|" + "---|" * (2 * len(COINS) + 2),
+                ]
                 for tf in TFS:
                     v = "literal" if tf == "1h" else variant
                     run = next((r for kk, r in by.items() if kk[:3] == (name, v, tf)), None)
-                    params = "n/a" if run is None else ",".join(str(run["values"][p]) for p in STRATEGIES[name]["scaled"])
+                    params = (
+                        "n/a"
+                        if run is None
+                        else ",".join(str(run["values"][p]) for p in STRATEGIES[name]["scaled"])
+                    )
                     cells: list[str] = []
                     means: dict[str, float | None] = {}
                     for h in halves:
-                        col = [stats[(name, v, tf, c, h)][m] for c in COINS if (name, v, tf, c, h) in stats]
+                        col = [
+                            stats[(name, v, tf, c, h)][m]
+                            for c in COINS
+                            if (name, v, tf, c, h) in stats
+                        ]
                         fin = [x for x in col if isinstance(x, (int, float)) and math.isfinite(x)]
                         means[h] = statistics.fmean(fin) if fin else None
                     for c in COINS:
                         for h in halves:
                             cell = stats.get((name, v, tf, c, h))
                             val: float | None = None if cell is None else cell[m]
-                            cells.append(_f(_scale(val, k), fmt) if m != "trades" else ("n/a" if val is None else str(val)))
-                    mean_cells = [_f(_scale(means[h], k), ".2f" if m == "sharpe" else ".1f") for h in halves]
-                    L.append(f"| {tf} | {params} | " + " | ".join(cells) + " | " + " | ".join(mean_cells) + " |")
+                            cells.append(
+                                _f(_scale(val, k), fmt)
+                                if m != "trades"
+                                else ("n/a" if val is None else str(val))
+                            )
+                    mean_cells = [
+                        _f(_scale(means[h], k), ".2f" if m == "sharpe" else ".1f") for h in halves
+                    ]
+                    L.append(
+                        f"| {tf} | {params} | "
+                        + " | ".join(cells)
+                        + " | "
+                        + " | ".join(mean_cells)
+                        + " |"
+                    )
                 L.append("")
-    L += ["## Buy-and-hold % per coin per half (context only)", "",
-          "| coin | H1 | H2 |", "|---|---|---|"]
+    L += [
+        "## Buy-and-hold % per coin per half (context only)",
+        "",
+        "| coin | H1 | H2 |",
+        "|---|---|---|",
+    ]
     for c in COINS:
-        L.append(f"| {c[:-4]} | {_f(_scale(bh[(c, 'H1')], 100), '+.1f')} | {_f(_scale(bh[(c, 'H2')], 100), '+.1f')} |")
-    L += ["", "## Runs", "",
-          "| strategy | variant | tf | run start (warm-up from) | max secs per run | sum secs | in_domain |",
-          "|---|---|---|---|---|---|---|"]
+        L.append(
+            f"| {c[:-4]} | {_f(_scale(bh[(c, 'H1')], 100), '+.1f')} | {_f(_scale(bh[(c, 'H2')], 100), '+.1f')} |"
+        )
+    L += [
+        "",
+        "## Runs",
+        "",
+        "| strategy | variant | tf | run start (warm-up from) | max secs per run | sum secs | in_domain |",
+        "|---|---|---|---|---|---|---|",
+    ]
     groups: dict[tuple[str, str, str, str], list[Mapping[str, Any]]] = {}
     for r in rows:
         groups.setdefault((r["strategy"], r["variant"], r["tf"], r["half"]), []).append(r)
-    for (s, v, tf, h), rs in sorted(groups.items(), key=lambda kv: (kv[0][0], kv[0][1], TF_MIN[kv[0][2]], kv[0][3])):
-        L.append(f"| {s} | {v} | {tf} {h} | {sorted({r['start'] for r in rs})} | {max(r['secs'] for r in rs)} "
-                 f"| {sum(r['secs'] for r in rs):.0f} | {sorted({str(r.get('in_domain')) for r in rs})} |")
+    for (s, v, tf, h), rs in sorted(
+        groups.items(), key=lambda kv: (kv[0][0], kv[0][1], TF_MIN[kv[0][2]], kv[0][3])
+    ):
+        L.append(
+            f"| {s} | {v} | {tf} {h} | {sorted({r['start'] for r in rs})} | {max(r['secs'] for r in rs)} "
+            f"| {sum(r['secs'] for r in rs):.0f} | {sorted({str(r.get('in_domain')) for r in rs})} |"
+        )
     text = "\n".join(L) + "\n"
     (out / "report.md").write_text(text)
-    (out / "stats.json").write_text(json.dumps(
-        [{"strategy": k[0], "variant": k[1], "tf": k[2], "coin": k[3], "half": k[4], **v} for k, v in stats.items()]
-        + [{"bh": True, "coin": c, "half": h, "ret": v} for (c, h), v in bh.items()], indent=0) + "\n")
+    (out / "stats.json").write_text(
+        json.dumps(
+            [
+                {"strategy": k[0], "variant": k[1], "tf": k[2], "coin": k[3], "half": k[4], **v}
+                for k, v in stats.items()
+            ]
+            + [{"bh": True, "coin": c, "half": h, "ret": v} for (c, h), v in bh.items()],
+            indent=0,
+        )
+        + "\n"
+    )
     print(text)
     return 0
 

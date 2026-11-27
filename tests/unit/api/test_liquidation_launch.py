@@ -98,9 +98,7 @@ def _launch_body(
     mode: str | None = None,
     parameters: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    strategy_id = state.create_strategy(
-        name=f"liq_api_{next(_STRATEGY_SEQ)}", dsl_config={}
-    )
+    strategy_id = state.create_strategy(name=f"liq_api_{next(_STRATEGY_SEQ)}", dsl_config={})
     body: dict[str, object] = {
         "strategy_id": strategy_id,
         "symbols": ["BTCUSDT"],
@@ -221,9 +219,7 @@ async def test_params_key_rejected(
     The mode is a top-level field; the nested key used to be silently ignored.
     """
     ac, state, job_mgr, _db = client
-    body = _launch_body(
-        state, parameters={"initial_balance": 1000, "liquidation_mode": "isolated"}
-    )
+    body = _launch_body(state, parameters={"initial_balance": 1000, "liquidation_mode": "isolated"})
     before = _run_count(state)
 
     with _PopenPatch(job_mgr) as popen:
@@ -437,7 +433,9 @@ _GENOME_DSL: dict[str, object] = {
 }
 
 
-def _create_discovery_run(state: StateManager, *, notes_extra: dict[str, object] | None = None) -> int:
+def _create_discovery_run(
+    state: StateManager, *, notes_extra: dict[str, object] | None = None
+) -> int:
     run_id = state.create_backtest_run(
         strategy_id=None,
         run_mode="discovery",
@@ -448,7 +446,9 @@ def _create_discovery_run(state: StateManager, *, notes_extra: dict[str, object]
         parameters={"population": 20, "generations": 10},
     )
     state.update_backtest_run_status(run_id, "completed")
-    payload: dict[str, object] = {"top_strategies": [{"dsl": dict(_GENOME_DSL), "score": 1.5, "trades": 42}]}
+    payload: dict[str, object] = {
+        "top_strategies": [{"dsl": dict(_GENOME_DSL), "score": 1.5, "trades": 42}]
+    }
     if notes_extra:
         payload.update(notes_extra)
     state.conn.execute(
@@ -521,7 +521,9 @@ async def test_child_notes_presence_matrix(
     assert r.status_code == 201, r.text
     child = state.get_backtest_run(r.json()["run_id"])
     assert child is not None
-    inherited = {k: v for k, v in child["parameters"].items() if k in {"liquidation_mode", "leverage"}}
+    inherited = {
+        k: v for k, v in child["parameters"].items() if k in {"liquidation_mode", "leverage"}
+    }
     assert inherited == expected
 
 

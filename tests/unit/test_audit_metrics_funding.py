@@ -84,8 +84,13 @@ class TestInteriorHoles:
         """Settlements 3..5 (day 1) missing inside the archive range."""
         calc = FundingCalculator(_archive(tmp_path / "a.db", [0, 1, 2, 6, 7, 8, 9]))
         with caplog.at_level(logging.WARNING, logger="vibe_quant.validation.funding"):
-            acc = calc.accrue("BTCUSDT-PERP.BINANCE", "LONG", 10_000.0,
-                              _BASE_NS + _HOUR_NS, _BASE_NS + 3 * _DAY_NS - _HOUR_NS)
+            acc = calc.accrue(
+                "BTCUSDT-PERP.BINANCE",
+                "LONG",
+                10_000.0,
+                _BASE_NS + _HOUR_NS,
+                _BASE_NS + 3 * _DAY_NS - _HOUR_NS,
+            )
         # crossed boundaries: 1,2 (archived) 3,4,5 (hole) 6,7,8 (archived)
         archived = 5 * _RATE * 10_000.0
         fallback = 3 * DEFAULT_FUNDING_RATE_PER_PERIOD * 10_000.0
@@ -99,17 +104,18 @@ class TestInteriorHoles:
         missing = tmp_path / "nope" / "raw.db"
         calc = FundingCalculator(missing)
         with pytest.raises(FundingArchiveUnavailableError, match="raw.db"):
-            calc.accrue("BTCUSDT-PERP.BINANCE", "LONG", 10_000.0, _BASE_NS + 1,
-                        _BASE_NS + _DAY_NS)
+            calc.accrue("BTCUSDT-PERP.BINANCE", "LONG", 10_000.0, _BASE_NS + 1, _BASE_NS + _DAY_NS)
         assert not missing.exists()
 
     def test_rates_cached_per_process(self, tmp_path: Path) -> None:
         path = _archive(tmp_path / "a.db", list(range(6)))
-        FundingCalculator(path).accrue("BTCUSDT-PERP.BINANCE", "LONG", 1.0, _BASE_NS + 1,
-                                       _BASE_NS + _DAY_NS)
+        FundingCalculator(path).accrue(
+            "BTCUSDT-PERP.BINANCE", "LONG", 1.0, _BASE_NS + 1, _BASE_NS + _DAY_NS
+        )
         path.unlink()  # a second calculator must not need the file again
-        acc = FundingCalculator(path).accrue("BTCUSDT-PERP.BINANCE", "LONG", 1.0,
-                                             _BASE_NS + 1, _BASE_NS + _DAY_NS)
+        acc = FundingCalculator(path).accrue(
+            "BTCUSDT-PERP.BINANCE", "LONG", 1.0, _BASE_NS + 1, _BASE_NS + _DAY_NS
+        )
         assert acc.fallback_settlements == 0
 
 
@@ -128,7 +134,10 @@ def _bt(n: int) -> Any:
 
 def _runner(archive: Path) -> NTScreeningRunner:
     return NTScreeningRunner(
-        dsl_dict={}, symbols=["BTCUSDT"], start_date="2025-01-01", end_date="2025-01-11",
+        dsl_dict={},
+        symbols=["BTCUSDT"],
+        start_date="2025-01-01",
+        end_date="2025-01-11",
         funding_archive_path=str(archive),
     )
 
@@ -174,8 +183,8 @@ def test_screening_charges_funding_like_validation_calculator(tmp_path: Path) ->
     calc = FundingCalculator(archive)
     expected = [
         calc.compute_funding("BTCUSDT-PERP.BINANCE", "LONG", 4000.0, p.ts_opened, p.ts_closed)
-        if p.entry == OrderSide.BUY else
-        calc.compute_funding("BTCUSDT-PERP.BINANCE", "SHORT", 4000.0, p.ts_opened, p.ts_closed)
+        if p.entry == OrderSide.BUY
+        else calc.compute_funding("BTCUSDT-PERP.BINANCE", "SHORT", 4000.0, p.ts_opened, p.ts_closed)
         for p in positions
     ]
     assert expected == [pytest.approx(3 * _RATE * 4000.0), pytest.approx(-2 * _RATE * 4000.0)]
@@ -228,9 +237,14 @@ def test_screening_and_validation_agree_on_funding_return_pf_sharpe(tmp_path: Pa
     )
     venue = fake_venue(slippage=1.0, balance=1000)
     validation = extract_results(
-        1, "s", _bt(2), fake_engine(positions), venue,
+        1,
+        "s",
+        _bt(2),
+        fake_engine(positions),
+        venue,
         funding_calculator=FundingCalculator(archive),
-        run_start_date="2025-01-01", run_end_date="2025-01-11",
+        run_start_date="2025-01-01",
+        run_end_date="2025-01-11",
     )
     assert validation.total_funding == pytest.approx(screening.total_funding)
     assert validation.funding_fallback_settlements == screening.funding_fallback_settlements

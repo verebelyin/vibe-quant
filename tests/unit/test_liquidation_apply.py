@@ -65,9 +65,7 @@ def write_marks(
         if i in skip:
             continue
         open_ms = T0_MS + (first_bar + i) * 60_000
-        rows.append(
-            (open_ms, 40000.0, 41000.0, low, low, 0.0, open_ms + 59_999, 0, 60, 0.0, 0.0)
-        )
+        rows.append((open_ms, 40000.0, 41000.0, low, low, 0.0, open_ms + 59_999, 0, 60, 0.0, 0.0))
     archive = RawDataArchive(root / f"{symbol}_archive.db")
     archive.insert_mark_klines(symbol, "1m", rows, "test")
     build_mark_bars(CatalogManager(root / "catalog"), archive, symbol)
@@ -290,4 +288,3 @@ def test_an_opening_or_closing_fill_at_or_after_the_run_end_is_refused(
         ValueError, match=rf"{key}: fill at ts {ts} is not before the run end {end_ns}"
     ):
         run(tmp_path, [pos], mode="cross", starting_balance=4000.0)
-

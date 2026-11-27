@@ -44,9 +44,7 @@ def _make_kline_archive(
             minute = i if minute_indices is None else minute_indices[i]
             open_ms = (start_ns + minute * MIN) // 1_000_000
             taker = volume if takers is None else takers[i]
-            rows.append(
-                (symbol, open_ms, volume, open_ms + 59_999, taker)
-            )
+            rows.append((symbol, open_ms, volume, open_ms + 59_999, taker))
         archive.conn.executemany(
             "INSERT INTO raw_klines (symbol, interval, open_time, open, high, low, "
             "close, volume, close_time, taker_buy_volume, source) "
@@ -74,9 +72,7 @@ def _value(archive: Path, t: int, period: int, symbol: str = "ZECUSDT") -> float
 # -- 1. as-of window -----------------------------------------------------------------
 
 
-def test_taker_excludes_kline_closing_after_bar(
-    tmp_path: Path, clean: None
-) -> None:
+def test_taker_excludes_kline_closing_after_bar(tmp_path: Path, clean: None) -> None:
     """A kline OPENING at ``t`` closes after ``t`` and must not enter the window."""
     volumes = [round(1.001 * (i + 1), 3) for i in range(11)]  # 3-decimal volumes
     takers = [round(v * 0.5, 3) for v in volumes]
@@ -131,8 +127,9 @@ def test_value_independent_of_query_set(tmp_path: Path, clean: None) -> None:
     many = aux_data.taker_imbalance_asof("ZECUSDT", all_closes, 60)
     assert np.isfinite(one)
     assert many[-2] == one  # all_closes[-2] == t (last is one minute later)
-    assert np.array_equal(many, aux_data.taker_imbalance_asof("ZECUSDT", all_closes, 60),
-                          equal_nan=True)
+    assert np.array_equal(
+        many, aux_data.taker_imbalance_asof("ZECUSDT", all_closes, 60), equal_nan=True
+    )
 
 
 def test_non_integral_volume_raises(tmp_path: Path, clean: None) -> None:
@@ -192,9 +189,7 @@ def _covering_klines(path: Path, symbol: str, start_ns: int, end_ns: int) -> Pat
     return path
 
 
-def test_scale_uses_both_columns_and_ignores_unneeded_prefix(
-    tmp_path: Path, clean: None
-) -> None:
+def test_scale_uses_both_columns_and_ignores_unneeded_prefix(tmp_path: Path, clean: None) -> None:
     """Total volume 1.0 with taker 0.5 needs p=1; an unused earlier row must not change it."""
     tail = [(i * 60_000, 1.0, 0.5) for i in range(1, 6)]
     full = _sqlite_klines(tmp_path / "full.db", [(0, 1.001, 0.5), *tail])
@@ -207,9 +202,7 @@ def test_scale_uses_both_columns_and_ignores_unneeded_prefix(
     assert aux_data.taker_imbalance_asof("ZECUSDT", window_close, 5)[0] == expected
 
 
-def test_unrepresentable_eight_decimal_volume_fails_closed(
-    tmp_path: Path, clean: None
-) -> None:
+def test_unrepresentable_eight_decimal_volume_fails_closed(tmp_path: Path, clean: None) -> None:
     for volume, taker in ((1.00000001, 1.0), (1.0, 0.99999999)):
         path = _sqlite_klines(tmp_path / f"bad_{taker}.db", [(0, volume, taker)])
         aux_data.configure(path, None)
@@ -328,9 +321,7 @@ def test_archive_without_symbol_rows_raises(tmp_path: Path, clean: None) -> None
 # -- 2. preflight / discovery pool / paper ---------------------------------------------
 
 
-def test_preflight_taker_needs_klines_not_funding(
-    tmp_path: Path, clean: None
-) -> None:
+def test_preflight_taker_needs_klines_not_funding(tmp_path: Path, clean: None) -> None:
     """TAKER_IMBALANCE checks 1m klines; it must not enter the funding branch."""
     full = _make_kline_archive(tmp_path / "cover.db", [1.0] * 2882, start_ns=DAY0 - DAY - MIN)
     aux_data.configure(full, None)
@@ -342,9 +333,7 @@ def test_preflight_taker_needs_klines_not_funding(
     with pytest.raises(AuxDataUnavailableError, match="start after the requested window"):
         aux_data.preflight(["TAKER_IMBALANCE"], ["ZECUSDT"], "2024-01-01", "2024-01-02")
 
-    short = _make_kline_archive(
-        tmp_path / "short.db", [1.0] * 1441, start_ns=DAY0 - DAY - MIN
-    )
+    short = _make_kline_archive(tmp_path / "short.db", [1.0] * 1441, start_ns=DAY0 - DAY - MIN)
     aux_data.configure(short, None)
     with pytest.raises(AuxDataUnavailableError, match="end before the requested window"):
         aux_data.preflight(["TAKER_IMBALANCE"], ["ZECUSDT"], "2024-01-01", "2024-01-02")
@@ -463,8 +452,9 @@ def test_taker_1h_strategy_values_match_asof(tmp_path: Path, clean: None) -> Non
     close_ns = ((raw_ts + step // 2) // step) * step
     # The 60-minute lookback of the first bar is the only history any lookup needs.
     aux_data.configure(
-        _covering_klines(tmp_path / "cover.db", "ZECUSDT", int(close_ns[0]) - 61 * MIN,
-                         int(close_ns[-1]) + MIN),
+        _covering_klines(
+            tmp_path / "cover.db", "ZECUSDT", int(close_ns[0]) - 61 * MIN, int(close_ns[-1]) + MIN
+        ),
         None,
     )
     expected = aux_data.taker_imbalance_asof("ZECUSDT", close_ns, 60)
@@ -485,8 +475,12 @@ def test_taker_1h_strategy_values_match_asof(tmp_path: Path, clean: None) -> Non
     got = []
     for i in range(n):
         buf.append(
-            float(bars.open[sl][i]), float(bars.high[sl][i]), float(bars.low[sl][i]),
-            float(bars.close[sl][i]), 1.0, int(close_ns[i]),
+            float(bars.open[sl][i]),
+            float(bars.high[sl][i]),
+            float(bars.low[sl][i]),
+            float(bars.close[sl][i]),
+            1.0,
+            int(close_ns[i]),
         )
         inst._update_pta_indicators("1h")
         got.append(inst._pta_values.get("x", float("nan")))
@@ -514,5 +508,3 @@ def test_taker_strategy_runs_in_screening(tmp_path: Path, clean: None) -> None:
         _dsl_to_dict(dsl), ["ZECUSDT"], start, end, funding_archive_path=str(archive)
     )({})
     assert metrics.total_trades > 0
-
-

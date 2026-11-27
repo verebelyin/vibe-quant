@@ -106,9 +106,7 @@ def test_distant_different_behaviour_stays_two_groups(
     assert len(res.top_strategies) == 2
 
 
-def test_nan_metrics_never_merge(
-    monkeypatch: MonkeyPatch, caplog: LogCaptureFixture
-) -> None:
+def test_nan_metrics_never_merge(monkeypatch: MonkeyPatch, caplog: LogCaptureFixture) -> None:
     """A NaN field makes the fingerprint comparison False, so distant NaNs stay apart."""
     a, b = _chrom(), _distant_chrom()
     fit_a = _fit(profit_factor=float("nan"), mtm_daily_returns=_series(5.0))

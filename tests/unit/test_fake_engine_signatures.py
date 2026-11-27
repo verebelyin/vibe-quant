@@ -64,7 +64,9 @@ def test_fake_position_attributes_exist_on_nt_position() -> None:
         real = inspect.getattr_static(Position, name)
         fake = inspect.getattr_static(FakePosition, name, None)
         if not callable(real):
-            assert not callable(fake) or isinstance(fake, property), f"Position.{name} is a property"
+            assert not callable(fake) or isinstance(fake, property), (
+                f"Position.{name} is a property"
+            )
 
 
 def test_fake_position_commissions_matches_nt_position() -> None:

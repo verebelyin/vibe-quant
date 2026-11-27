@@ -187,9 +187,7 @@ _EVIL = {"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"}
             "application/x-www-form-urlencoded",
             id="form-post-indicators",
         ),
-        pytest.param(
-            "/api/backtest/jobs/1/heartbeat", "text/plain", id="text-plain-heartbeat"
-        ),
+        pytest.param("/api/backtest/jobs/1/heartbeat", "text/plain", id="text-plain-heartbeat"),
     ],
 )
 async def test_cross_site_simple_post_rejected(
@@ -378,7 +376,13 @@ async def test_ingest_spawns_heartbeating_wrapper(client: Client, db: Path) -> N
     assert cmd[cmd.index("--run-id") + 1] == str(job_id)
     assert cmd[cmd.index("--db") + 1] == str(db)
     assert cmd[cmd.index("--") + 1 :] == [
-        "ingest", "--symbols", "BTCUSDT", "--start", "2025-01-01", "--end", "2025-02-01",
+        "ingest",
+        "--symbols",
+        "BTCUSDT",
+        "--start",
+        "2025-01-01",
+        "--end",
+        "2025-02-01",
         "--yes",
     ]
     info = jobs.get_job_info(job_id)
@@ -461,7 +465,9 @@ def test_startup_reconciles_jobs(db: Path, monkeypatch: pytest.MonkeyPatch) -> N
     state = StateManager(db)
     sid = _strategy(state)
     dead_run, live_run = (
-        state.create_backtest_run(sid, "validation", ["BTCUSDT"], "4h", "2025-01-01", "2025-06-01", {})
+        state.create_backtest_run(
+            sid, "validation", ["BTCUSDT"], "4h", "2025-01-01", "2025-06-01", {}
+        )
         for _ in range(2)
     )
     jobs = BacktestJobManager(db)

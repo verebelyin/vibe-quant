@@ -307,9 +307,7 @@ def _translate_indicators(indicators_raw: list[dict[str, Any]]) -> dict[str, dic
         native = _native_param_names(ind_type)
         consumed = {"period", "std_dev", "atr_multiplier"}
         for target, spellings in _PARAM_SYNONYMS.items():
-            consumed.update(
-                key for key in spellings if not (key != target and key in native)
-            )
+            consumed.update(key for key in spellings if not (key != target and key in native))
         if ind_type == "STOCH":
             for spellings in _STOCH_SYNONYMS.values():
                 consumed.update(spellings)
@@ -418,7 +416,9 @@ def _resolve_ref(token: str, ref_map: dict[str, list[str]]) -> str:
     return owners[0]
 
 
-def _condition_to_str(cond: dict[str, Any] | str, ref_map: dict[str, list[str]] | None = None) -> str:
+def _condition_to_str(
+    cond: dict[str, Any] | str, ref_map: dict[str, list[str]] | None = None
+) -> str:
     """Convert a DslCondition object or raw string to expression string."""
     if isinstance(cond, str):
         return cond
@@ -572,9 +572,7 @@ def translate_dsl_config(raw: dict[str, Any], strategy_name: str = "strategy") -
 
     # Conditions
     conditions_raw = raw.get("conditions", {}) or {}
-    long_entry, short_entry, long_exit, short_exit = _translate_conditions(
-        conditions_raw, ref_map
-    )
+    long_entry, short_entry, long_exit, short_exit = _translate_conditions(conditions_raw, ref_map)
 
     # Ensure at least one condition (StrategyDSL requires it)
     if not long_entry and not short_entry:

@@ -394,14 +394,17 @@ class IndicatorConfig(BaseModel):
         for key, value in extras.items():
             if key not in spec.param_schema:
                 valid = sorted(set(spec.param_schema) | self._BUILTIN_PARAM_FIELDS)
-                msg = (
-                    f"Indicator '{self.type}' got unknown param '{key}'. "
-                    f"Valid params: {valid}"
-                )
+                msg = f"Indicator '{self.type}' got unknown param '{key}'. Valid params: {valid}"
                 raise ValueError(msg)
             expected = spec.param_schema[key]
-            if expected is float and isinstance(value, (int, float)) and not isinstance(value, bool):
-                number = checked_plugin_number(f"Indicator '{self.type}' param '{key}'", value, float)
+            if (
+                expected is float
+                and isinstance(value, (int, float))
+                and not isinstance(value, bool)
+            ):
+                number = checked_plugin_number(
+                    f"Indicator '{self.type}' param '{key}'", value, float
+                )
                 if isinstance(value, int):
                     # Pydantic stores extras as-is without coercion — fix int→float.
                     object.__setattr__(self, key, number)
@@ -564,7 +567,9 @@ class StopLossConfig(BaseModel):
                 msg = f"stop_loss.indicator (ATR indicator name) is required when type is '{self.type}'"
                 raise ValueError(msg)
         elif self.type == SIGNAL_LEVEL:
-            _check_signal_level_fields("stop_loss", self.indicator, self.percent, self.atr_multiplier)
+            _check_signal_level_fields(
+                "stop_loss", self.indicator, self.percent, self.atr_multiplier
+            )
         return self
 
 
@@ -616,7 +621,11 @@ class TakeProfitConfig(BaseModel):
             raise ValueError(msg)
         elif self.type == SIGNAL_LEVEL:
             _check_signal_level_fields(
-                "take_profit", self.indicator, self.percent, self.atr_multiplier, self.risk_reward_ratio
+                "take_profit",
+                self.indicator,
+                self.percent,
+                self.atr_multiplier,
+                self.risk_reward_ratio,
             )
         return self
 
@@ -743,10 +752,18 @@ class StrategyDSL(BaseModel):
         ),
     )
 
-    stop_loss_long: StopLossConfig | None = Field(default=None, description="Stop loss override for longs")
-    stop_loss_short: StopLossConfig | None = Field(default=None, description="Stop loss override for shorts")
-    take_profit_long: TakeProfitConfig | None = Field(default=None, description="Take profit override for longs")
-    take_profit_short: TakeProfitConfig | None = Field(default=None, description="Take profit override for shorts")
+    stop_loss_long: StopLossConfig | None = Field(
+        default=None, description="Stop loss override for longs"
+    )
+    stop_loss_short: StopLossConfig | None = Field(
+        default=None, description="Stop loss override for shorts"
+    )
+    take_profit_long: TakeProfitConfig | None = Field(
+        default=None, description="Take profit override for longs"
+    )
+    take_profit_short: TakeProfitConfig | None = Field(
+        default=None, description="Take profit override for shorts"
+    )
 
     position_management: PositionManagementConfig = Field(
         default_factory=PositionManagementConfig, description="Position management"

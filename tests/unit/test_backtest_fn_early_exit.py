@@ -28,8 +28,12 @@ def _m(ret: float, trades: int = 50, sharpe: float = 1.0, pf: float = 1.5) -> di
     }
 
 
-def _fn(monkeypatch: Any, metrics: list[Any], min_trades: int = 60) -> tuple[NTBacktestFn, list[int]]:
-    fn = NTBacktestFn(["BTCUSDT"], "4h", "2024-01-01", "2025-06-30", windows=WINDOWS, min_trades=min_trades)
+def _fn(
+    monkeypatch: Any, metrics: list[Any], min_trades: int = 60
+) -> tuple[NTBacktestFn, list[int]]:
+    fn = NTBacktestFn(
+        ["BTCUSDT"], "4h", "2024-01-01", "2025-06-30", windows=WINDOWS, min_trades=min_trades
+    )
     calls: list[int] = []
 
     def fake(self: Any, chrom: Any, ws: str, we: str) -> dict[str, Any]:
@@ -130,7 +134,12 @@ def _two_window_fn(
     monkeypatch: Any, metrics: list[Any], *, full: bool, collect: bool = False
 ) -> tuple[NTBacktestFn, list[int]]:
     fn = NTBacktestFn(
-        ["BTCUSDT"], "4h", "2024-01-01", "2024-12-31", windows=TWO, min_trades=60,
+        ["BTCUSDT"],
+        "4h",
+        "2024-01-01",
+        "2024-12-31",
+        windows=TWO,
+        min_trades=60,
         collect_daily_returns=collect,
     )
     fn.full_windows = full
@@ -176,7 +185,10 @@ def test_full_windows_runs_past_a_trade_gate_stop(monkeypatch: Any) -> None:
 
 def test_full_windows_chains_series_on_the_floor_failure_branch(monkeypatch: Any) -> None:
     def with_series(ret: float, trades: int, first_day: int, values: list[float]) -> dict[str, Any]:
-        return {**_m(ret, trades=trades), "mtm_daily_returns": DailyReturns(first_day, array("d", values))}
+        return {
+            **_m(ret, trades=trades),
+            "mtm_daily_returns": DailyReturns(first_day, array("d", values)),
+        }
 
     fn, _ = _two_window_fn(
         monkeypatch,
@@ -196,7 +208,9 @@ def test_aggregate_emits_window_returns_on_both_branches() -> None:
     normal = NTBacktestFn._aggregate_multi_window([_m(0.1), _m(0.3)], 60)
     assert normal["window_returns"] == (0.1, 0.3)
     assert normal["total_return"] == 0.1
-    kept = NTBacktestFn._aggregate_multi_window([_m(0.1), nan_window, _m(-0.2)], 60)["window_returns"]
+    kept = NTBacktestFn._aggregate_multi_window([_m(0.1), nan_window, _m(-0.2)], 60)[
+        "window_returns"
+    ]
     assert isinstance(kept, tuple)
     assert kept[0] == 0.1 and kept[2] == -0.2 and kept[1] != kept[1]  # NaN kept, not coerced
     # floor-failure branch (window 1 has 3 trades < 15): raw returns, every other key as before

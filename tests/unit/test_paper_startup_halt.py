@@ -111,7 +111,9 @@ class _Guard(_UnitGuard):
         self.halt_results: list[bool] = []
         super().__init__(*args, **kwargs)
 
-    def halt(self, reason: HaltReason, message: str, metrics: dict[str, object] | None = None) -> bool:
+    def halt(
+        self, reason: HaltReason, message: str, metrics: dict[str, object] | None = None
+    ) -> bool:
         applied = super().halt(reason, message, metrics)
         self.halt_results.append(applied)
         return applied
@@ -249,8 +251,6 @@ def _arm(
     return fired
 
 
-
-
 @pytest.mark.parametrize("where", ["W1", "W2", "W3", "W4", "W5"])
 async def test_sigusr1_during_startup_await_halts_session(
     where: str,
@@ -285,11 +285,11 @@ async def test_sigusr1_during_startup_await_halts_session(
     final = _latest_checkpoint(node._config.db_path)
     assert final is not None
     assert final.node_status["halt_reason"] == "signal"
-    changes = [c[2] for c in trace.calls if c[0] == "write" and c[2].get("action") == "state_change"]
+    changes = [
+        c[2] for c in trace.calls if c[0] == "write" and c[2].get("action") == "state_change"
+    ]
     assert {"action": "state_change", "from_state": "initializing", "to_state": "halted"} in changes
     assert node._prestart.pending is None, "consumed at the replay"
-
-
 
 
 async def test_start_installs_handlers_before_first_await(
@@ -307,8 +307,6 @@ async def test_start_installs_handlers_before_first_await(
     monkeypatch.setattr(node._kill_monitor, "start", refuse_to_start)
     with pytest.raises(ConfigurationError, match="stop here"):
         await node.start()
-
-
 
 
 def _startup_harness(
@@ -335,9 +333,7 @@ def _restored(reason: str, message: str) -> RestoredHalt:
     return restored
 
 
-@pytest.mark.parametrize(
-    "reason", [HaltReason.SIGNAL, HaltReason.MANUAL, HaltReason.KILL_SWITCH]
-)
+@pytest.mark.parametrize("reason", [HaltReason.SIGNAL, HaltReason.MANUAL, HaltReason.KILL_SWITCH])
 def test_replayed_startup_halt_denies_on_start_entries(
     reason: HaltReason, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -353,9 +349,7 @@ def test_replayed_startup_halt_denies_on_start_entries(
     assert submitted >= 1, "the gate must really be exercised"
     assert len(h.filled_entries()) == 0
     assert [by_gate for _e, by_gate in h.listener.denied] == [True] * submitted
-    assert [(c[1], c[2], c[3]) for c in h.listener.changes] == [
-        (GuardState.HALTED, reason, _MSG)
-    ]
+    assert [(c[1], c[2], c[3]) for c in h.listener.changes] == [(GuardState.HALTED, reason, _MSG)]
     assert snaps["t3.5"]["running"] == [False, False]
     assert snaps["t3.5"]["state"] == GuardState.HALTED
     h.engine.dispose()
@@ -459,8 +453,6 @@ def test_halt_supersedes_is_strictly_more_severe(
     assert halt_supersedes(new, current) is expected
 
 
-
-
 async def test_two_startup_signals_alert_once(
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
@@ -503,8 +495,6 @@ async def test_startup_and_post_guard_signal_alert_once(
     assert isinstance(guard, _Guard)
     assert guard.halt_results == [True, False]
     assert _halt_records(trace.calls) == [_SIGNAL_RECORD, _SIGNAL_ALERT]
-
-
 
 
 @pytest.mark.parametrize("where", ["W1", "W4"])
@@ -558,8 +548,6 @@ async def test_startup_signal_over_restored_halt(
         assert node._prestart.pending is None
 
 
-
-
 async def test_startup_signal_over_unreadable_checkpoint(
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
@@ -584,8 +572,6 @@ async def test_startup_signal_over_unreadable_checkpoint(
     assert checkpoint is not None
     assert checkpoint.node_status["halt_reason"] == "signal"
     assert checkpoint.node_status["risk"] == RiskState().to_dict()
-
-
 
 
 async def _resume_case(
@@ -628,9 +614,7 @@ async def test_startup_resume_clears_recorded_halt(
 ) -> None:
     """SIGUSR1 then SIGUSR2 pre-guard with a fresh clean kill read lifts the halt
     and forgets it (no replay, guard RUNNING, no halt alert)."""
-    node, trace, seen, results = await _resume_case(
-        monkeypatch, seeded, read_before_resume=True
-    )
+    node, trace, seen, results = await _resume_case(monkeypatch, seeded, read_before_resume=True)
     # 68m53: the second resume is the venue pass lifting its own PENDING pause.
     assert results == [(True, "resumed from halt"), (True, "resumed from pause")]
     assert node._prestart.pending is None
@@ -651,14 +635,10 @@ async def test_startup_resume_refused_without_clean_read_keeps_halt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """No clean kill read yet -> resume refused, the halt stands and is replayed."""
-    _node, trace, seen, results = await _resume_case(
-        monkeypatch, seeded, read_before_resume=False
-    )
+    _node, trace, seen, results = await _resume_case(monkeypatch, seeded, read_before_resume=False)
     assert results == [_NO_CLEAN_READ]
     assert seen["in_run"] == _HALTED_SIGNAL
     assert _halt_records(trace.calls) == [_SIGNAL_RECORD, _SIGNAL_ALERT]
-
-
 
 
 async def test_refused_start_after_startup_signal_writes_no_checkpoint(
@@ -689,8 +669,6 @@ async def test_refused_start_after_startup_signal_writes_no_checkpoint(
     assert [c for c in trace.calls if c[0] == "alert" and c[1] == "circuit_breaker"] == []
     assert node._guard is None
     assert fake_tradingnode.instances == []
-
-
 
 
 async def _failed_restart(
@@ -760,8 +738,6 @@ async def test_startup_signal_survives_two_failed_restarts(
         await node4._shutdown()
 
 
-
-
 @pytest.mark.parametrize("case", ["running", "halted", "paused"])
 async def test_run_loop_status_follows_guard(
     case: str,
@@ -828,9 +804,7 @@ async def test_run_loop_without_guard_keeps_restored_halt_branch(
 
 def test_guard_message_property_is_the_halt_message() -> None:
     """``TradingGuard.message`` is the status message (what ``_run_loop`` publishes)."""
-    guard = _Guard(
-        node_module.TradingGuardConfig(), strategies=[], risk_engine=_NoRiskEngine()
-    )
+    guard = _Guard(node_module.TradingGuardConfig(), strategies=[], risk_engine=_NoRiskEngine())
     assert guard.message == ""
     assert guard.halt(HaltReason.MANUAL, "boom") is True
     assert guard.message == "boom"

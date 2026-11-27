@@ -192,7 +192,9 @@ def _bus_module() -> ModuleType:
     """bus.py, loaded lazily by path: bus.py loads this file by path on every done post."""
     import importlib.util
 
-    spec = importlib.util.spec_from_file_location("handoff_lint_bus", Path(__file__).with_name("bus.py"))
+    spec = importlib.util.spec_from_file_location(
+        "handoff_lint_bus", Path(__file__).with_name("bus.py")
+    )
     assert spec is not None and spec.loader is not None
     bus = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(bus)
@@ -254,7 +256,9 @@ def absorbed_problems(body: str, root: Path) -> tuple[bool, list[str]]:
         if msg is None:
             problems.append(f"BAD gate: absorbed ruling {msg_id} is not on any job bus")
         elif msg.get("from") != "chief" or not _ABSORB_WORD.search(str(msg.get("body", ""))):
-            problems.append(f"BAD gate: bus message {msg_id} is not a chief ruling saying 'absorbed'")
+            problems.append(
+                f"BAD gate: bus message {msg_id} is not a chief ruling saying 'absorbed'"
+            )
     return bool(ids) and not problems, problems
 
 
@@ -307,7 +311,9 @@ def check(
     if not headings:
         return ["MISSING handoff: no '## Handoff' block found"]
     start = headings[-1]
-    end = next((i for i in range(start + 1, len(lines)) if _ANY_HEADING.match(lines[i])), len(lines))
+    end = next(
+        (i for i in range(start + 1, len(lines)) if _ANY_HEADING.match(lines[i])), len(lines)
+    )
     block = lines[start + 1 : end]
     fields = _fields(block)
 
@@ -519,11 +525,15 @@ def template(role: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="handoff_lint.py", description="Lint a swarm handoff block.")
+    parser = argparse.ArgumentParser(
+        prog="handoff_lint.py", description="Lint a swarm handoff block."
+    )
     parser.add_argument(
         "--role", choices=("maker", "reviewer", "research"), help="force the required field set"
     )
-    parser.add_argument("--mutants", action="store_true", help="require a clean mutate.py --compare-rev summary")
+    parser.add_argument(
+        "--mutants", action="store_true", help="require a clean mutate.py --compare-rev summary"
+    )
     parser.add_argument(
         "--template", choices=("maker", "reviewer", "research"), help="print a block to fill in and exit"
     )  # fmt: skip

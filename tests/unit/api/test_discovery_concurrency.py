@@ -48,7 +48,9 @@ async def client(tmp_db: Path):
     state_mgr.close()
 
 
-def _insert_running_discovery(state: StateManager, job_mgr: BacktestJobManager, run_id_offset: int) -> int:
+def _insert_running_discovery(
+    state: StateManager, job_mgr: BacktestJobManager, run_id_offset: int
+) -> int:
     """Insert a fake running discovery job directly into DB."""
     run_id = state.create_backtest_run(
         strategy_id=None,
@@ -174,7 +176,9 @@ async def test_launch_persists_gate_related_metadata(
     params = run["parameters"]
     assert params["direction"] == "short"
     assert params["cross_window_months"] == [1, 3]
-    assert params["cross_window_min_sharpe"] == 0.6647277741291018  # typed 0.8 (365-day) = stored 252-day
+    assert (
+        params["cross_window_min_sharpe"] == 0.6647277741291018
+    )  # typed 0.8 (365-day) = stored 252-day
     assert params["num_seeds"] == 3
     assert params["wfa_oos_step_days"] == 30
     assert params["wfa_min_consistency"] == 0.9

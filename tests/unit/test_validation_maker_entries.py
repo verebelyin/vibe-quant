@@ -75,9 +75,7 @@ def engines() -> Iterator[list[BacktestEngine]]:
         engine.dispose()
 
 
-def _bar(
-    spec: str, step: int, i: int, o: float, h: float, low: float, c: float
-) -> Bar:
+def _bar(spec: str, step: int, i: int, o: float, h: float, low: float, c: float) -> Bar:
     """Bar ``i`` of length ``step``; ts_init = bar close (like the catalog)."""
     return Bar(
         bar_type=BarType.from_str(f"{_BTC}-{spec}-LAST-EXTERNAL"),
@@ -95,7 +93,9 @@ def _strategy_bars(closes: list[float]) -> list[Bar]:
     return [_bar("5-MINUTE", _M5, i, c, c, c, c) for i, c in enumerate(closes)]
 
 
-def _one_minute(n: int, *, ohlc: dict[int, tuple[float, float, float, float]] | None = None) -> list[Bar]:
+def _one_minute(
+    n: int, *, ohlc: dict[int, tuple[float, float, float, float]] | None = None
+) -> list[Bar]:
     ohlc = ohlc or {}
     return [_bar("1-MINUTE", _M, i, *ohlc.get(i, (100.5,) * 4)) for i in range(n)]
 
@@ -227,9 +227,7 @@ def test_trade_entry_exit_fee_from_fill_events(engines: list[BacktestEngine]) ->
     inst = engine.cache.instrument(pos.instrument_id)
     entry_notional = sum(float(f.last_qty) * float(f.last_px) for f in entries)
     exit_notional = sum(float(f.last_qty) * float(f.last_px) for f in exits)
-    assert trade.entry_fee == pytest.approx(
-        entry_notional * float(inst.maker_fee), rel=1e-6
-    )
+    assert trade.entry_fee == pytest.approx(entry_notional * float(inst.maker_fee), rel=1e-6)
     assert trade.exit_fee == pytest.approx(exit_notional * float(inst.taker_fee), rel=1e-6)
     # not the old 50/50 split: a maker entry pays strictly less than a taker exit
     assert trade.entry_fee < trade.exit_fee
@@ -455,9 +453,12 @@ def test_validation_post_only_notes_have_market_twin_and_fill_rate(
             "SELECT COUNT(*) FROM backtest_results WHERE run_id = ?", (rid,)
         ).fetchone()[0]
         assert result_rows == 1  # the twin wrote no result row
-        stored = [r[0] for r in sm.conn.execute(
-            "SELECT symbol FROM trades WHERE run_id = ?", (rid,)
-        ).fetchall()]
+        stored = [
+            r[0]
+            for r in sm.conn.execute(
+                "SELECT symbol FROM trades WHERE run_id = ?", (rid,)
+            ).fetchall()
+        ]
         assert stored == [_BTC]  # ... and no twin trades
         notes_raw = sm.get_result_notes_raw(rid)
     finally:
@@ -651,7 +652,12 @@ def _stub_engine(*orders: SimpleNamespace) -> SimpleNamespace:
 @pytest.mark.parametrize(
     ("init_min", "cancel_min", "expired", "by_exit"),
     [
-        (19, 31, 1, 0),  # review F3: three 5m bars closed (20, 25, 30) but only 12 wall-clock minutes
+        (
+            19,
+            31,
+            1,
+            0,
+        ),  # review F3: three 5m bars closed (20, 25, 30) but only 12 wall-clock minutes
         (19, 26, 0, 1),  # two bars closed -> an exit/opposite signal cancelled it
         (20, 35, 1, 0),  # placed exactly on a bar close: closes 25, 30, 35 are three bars
         (16, 21, 0, 1),
@@ -662,9 +668,7 @@ def test_cancel_cause_counts_primary_bars_not_minutes(
     init_min: int, cancel_min: int, expired: int, by_exit: int
 ) -> None:
     order = _stub_order(OrderStatus.CANCELED, init=init_min * _M, last=cancel_min * _M)
-    stats = maker_entry_stats(
-        _stub_engine(order), primary_bar_ns=_M5, maker_entry_timeout_bars=3
-    )
+    stats = maker_entry_stats(_stub_engine(order), primary_bar_ns=_M5, maker_entry_timeout_bars=3)
     assert (stats["expired"], stats["cancelled_by_exit"]) == (expired, by_exit)
     assert stats["submitted"] == 1
 
@@ -680,9 +684,7 @@ def test_denied_expired_and_rejected_orders_are_counted_apart() -> None:
         _stub_order(OrderStatus.CANCELED, init=0, last=_M5, filled=0.4),  # partial then cancelled
         _stub_order(OrderStatus.FILLED, init=0, last=_M, filled=1.0),
     ]
-    stats = maker_entry_stats(
-        _stub_engine(*orders), primary_bar_ns=_M5, maker_entry_timeout_bars=3
-    )
+    stats = maker_entry_stats(_stub_engine(*orders), primary_bar_ns=_M5, maker_entry_timeout_bars=3)
     assert stats["submitted"] == 8
     assert stats["denied"] == 1
     assert stats["rejected_post_only"] == 1
@@ -741,9 +743,12 @@ def test_twin_failure_keeps_primary_run_completed(
     try:
         row = sm.get_backtest_run(rid)
         assert row is not None and row["status"] == "completed"
-        assert sm.conn.execute(
-            "SELECT COUNT(*) FROM backtest_results WHERE run_id = ?", (rid,)
-        ).fetchone()[0] == 1
+        assert (
+            sm.conn.execute(
+                "SELECT COUNT(*) FROM backtest_results WHERE run_id = ?", (rid,)
+            ).fetchone()[0]
+            == 1
+        )
         notes_raw = sm.get_result_notes_raw(rid)
     finally:
         sm.close()

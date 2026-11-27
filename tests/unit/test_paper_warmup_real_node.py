@@ -167,7 +167,10 @@ async def _run_node(
         answer latched a position drift when the venue pass ran after adoption (under load)."""
         net = node._session_net_positions(["BTCUSDT"])
         rows = {} if isinstance(net, str) else net
-        return [{"symbol": s, "positionSide": "BOTH", "positionAmt": format(a, "f")} for s, a in rows.items()]
+        return [
+            {"symbol": s, "positionSide": "BOTH", "positionAmt": format(a, "f")}
+            for s, a in rows.items()
+        ]
 
     monkeypatch.setattr(node, "_build_position_read", lambda: held)
     strategy: Any = node._compiled_strategies[0]

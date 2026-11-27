@@ -243,9 +243,7 @@ def test_pipeline_conn_fails_closed_on_a_held_lock_and_retries(
         conn.execute("PRAGMA busy_timeout=50")
         real(conn)
 
-    monkeypatch.setattr(
-        "vibe_quant.overfitting.pipeline.migrate_add_columns", with_short_timeout
-    )
+    monkeypatch.setattr("vibe_quant.overfitting.pipeline.migrate_add_columns", with_short_timeout)
 
     holder = sqlite3.connect(str(db))
     holder.execute("PRAGMA journal_mode=WAL")

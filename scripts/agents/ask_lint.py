@@ -46,9 +46,7 @@ def _matches(pattern: re.Pattern[str], text: str) -> list[str]:
 
 def _paths(text: str) -> list[str]:
     """Path tokens without the sentence punctuation that follows them."""
-    return list(
-        dict.fromkeys(match.group(0).rstrip(".,;:!?)]") for match in _PATH.finditer(text))
-    )
+    return list(dict.fromkeys(match.group(0).rstrip(".,;:!?)]") for match in _PATH.finditer(text)))
 
 
 def _body(text: str) -> str:
@@ -104,7 +102,9 @@ def status_problems(text: str) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="ask_lint.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+        prog="ask_lint.py",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("file", nargs="?", type=Path, help="question file (default: stdin)")
     parser.add_argument("--status", action="store_true", help="lint a whole status message")

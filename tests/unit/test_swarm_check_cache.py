@@ -72,9 +72,14 @@ def test_plugins_and_loader_scans_are_cached_and_see_edits(
 
 def _git(repo: Path, *args: str) -> str:
     env = {
-        "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null", "HOME": str(repo),
-        "GIT_AUTHOR_NAME": "g", "GIT_AUTHOR_EMAIL": "g@t",
-        "GIT_COMMITTER_NAME": "g", "GIT_COMMITTER_EMAIL": "g@t", "PATH": "/usr/bin:/bin",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "HOME": str(repo),
+        "GIT_AUTHOR_NAME": "g",
+        "GIT_AUTHOR_EMAIL": "g@t",
+        "GIT_COMMITTER_NAME": "g",
+        "GIT_COMMITTER_EMAIL": "g@t",
+        "PATH": "/usr/bin:/bin",
     }
     return subprocess.run(
         ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True, env=env
@@ -102,7 +107,8 @@ class _Pytest:
         files = [a for a in c if a.startswith("tests/")]
         self.runs.append(files)
         junit = next(
-            o.removeprefix("--junitxml=") for o in (env or {})["PYTEST_ADDOPTS"].split()
+            o.removeprefix("--junitxml=")
+            for o in (env or {})["PYTEST_ADDOPTS"].split()
             if o.startswith("--junitxml=")
         )
         if self.during is not None:
@@ -117,7 +123,8 @@ class _Pytest:
         cases = "".join(
             f'<testcase classname="{f[:-3].replace("/", ".")}" name="test_x" time="0.01">'
             + ("<failure message='boom'/>" if f in self.red else "")
-            + ("<skipped message='unavailable'/>" if f in self.skipped else "") + "</testcase>"
+            + ("<skipped message='unavailable'/>" if f in self.skipped else "")
+            + "</testcase>"
             for f in files
         )
         Path(junit).write_text(f"<testsuites><testsuite>{cases}</testsuite></testsuites>")
@@ -151,8 +158,14 @@ def _cache_repo(tmp_path: Path) -> Path:
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "base")
     _git(repo, "checkout", "-qb", "feature")
-    _commit(repo, {"vibe_quant/foo.py": "F = 2\n", "vibe_quant/bar.py": "B = 2\n",
-                   "scripts/agents/tool.py": "T = 2\n"})
+    _commit(
+        repo,
+        {
+            "vibe_quant/foo.py": "F = 2\n",
+            "vibe_quant/bar.py": "B = 2\n",
+            "scripts/agents/tool.py": "T = 2\n",
+        },
+    )
     return repo
 
 
@@ -174,7 +187,10 @@ def _commit(repo: Path, files: dict[str, str]) -> None:
 
 def _gate(tmp_path: Path, repo: Path, run: _Pytest, *, full: bool = False) -> tuple[Any, list[Any]]:
     cfg = swarm_check.Config(
-        worktree=repo, main_root=tmp_path, base="main", full=full,
+        worktree=repo,
+        main_root=tmp_path,
+        base="main",
+        full=full,
         file_cache_dir=tmp_path / "file-cache",
     )
     log = swarm_check.ToolLog(run)
@@ -240,8 +256,11 @@ class TestFileCache:
                 entry.write_text("{not json")
         elif damage == "missing-tree":
             for entry in entries:
-                entry.write_text(entry.read_text().replace(
-                    _git(repo, "rev-parse", "HEAD^{tree}").strip(), "0" * 40))
+                entry.write_text(
+                    entry.read_text().replace(
+                        _git(repo, "rev-parse", "HEAD^{tree}").strip(), "0" * 40
+                    )
+                )
         else:  # any conftest change between the PASS and now
             (repo / "tests" / "unit" / "conftest.py").write_text("X = 1\n")
             _git(repo, "add", "-A")
@@ -323,7 +342,9 @@ class TestFileCache:
             ("C = ParquetDataCatalog(tmp_path / 'catalog')  # a temp catalog", True),
         ],
     )
-    def test_only_a_test_reading_real_data_is_never_stored(self, tmp_path: Path, source: str, stored: bool) -> None:
+    def test_only_a_test_reading_real_data_is_never_stored(
+        self, tmp_path: Path, source: str, stored: bool
+    ) -> None:
         """B1: the ignored real catalog/archive/state can change with no tree change; a test
         that merely names a catalog (a temp one) still caches."""
         repo = _cache_repo(tmp_path)
@@ -337,7 +358,9 @@ class TestFileCache:
         _gate(tmp_path, repo, run)
         assert ("tests/unit/test_other.py" in _ran(run)) is not stored
 
-    @pytest.mark.slow(reason="one real pytest -n 2 run: the deselection must happen in an xdist worker")
+    @pytest.mark.slow(
+        reason="one real pytest -n 2 run: the deselection must happen in an xdist worker"
+    )
     def test_a_hook_deselection_in_an_xdist_worker_is_never_stored(self, tmp_path: Path) -> None:
         """Review rev-gate-1 PARTIAL HOOK: a conftest hook deselected the red test inside the
         workers, the controller summary said only `1 passed`, and the file's PASS was stored.
@@ -366,7 +389,9 @@ class TestFileCache:
         for rel, text in files.items():
             (repo / rel).parent.mkdir(parents=True, exist_ok=True)
             (repo / rel).write_text(text)
-        (tmp_path / "pyproject.toml").write_text(files["pyproject.toml"])  # main's deps = the worktree's
+        (tmp_path / "pyproject.toml").write_text(
+            files["pyproject.toml"]
+        )  # main's deps = the worktree's
         _git(tmp_path, "init", "-q", "-b", "main", str(repo))
         _git(repo, "add", "-A")
         _git(repo, "commit", "-qm", "base")
@@ -378,7 +403,9 @@ class TestFileCache:
         log = swarm_check.ToolLog(swarm_check.real_run)
         state = swarm_check.git_state(repo, "main", log)
         env = {"PYTHONPATH": str(repo), "PYTEST_XDIST_AUTO_NUM_WORKERS": "2"}
-        result = swarm_check._run_tests(cfg, state, {"pytest": [sys.executable, "-m", "pytest"]}, log, env)
+        result = swarm_check._run_tests(
+            cfg, state, {"pytest": [sys.executable, "-m", "pytest"]}, log, env
+        )
         assert result.check.status == "PASS", result.check.detail  # the red test never ran
         stored = [
             json.loads(p.read_text())["path"] for p in (tmp_path / "file-cache").glob("*.json")

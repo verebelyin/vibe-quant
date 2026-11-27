@@ -31,7 +31,9 @@ _spec.loader.exec_module(stale_reads)
 WT = Path("/Users/verebelyin/projects/vq-retro-facts")
 MAIN = Path("/Users/verebelyin/projects/vibe-quant")
 _AGENT = "cc-facts-1"
-_THREAD = "thread:delegated-task:command%3Amcp%3A38fca8fb-bbef-4970-b4d6-f929b738ab98%3Adelegate-task%3A"
+_THREAD = (
+    "thread:delegated-task:command%3Amcp%3A38fca8fb-bbef-4970-b4d6-f929b738ab98%3Adelegate-task%3A"
+)
 
 
 _DB_SEQ = 0
@@ -98,6 +100,7 @@ class TestStaleCommands:
         ]
         assert _stale(commands, tmp_path) == [read]
 
+
 class TestCli:
     def _run(self, tmp_path: Path, *argv: str) -> int:
         return stale_reads.main([*argv])
@@ -115,8 +118,14 @@ class TestCli:
         db = _commands(tmp_path, ["cat vibe_quant/a.py"])
         proc = subprocess.run(
             [
-                sys.executable, str(_SCRIPT), "--agent", _AGENT,
-                "--worktree", str(WT), "--db", str(db),
+                sys.executable,
+                str(_SCRIPT),
+                "--agent",
+                _AGENT,
+                "--worktree",
+                str(WT),
+                "--db",
+                str(db),
             ],  # fmt: skip
             capture_output=True,
             text=True,

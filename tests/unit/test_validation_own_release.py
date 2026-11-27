@@ -99,8 +99,13 @@ def _run_config(
     state = StateManager(db)
     sid = state.create_strategy(name=f"own_release_probe_{timeframe}", dsl_config=_dsl(timeframe))
     run_id = state.create_backtest_run(
-        strategy_id=sid, run_mode="validation", symbols=symbols, timeframe=timeframe,
-        start_date="2025-01-01", end_date="2025-02-01", parameters=parameters or {},
+        strategy_id=sid,
+        run_mode="validation",
+        symbols=symbols,
+        timeframe=timeframe,
+        start_date="2025-01-01",
+        end_date="2025-02-01",
+        parameters=parameters or {},
     )
     state.close()
     runner = ValidationRunner(db_path=db, logs_path=tmp_path / "logs")
@@ -155,18 +160,23 @@ def test_1m_strategy_without_detail_unchanged(tmp_path: Path) -> None:
         assert config["execution_delay_probability"] == 1.0
     (venue,) = cfg.venues
     assert venue.latency_model is None
-    no_latency = create_backtest_venue_config(create_venue_config_for_validation(latency_preset=None))
+    no_latency = create_backtest_venue_config(
+        create_venue_config_for_validation(latency_preset=None)
+    )
     assert venue.fill_model == no_latency.fill_model
 
 
-def _create_run(
-    tmp_path: Path, timeframe: str, parameters: dict[str, object] | None = None
-) -> int:
+def _create_run(tmp_path: Path, timeframe: str, parameters: dict[str, object] | None = None) -> int:
     state = StateManager(tmp_path / "s.db")
     sid = state.create_strategy(name=f"own_release_probe_{timeframe}", dsl_config=_dsl(timeframe))
     run_id = state.create_backtest_run(
-        strategy_id=sid, run_mode="validation", symbols=["BTCUSDT"], timeframe=timeframe,
-        start_date="2025-01-01", end_date="2025-02-01", parameters=parameters or {},
+        strategy_id=sid,
+        run_mode="validation",
+        symbols=["BTCUSDT"],
+        timeframe=timeframe,
+        start_date="2025-01-01",
+        end_date="2025-02-01",
+        parameters=parameters or {},
     )
     state.close()
     return run_id
@@ -258,7 +268,9 @@ class TestDetailTimeframeOverride:
 
     def _cfg(self, detail: str | None = None) -> dict[str, object]:
         cfg: dict[str, object] = {
-            "symbols": json.dumps(["BTCUSDT"]), "start_date": "2025-01-01", "end_date": "2025-02-01",
+            "symbols": json.dumps(["BTCUSDT"]),
+            "start_date": "2025-01-01",
+            "end_date": "2025-02-01",
         }
         if detail is not None:
             cfg["parameters"] = {"detail_timeframe": detail}

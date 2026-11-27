@@ -95,11 +95,11 @@ The framework should implement a **message bus pattern** with discrete event typ
 **Core event types:**
 ```python
 class EventType(Enum):
-    MARKET = "MARKET"      # New bar/tick data
-    SIGNAL = "SIGNAL"      # Strategy trading signal
-    ORDER = "ORDER"        # Order to submit
-    FILL = "FILL"          # Order execution
-    RISK = "RISK"          # Risk management events
+    MARKET = "MARKET"  # New bar/tick data
+    SIGNAL = "SIGNAL"  # Strategy trading signal
+    ORDER = "ORDER"  # Order to submit
+    FILL = "FILL"  # Order execution
+    RISK = "RISK"  # Risk management events
 ```
 
 **Event flow diagram:**
@@ -111,8 +111,8 @@ ExecutionHandler → [FILL] → Portfolio (update positions)
 **Main event loop structure:**
 ```python
 while data_handler.continue_backtest:
-    data_handler.update_bars()      # Emit MARKET events
-    while events.process_next():    # Process all generated events
+    data_handler.update_bars()  # Emit MARKET events
+    while events.process_next():  # Process all generated events
         pass
 ```
 
@@ -122,6 +122,7 @@ Strategies should implement a **protocol/interface** for easy swapping:
 
 ```python
 from typing import Protocol
+
 
 class IStrategy(Protocol):
     def on_bar(self, bar_data: dict) -> list[Signal]: ...
@@ -154,13 +155,16 @@ class NormalizedBar:
     volume: float
     exchange: str
 
+
 class BinanceAdapter(ExchangeAdapter):
     def normalize_bar(self, raw: list) -> NormalizedBar:
         return NormalizedBar(
             timestamp=datetime.fromtimestamp(raw[0] / 1000),
-            open=float(raw[1]), high=float(raw[2]),
-            low=float(raw[3]), close=float(raw[4]),
-            volume=float(raw[5])
+            open=float(raw[1]),
+            high=float(raw[2]),
+            low=float(raw[3]),
+            close=float(raw[4]),
+            volume=float(raw[5]),
         )
 ```
 
@@ -277,19 +281,19 @@ Liquidation occurs when Margin_Ratio ≥ 100%
 
 **Order trigger mechanics:**
 ```python
-def check_stop_trigger(position, mark_price, trigger_type='mark'):
-    if position.side == 'long':
+def check_stop_trigger(position, mark_price, trigger_type="mark"):
+    if position.side == "long":
         if mark_price <= position.stop_loss:
-            return 'stop_triggered'
+            return "stop_triggered"
         if mark_price >= position.take_profit:
-            return 'tp_triggered'
+            return "tp_triggered"
 ```
 
 **Trailing stop implementation:**
 ```python
 class TrailingStop:
     def update(self, current_price, position_side):
-        if position_side == 'long':
+        if position_side == "long":
             if current_price > self.highest_price:
                 self.highest_price = current_price
                 self.stop_price = current_price * (1 - self.trail_percent)
@@ -331,12 +335,13 @@ class LatencySimulator:
 ```python
 from numba import njit
 
+
 @njit(parallel=True, cache=True)
 def calculate_returns(prices):
     n = len(prices)
-    returns = np.empty(n-1, dtype=np.float64)
-    for i in range(n-1):
-        returns[i] = (prices[i+1] - prices[i]) / prices[i]
+    returns = np.empty(n - 1, dtype=np.float64)
+    for i in range(n - 1):
+        returns[i] = (prices[i + 1] - prices[i]) / prices[i]
     return returns
 ```
 
@@ -364,11 +369,11 @@ def calculate_returns(prices):
 
 ```python
 # Data type optimization (50-80% memory savings)
-df['symbol'] = df['symbol'].astype('category')
-df['close'] = df['close'].astype('float32')
+df["symbol"] = df["symbol"].astype("category")
+df["close"] = df["close"].astype("float32")
 
 # Chunked processing for large datasets
-for chunk in pd.read_parquet('data.parquet', chunksize=100000):
+for chunk in pd.read_parquet("data.parquet", chunksize=100000):
     process(chunk)
 ```
 
@@ -377,10 +382,12 @@ for chunk in pd.read_parquet('data.parquet', chunksize=100000):
 ```python
 import ray
 
+
 @ray.remote
 def backtest(params, data_ref):
     data = ray.get(data_ref)  # Zero-copy access
     return run_backtest(data, params)
+
 
 # Store data once, share across workers
 data_ref = ray.put(price_data)
@@ -408,9 +415,9 @@ results = ray.get(futures)
 ```python
 class LiveDataHandler:
     async def connect(self):
-        self.ws = await websockets.connect('wss://fstream.binance.com/stream')
-        await self.subscribe(['btcusdt@kline_1m', 'btcusdt@bookTicker'])
-    
+        self.ws = await websockets.connect("wss://fstream.binance.com/stream")
+        await self.subscribe(["btcusdt@kline_1m", "btcusdt@bookTicker"])
+
     async def on_message(self, message):
         normalized = self.normalize(json.loads(message))
         self.event_bus.publish(MarketEvent(normalized))
@@ -419,7 +426,7 @@ class LiveDataHandler:
 **Reconnection strategy with exponential backoff:**
 ```python
 async def reconnect(attempt=0):
-    delay = min(1000 * (2 ** attempt), 30000)  # Max 30s
+    delay = min(1000 * (2**attempt), 30000)  # Max 30s
     jitter = random.random() * 1000
     await asyncio.sleep((delay + jitter) / 1000)
 ```

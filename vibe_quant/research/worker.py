@@ -139,9 +139,7 @@ class _HeartbeatThread(threading.Thread):
                     try:
                         self._on_cancel()
                     except Exception:  # noqa: BLE001
-                        logger.exception(
-                            "cancel callback failed for job %s", self._job_id
-                        )
+                        logger.exception("cancel callback failed for job %s", self._job_id)
 
 
 def _iso_now() -> str:
@@ -298,9 +296,7 @@ def _drain_loop(
                     "cancelled-after-timeout" if e.grace_expired else "cancelled by user"
                 )
                 try:
-                    sm.finish_cancelled_extraction_job(
-                        current_job_id, error_message=error_message
-                    )
+                    sm.finish_cancelled_extraction_job(current_job_id, error_message=error_message)
                 except ValueError:
                     logger.warning(
                         "extraction-worker: job %s already terminal before cancel",
@@ -362,9 +358,7 @@ def run_forever(
     if concurrency < 1:
         raise ValueError(f"concurrency must be >= 1 (got {concurrency})")
     if concurrency > MAX_CONCURRENCY:
-        raise ValueError(
-            f"concurrency must be <= {MAX_CONCURRENCY} (got {concurrency})"
-        )
+        raise ValueError(f"concurrency must be <= {MAX_CONCURRENCY} (got {concurrency})")
 
     stop = stop_event or Event()
     sink = sink or _JsonlSink(DEFAULT_LOG_ROOT / f"extraction-worker-{os.getpid()}.log")
@@ -416,9 +410,7 @@ def run_forever(
             try:
                 with in_flight_lock:
                     excluded = set(in_flight)
-                swept = sm.sweep_stuck_extraction_jobs(
-                    stuck_threshold, exclude_job_ids=excluded
-                )
+                swept = sm.sweep_stuck_extraction_jobs(stuck_threshold, exclude_job_ids=excluded)
                 for j in swept:
                     sink.emit(
                         "job_swept",
@@ -472,8 +464,7 @@ def cli_main(argv: list[str] | None = None) -> int:
 
     if args.concurrency < 1 or args.concurrency > MAX_CONCURRENCY:
         parser.error(
-            f"--concurrency must be between 1 and {MAX_CONCURRENCY} "
-            f"(got {args.concurrency})"
+            f"--concurrency must be between 1 and {MAX_CONCURRENCY} (got {args.concurrency})"
         )
 
     logging.basicConfig(

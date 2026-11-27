@@ -140,12 +140,8 @@ def events(bar_data: dict[str, np.ndarray]) -> list[tuple[int, str, str]]:
     macd = _hma(open_, MACD_FAST) - _hma(open_, MACD_SLOW)
     signal = _hma(macd, MACD_SIGNAL)
 
-    long_entry = (
-        (hma1 > hma2) & (d1 > d2) & (open_ > hma2) & (lead1 > lead2) & (macd > signal)
-    )
-    short_entry = (
-        (hma1 < hma2) & (d1 < d2) & (open_ < hma2) & (lead1 < lead2) & (macd < signal)
-    )
+    long_entry = (hma1 > hma2) & (d1 > d2) & (open_ > hma2) & (lead1 > lead2) & (macd > signal)
+    short_entry = (hma1 < hma2) & (d1 < d2) & (open_ < hma2) & (lead1 < lead2) & (macd < signal)
     out: list[tuple[int, str, str]] = []
     for t in range(open_.size):
         if long_entry[t]:

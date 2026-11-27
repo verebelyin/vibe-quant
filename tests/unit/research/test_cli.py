@@ -53,10 +53,13 @@ def test_unknown_source_exits_2(tmp_path: Path) -> None:
 def test_no_extract_leaves_items_pending(tmp_path: Path) -> None:
     _register_dummy_source()
     db = tmp_path / "x.db"
-    rc = main(["scrape", "--source", "dummy_cli", "--limit", "5", "--no-extract", "--db-path", str(db)])
+    rc = main(
+        ["scrape", "--source", "dummy_cli", "--limit", "5", "--no-extract", "--db-path", str(db)]
+    )
     assert rc == 0
 
     from vibe_quant.db.state_manager import StateManager
+
     sm = StateManager(db)
     try:
         rows = sm.list_research_items(source="dummy_cli")
@@ -81,6 +84,7 @@ def test_claude_unavailable_falls_back_to_pending(tmp_path: Path) -> None:
     assert rc == 0  # scrape still completes
 
     from vibe_quant.db.state_manager import StateManager
+
     sm = StateManager(db)
     try:
         rows = sm.list_research_items(source="dummy_cli")

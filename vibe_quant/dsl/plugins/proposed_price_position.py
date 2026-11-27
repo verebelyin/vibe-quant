@@ -20,13 +20,13 @@ from vibe_quant.dsl.warmup_class import windowed
 
 def _price_position_pandas(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
     """Reference implementation (pandas rolling) — kept for equivalence tests."""
-    period_raw = params.get('period', 14)
+    period_raw = params.get("period", 14)
     period = int(period_raw) if isinstance(period_raw, (int, float)) else 14
     if period < 1:
         period = 1
-    low: pd.Series = df['low']
-    high: pd.Series = df['high']
-    close: pd.Series = df['close']
+    low: pd.Series = df["low"]
+    high: pd.Series = df["high"]
+    close: pd.Series = df["close"]
     lowest_low: pd.Series = low.rolling(window=period, min_periods=period).min()
     highest_high: pd.Series = high.rolling(window=period, min_periods=period).max()
     range_span: pd.Series = highest_high - lowest_low
@@ -38,13 +38,13 @@ def _price_position_pandas(df: pd.DataFrame, params: dict[str, object]) -> pd.Se
 
 
 def compute_price_position(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
-    period_raw = params.get('period', 14)
+    period_raw = params.get("period", 14)
     period = int(period_raw) if isinstance(period_raw, (int, float)) else 14
     if period < 1:
         period = 1
-    close = df['close'].to_numpy(dtype=np.float64)
-    high = df['high'].to_numpy(dtype=np.float64)
-    low = df['low'].to_numpy(dtype=np.float64)
+    close = df["close"].to_numpy(dtype=np.float64)
+    high = df["high"].to_numpy(dtype=np.float64)
+    low = df["low"].to_numpy(dtype=np.float64)
     n = low.shape[0]
     lowest_low = np.full(n, np.nan, dtype=np.float64)
     highest_high = np.full(n, np.nan, dtype=np.float64)
@@ -75,17 +75,17 @@ def compute_price_position(df: pd.DataFrame, params: dict[str, object]) -> pd.Se
 
 indicator_registry.register_spec(
     IndicatorSpec(
-        name='PRICE_POSITION',
+        name="PRICE_POSITION",
         nt_class=None,
         pandas_ta_func=None,
-        default_params={'period': 52},
-        param_schema={'period': int},
+        default_params={"period": 52},
+        param_schema={"period": int},
         compute_fn=compute_price_position,
         paper_warmup=windowed(lambda p: int_param(p, "period", 52)),
-        display_name='Price Position in Range',
+        display_name="Price Position in Range",
         description="Normalized 0..1 score expressing where the current close sits inside its recent high-low range. Used by the author to require a stock be in the upper part of its range (>= 0.70 'core' gate, >= 0.45 'premium override') before promotion. Conceptually similar to Stochastic %K but typically computed on a longer lookback (multi-week/52-week) rather than 14 bars.",
-        category='Custom',
-        param_ranges={'period': (20.0, 252.0)},
+        category="Custom",
+        param_ranges={"period": (20.0, 252.0)},
         threshold_range=(0.2, 0.8),
     )
 )

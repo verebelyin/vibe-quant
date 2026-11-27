@@ -81,14 +81,19 @@ def _sweep_row(starting_balance: object = None, sharpe: float = 1.0) -> dict[str
 
 def test_single_sweep_value_is_the_effective_balance(tmp_path: Path) -> None:
     """Every sweep row at 10000.0 -> the rerun runs at 10000."""
-    db, run_id = _seed(tmp_path, "sweep_value", sweep=[_sweep_row(10000.0), _sweep_row(10000.0, 2.0)])
+    db, run_id = _seed(
+        tmp_path, "sweep_value", sweep=[_sweep_row(10000.0), _sweep_row(10000.0, 2.0)]
+    )
     assert _effective(db, run_id) == 10000
 
 
 def test_null_sweep_rows_mean_the_default(tmp_path: Path) -> None:
     """NULL sweep rows (a legacy run) record no balance -> 1000."""
     db, run_id = _seed(
-        tmp_path, "sweep_null", parameters={"initial_balance": 10000}, sweep=[_sweep_row(), _sweep_row()]
+        tmp_path,
+        "sweep_null",
+        parameters={"initial_balance": 10000},
+        sweep=[_sweep_row(), _sweep_row()],
     )
     assert _effective(db, run_id) == 1000
 
@@ -162,32 +167,46 @@ class _NoTicks:
         return None
 
 
-def test_legacy_wfa_rerun_uses_1000_not_the_params(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_legacy_wfa_rerun_uses_1000_not_the_params(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Params say 10000, sweep rows are NULL -> the WFA rerun builds 1000."""
     _install_capture(monkeypatch)
     db, run_id = _seed(
-        tmp_path, "legacy_wfa", parameters={"initial_balance": 10000}, sweep=[_sweep_row(), _sweep_row()]
+        tmp_path,
+        "legacy_wfa",
+        parameters={"initial_balance": 10000},
+        sweep=[_sweep_row(), _sweep_row()],
     )
     NTWFARunner(run_id=run_id, db_path=db).backtest("x", date(2024, 2, 1), date(2024, 3, 1), {})
     assert [c["launch"].starting_balance for c in captures] == [1000]
 
 
-def test_legacy_cv_rerun_uses_1000_not_the_params(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_legacy_cv_rerun_uses_1000_not_the_params(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Same legacy parent -> the CV rerun builds 1000 on every fold backtest."""
     _install_capture(monkeypatch)
     monkeypatch.setattr(NTPurgedKFoldRunner, "_load_bar_timestamps", lambda _self: None)
     db, run_id = _seed(
-        tmp_path, "legacy_cv", parameters={"initial_balance": 10000}, sweep=[_sweep_row(), _sweep_row()]
+        tmp_path,
+        "legacy_cv",
+        parameters={"initial_balance": 10000},
+        sweep=[_sweep_row(), _sweep_row()],
     )
     runner = NTPurgedKFoldRunner(run_id=run_id, db_path=db, catalog_path=tmp_path / "catalog")
     runner._backtest("2024-02-01", "2024-03-01")  # noqa: SLF001
     assert [c["launch"].starting_balance for c in captures] == [1000]
 
 
-def test_wfa_rerun_follows_a_recorded_10000(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_wfa_rerun_follows_a_recorded_10000(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A run whose sweep rows recorded 10000 reruns at 10000, not at 1000."""
     _install_capture(monkeypatch)
-    db, run_id = _seed(tmp_path, "recorded_wfa", sweep=[_sweep_row(10000.0), _sweep_row(10000.0, 2.0)])
+    db, run_id = _seed(
+        tmp_path, "recorded_wfa", sweep=[_sweep_row(10000.0), _sweep_row(10000.0, 2.0)]
+    )
     NTWFARunner(run_id=run_id, db_path=db).backtest("x", date(2024, 2, 1), date(2024, 3, 1), {})
     assert [c["launch"].starting_balance for c in captures] == [10000]
 
@@ -196,7 +215,9 @@ def test_cv_rerun_follows_a_recorded_10000(tmp_path: Path, monkeypatch: pytest.M
     """Same for the CV runner."""
     _install_capture(monkeypatch)
     monkeypatch.setattr(NTPurgedKFoldRunner, "_load_bar_timestamps", lambda _self: None)
-    db, run_id = _seed(tmp_path, "recorded_cv", sweep=[_sweep_row(10000.0), _sweep_row(10000.0, 2.0)])
+    db, run_id = _seed(
+        tmp_path, "recorded_cv", sweep=[_sweep_row(10000.0), _sweep_row(10000.0, 2.0)]
+    )
     runner = NTPurgedKFoldRunner(run_id=run_id, db_path=db, catalog_path=tmp_path / "catalog")
     runner._backtest("2024-02-01", "2024-03-01")  # noqa: SLF001
     assert [c["launch"].starting_balance for c in captures] == [10000]

@@ -33,9 +33,7 @@ def sm(tmp_path: Path) -> Generator[StateManager]:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_log_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> Generator[Path]:
+def _isolate_log_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[Path]:
     root = tmp_path / "research-logs"
     monkeypatch.setattr(extraction_log, "DEFAULT_LOG_ROOT", root)
     yield root
@@ -57,9 +55,7 @@ def _isolate_registry() -> Generator[None]:
 
 
 @pytest.fixture
-def _stub_external(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> Generator[Path]:
+def _stub_external(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[Path]:
     """Pin PLUGINS_DIR + stub git_commit_promotion + bd_remember + reload_plugins."""
     plugins = tmp_path / "plugins"
     plugins.mkdir()
@@ -74,9 +70,7 @@ def _stub_external(
         "bd_remember_indicator",
         lambda **_kw: (True, "saved"),
     )
-    monkeypatch.setattr(
-        "vibe_quant.dsl.plugin_loader.reload_plugins", lambda: []
-    )
+    monkeypatch.setattr("vibe_quant.dsl.plugin_loader.reload_plugins", lambda: [])
     yield plugins
 
 
@@ -145,9 +139,7 @@ def test_promote_invalid_name_returns_400(
 # ---------- not_found ----------
 
 
-def test_promote_not_found_when_no_proposed_file(
-    client: TestClient, _stub_external: Path
-) -> None:
+def test_promote_not_found_when_no_proposed_file(client: TestClient, _stub_external: Path) -> None:
     out = _promote(client, "GHOST")
     assert out["status_code"] == 404
 
@@ -176,11 +168,7 @@ def test_promote_collision_when_target_already_exists(
 def test_promote_happy_path_renames_strips_header_and_commits(
     client: TestClient, sm: StateManager, _stub_external: Path
 ) -> None:
-    src = (
-        '"""AUTO-GENERATED FROM EXTRACTION 1 ON 2026-01-01 — review."""\n'
-        "\n"
-        "X = 1\n"
-    )
+    src = '"""AUTO-GENERATED FROM EXTRACTION 1 ON 2026-01-01 — review."""\n\nX = 1\n'
     (_stub_external / "proposed_demo.py").write_text(src)
     _seed_scaffold(
         sm,

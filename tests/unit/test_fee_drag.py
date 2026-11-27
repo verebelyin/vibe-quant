@@ -199,7 +199,10 @@ def test_fee_fields_survive_eval_windows_3() -> None:
 
 def test_fee_fields_survive_early_exit() -> None:
     """A stopped run still reports the fees it actually paid."""
-    results = [_m(0.1, fees=10.0, gross=100.0, days=30.0), _m(-0.05, fees=5.0, gross=80.0, days=31.0)]
+    results = [
+        _m(0.1, fees=10.0, gross=100.0, days=30.0),
+        _m(-0.05, fees=5.0, gross=80.0, days=31.0),
+    ]
     out = NTBacktestFn._early_exit_result(results, 1, low_trades=False)
     assert out["early_exit"] == 1
     assert out["total_fees"] == 15.0
@@ -293,9 +296,7 @@ def test_champion_entry_carries_fee_drag() -> None:
     from vibe_quant.discovery.record import champion_entry
 
     fitness = _fit(fee_drag=0.2, fees_pct=0.05)
-    entry = champion_entry(
-        _chromosome(), fitness, timeframe="1h", dsr=None, buy_hold=None
-    )
+    entry = champion_entry(_chromosome(), fitness, timeframe="1h", dsr=None, buy_hold=None)
     assert entry["fee_drag"] == 0.2
     assert entry["fees_pct_equity_yr"] == 0.05
     assert entry["return_pct"] == fitness.total_return
@@ -313,7 +314,10 @@ def _fields(**kw: float) -> tuple[float | None, float | None]:
     from vibe_quant.discovery.fitness import _fee_drag_fields
 
     bt: dict[str, float | int] = {
-        "total_fees": 50.0, "gross_pnl": 300.0, "starting_balance": 1000.0, "days": 180.0,
+        "total_fees": 50.0,
+        "gross_pnl": 300.0,
+        "starting_balance": 1000.0,
+        "days": 180.0,
     }
     bt.update(kw)
     return _fee_drag_fields(bt)
@@ -374,14 +378,26 @@ def test_score_bit_identical_with_and_without_fee_fields(
         "total_trades": trades, "total_return": ret, "trade_returns": (ret / trades,) * trades,
     }  # fmt: skip
     loud = {
-        **base, "total_fees": 9e9, "gross_pnl": -1e9, "starting_balance": 1.0, "days": 1,
+        **base,
+        "total_fees": 9e9,
+        "gross_pnl": -1e9,
+        "starting_balance": 1.0,
+        "days": 1,
     }
     a = _evaluate_single(_chromosome(), lambda c: dict(base), min_trades=50, timeframe="1h")
     b = _evaluate_single(_chromosome(), lambda c: dict(loud), min_trades=50, timeframe="1h")
     for field in (
-        "sharpe_ratio", "max_drawdown", "profit_factor", "total_trades", "total_return",
-        "raw_score", "adjusted_score", "complexity_penalty", "overtrade_penalty",
-        "sl_tp_penalty", "passed_filters",
+        "sharpe_ratio",
+        "max_drawdown",
+        "profit_factor",
+        "total_trades",
+        "total_return",
+        "raw_score",
+        "adjusted_score",
+        "complexity_penalty",
+        "overtrade_penalty",
+        "sl_tp_penalty",
+        "passed_filters",
     ):
         assert getattr(a, field) == getattr(b, field), field
 
@@ -399,7 +415,9 @@ def test_trade_gated_fitness_still_reports_fee_drag() -> None:
             "total_trades": trades, "total_return": ret, "trade_returns": (0.0,) * trades,
             "total_fees": 40.0, "gross_pnl": 80.0, "starting_balance": 1000.0, "days": 100,
         }  # fmt: skip
-        fit = _evaluate_single(_chromosome(), lambda c, b=bt: dict(b), min_trades=50, timeframe="1h")
+        fit = _evaluate_single(
+            _chromosome(), lambda c, b=bt: dict(b), min_trades=50, timeframe="1h"
+        )
         assert fit.adjusted_score == 0.0
         assert fit.fee_drag == 0.5
         assert fit.fees_pct_equity_yr == 40.0 / 1000.0 * 365.0 / 100.0
@@ -438,7 +456,10 @@ class _CatalogFn(NTBacktestFn):
     catalog_root = ""
 
     def _make_runner(
-        self, dsl_dict: dict[str, Any], start_date: str, end_date: str,
+        self,
+        dsl_dict: dict[str, Any],
+        start_date: str,
+        end_date: str,
         symbols: list[str] | None = None,
     ) -> NTScreeningRunner:
         return NTScreeningRunner(
@@ -455,9 +476,7 @@ class _CatalogFn(NTBacktestFn):
 @pytest.fixture
 def always_long(monkeypatch: pytest.MonkeyPatch) -> None:
     """chromosome_to_dsl -> the always-long synthetic strategy (rising market, 1 trade)."""
-    monkeypatch.setattr(
-        "vibe_quant.discovery.genome.chromosome_to_dsl", lambda chrom: _dsl("4h")
-    )
+    monkeypatch.setattr("vibe_quant.discovery.genome.chromosome_to_dsl", lambda chrom: _dsl("4h"))
 
 
 def test_screening_runner_reports_gross_and_inputs(catalog: Path) -> None:
@@ -505,7 +524,14 @@ def test_discovery_fitness_from_real_screening_run_and_trade_gate(
 # ---------------------------------------------------------------------------
 
 _LEGACY_CHAMPION_KEYS = [
-    "dsl", "chromosome", "score", "sharpe", "max_dd", "pf", "trades", "return_pct",
+    "dsl",
+    "chromosome",
+    "score",
+    "sharpe",
+    "max_dd",
+    "pf",
+    "trades",
+    "return_pct",
 ]
 
 
@@ -520,8 +546,12 @@ def test_champion_entry_legacy_fields_and_key_order_preserved() -> None:
     bh: dict[str, object] = {"beat": True}
     entry = champion_entry(chrom, fitness, timeframe="1h", dsr=dsr, buy_hold=bh)
     assert list(entry) == [
-        *_LEGACY_CHAMPION_KEYS, "dsr", "buy_hold", "symbol_scores",
-        "fee_drag", "fees_pct_equity_yr",
+        *_LEGACY_CHAMPION_KEYS,
+        "dsr",
+        "buy_hold",
+        "symbol_scores",
+        "fee_drag",
+        "fees_pct_equity_yr",
     ]
     expected_dsl = {**chromosome_to_dsl(chrom), "timeframe": "1h"}
     assert entry["dsl"] == expected_dsl

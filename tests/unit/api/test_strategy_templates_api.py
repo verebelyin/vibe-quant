@@ -39,7 +39,9 @@ def test_templates_endpoint_lists_every_valid_template(client: TestClient) -> No
 
 
 def test_strategy_created_from_template_payload_is_stored_and_valid(client: TestClient) -> None:
-    item = next(i for i in client.get("/api/strategies/templates").json() if i["name"] == "ema_ribbon")
+    item = next(
+        i for i in client.get("/api/strategies/templates").json() if i["name"] == "ema_ribbon"
+    )
 
     created = client.post(
         "/api/strategies",

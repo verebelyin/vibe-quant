@@ -252,9 +252,7 @@ class MarketStatsSeries:
         self._returns = returns
 
     @classmethod
-    def from_bars(
-        cls, ts_init: Any, close: Any, volume: Any
-    ) -> MarketStatsSeries:
+    def from_bars(cls, ts_init: Any, close: Any, volume: Any) -> MarketStatsSeries:
         """Prefix sums of an instrument's bars, sorted by ``ts_init`` (stable on ties)."""
         ts = np.asarray(ts_init, dtype=np.int64)
         closes = np.asarray(close, dtype=np.float64)
@@ -294,9 +292,7 @@ class MarketStatsSeries:
         if end <= 0:
             return DEFAULT_AVG_BAR_VOLUME, DEFAULT_BAR_VOLATILITY
         count = int(self._vol_n[end - 1])
-        avg_volume = (
-            float(self._vol_sum[end - 1]) / count if count else DEFAULT_AVG_BAR_VOLUME
-        )
+        avg_volume = float(self._vol_sum[end - 1]) / count if count else DEFAULT_AVG_BAR_VOLUME
         n = int(self._ret_n[end - 1])
         volatility = DEFAULT_BAR_VOLATILITY
         if n >= 2:

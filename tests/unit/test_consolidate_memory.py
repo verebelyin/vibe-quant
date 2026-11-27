@@ -41,8 +41,17 @@ def board(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     jdir = tmp_path / "jobs" / JOB
     (jdir / "bus").mkdir(parents=True)
     (jdir / "handoffs").mkdir()
-    (jdir / "handoffs" / "w1.md").write_text("improve: guard nt_runner.py fill path | evidence: run 900\n")
-    cm.bus.post(jdir / "bus", "w1", "board", "info", "RULE: nt_runner.py fills on the next 1m bar", topic="gotchas")
+    (jdir / "handoffs" / "w1.md").write_text(
+        "improve: guard nt_runner.py fill path | evidence: run 900\n"
+    )
+    cm.bus.post(
+        jdir / "bus",
+        "w1",
+        "board",
+        "info",
+        "RULE: nt_runner.py fills on the next 1m bar",
+        topic="gotchas",
+    )
     cm.bus.post(gdir, "old", "board", "info", "unrelated sizing note", topic="findings")
     return gdir, jdir
 
@@ -54,8 +63,13 @@ def _ids(gdir: Path) -> dict[str, str]:
 def test_validate_rejects_ids_the_model_was_not_shown_and_bad_fields() -> None:
     shown = {"a", "b"}
     assert cm.validate([{"op": "retire", "id": "a", "reason": "dup"}], shown) == []
-    assert cm.validate([{"op": "add", "topic": "gotchas", "importance": 3, "body": "RULE: x"}], shown) == []
-    assert cm.validate([{"op": "retire", "id": "zzz", "reason": "dup"}], shown) == ["op 0: retire id 'zzz' was not shown to the model"]
+    assert (
+        cm.validate([{"op": "add", "topic": "gotchas", "importance": 3, "body": "RULE: x"}], shown)
+        == []
+    )
+    assert cm.validate([{"op": "retire", "id": "zzz", "reason": "dup"}], shown) == [
+        "op 0: retire id 'zzz' was not shown to the model"
+    ]
     errors = cm.validate(
         [
             {"op": "supersede", "id": "a", "topic": "chat", "importance": 4, "body": " "},
@@ -81,15 +95,33 @@ def test_validate_rejects_ids_the_model_was_not_shown_and_bad_fields() -> None:
     assert cm.validate({"ops": []}, shown) == ["ops is not a list"]
 
 
-def test_propose_then_apply_changes_the_board_once(board: tuple[Path, Path], capsys: pytest.CaptureFixture[str]) -> None:
+def test_propose_then_apply_changes_the_board_once(
+    board: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
     gdir, jdir = board
     ids = _ids(gdir)
-    job_rule, unrelated = ids["RULE: nt_runner.py fills on the next 1m bar"], ids["unrelated sizing note"]
-    reply = {"ops": [
-        {"op": "supersede", "id": job_rule, "topic": "gotchas", "importance": 3, "body": "RULE: fills on the NEXT 1m bar open"},
-        {"op": "retire", "id": unrelated, "reason": "duplicate of sizing doc"},
-        {"op": "add", "topic": "decisions", "importance": 2, "body": "RULE: fade job buses after 7 days"},
-    ]}
+    job_rule, unrelated = (
+        ids["RULE: nt_runner.py fills on the next 1m bar"],
+        ids["unrelated sizing note"],
+    )
+    reply = {
+        "ops": [
+            {
+                "op": "supersede",
+                "id": job_rule,
+                "topic": "gotchas",
+                "importance": 3,
+                "body": "RULE: fills on the NEXT 1m bar open",
+            },
+            {"op": "retire", "id": unrelated, "reason": "duplicate of sizing doc"},
+            {
+                "op": "add",
+                "topic": "decisions",
+                "importance": 2,
+                "body": "RULE: fade job buses after 7 days",
+            },
+        ]
+    }
     fenced = "```json\n" + json.dumps(reply) + "\n```"
     before = (gdir / "messages.jsonl").read_bytes()
     assert cm.propose(JOB, 40, None, ask=lambda _p: fenced) == 0
@@ -99,20 +131,27 @@ def test_propose_then_apply_changes_the_board_once(board: tuple[Path, Path], cap
     capsys.readouterr()
 
     assert cm.apply(jdir / "memory-ops.json", "chief") == 0
-    visible = [(m["body"], m.get("importance"), m.get("job")) for m in cm.bus.board_search(gdir, topics=list(cm.TOPICS))]
+    visible = [
+        (m["body"], m.get("importance"), m.get("job"))
+        for m in cm.bus.board_search(gdir, topics=list(cm.TOPICS))
+    ]
     assert visible == [
         ("RULE: fills on the NEXT 1m bar open", 3, JOB),
         ("RULE: fade job buses after 7 days", 2, JOB),
     ]
     lines = (gdir / "messages.jsonl").read_bytes()
-    assert cm.apply(jdir / "memory-ops.json", "chief") == 0  # a re-run (e.g. after a crash) adds nothing
+    assert (
+        cm.apply(jdir / "memory-ops.json", "chief") == 0
+    )  # a re-run (e.g. after a crash) adds nothing
     assert (gdir / "messages.jsonl").read_bytes() == lines
 
 
 def test_apply_revalidates_a_hand_edited_ops_file(board: tuple[Path, Path]) -> None:
     gdir, jdir = board
     ops_file = jdir / "memory-ops.json"
-    ops_file.write_text(json.dumps({"job": JOB, "shown": [], "ops": [{"op": "retire", "id": "x", "reason": "r"}]}))
+    ops_file.write_text(
+        json.dumps({"job": JOB, "shown": [], "ops": [{"op": "retire", "id": "x", "reason": "r"}]})
+    )
     before = (gdir / "messages.jsonl").read_bytes()
     assert cm.apply(ops_file, "chief") == 1
     ops_file.write_text(json.dumps({"ops": []}))

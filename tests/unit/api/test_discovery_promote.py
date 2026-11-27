@@ -67,14 +67,27 @@ def _create_discovery_run_with_results(
     genome_dsl = {
         "name": "ga_winner_1",
         "strategy_type": "momentum",
-        "entry": {"conditions": [{"indicator": "RSI", "params": {"period": 14}, "operator": "<", "value": 30}]},
-        "exit": {"conditions": [{"indicator": "RSI", "params": {"period": 14}, "operator": ">", "value": 70}]},
+        "entry": {
+            "conditions": [
+                {"indicator": "RSI", "params": {"period": 14}, "operator": "<", "value": 30}
+            ]
+        },
+        "exit": {
+            "conditions": [
+                {"indicator": "RSI", "params": {"period": 14}, "operator": ">", "value": 70}
+            ]
+        },
     }
     notes_payload: dict[str, object] = {
         "top_strategies": top_strategies
         or [
             {"dsl": genome_dsl, "score": 1.5, "trades": 42, "sharpe": 1.8},
-            {"dsl": {**genome_dsl, "name": "ga_winner_2"}, "score": 1.2, "trades": 30, "sharpe": 1.5},
+            {
+                "dsl": {**genome_dsl, "name": "ga_winner_2"},
+                "score": 1.2,
+                "trades": 30,
+                "sharpe": 1.5,
+            },
         ]
     }
     if notes_extra:
@@ -92,7 +105,9 @@ def _create_discovery_run_with_results(
 # --- Promote tests ---
 
 
-async def test_promote_creates_strategy_and_launches_screening(client: tuple[AsyncClient, StateManager]) -> None:
+async def test_promote_creates_strategy_and_launches_screening(
+    client: tuple[AsyncClient, StateManager],
+) -> None:
     ac, state = client
     run_id = _create_discovery_run_with_results(state)
 
@@ -105,7 +120,9 @@ async def test_promote_creates_strategy_and_launches_screening(client: tuple[Asy
     assert data["run_id"] >= 1
 
     # Verify strategy was created in DB
-    row = state.conn.execute("SELECT name FROM strategies WHERE id = ?", (data["strategy_id"],)).fetchone()
+    row = state.conn.execute(
+        "SELECT name FROM strategies WHERE id = ?", (data["strategy_id"],)
+    ).fetchone()
     assert row is not None
     assert row[0] == "ga_winner_1"
 
@@ -189,8 +206,13 @@ async def test_promote_non_discovery_run(client: tuple[AsyncClient, StateManager
     state.conn.commit()
     sid = cursor.lastrowid
     run_id = state.create_backtest_run(
-        strategy_id=sid, run_mode="screening", symbols=["BTCUSDT"],
-        timeframe="4h", start_date="2024-01-01", end_date="2025-01-01", parameters={},
+        strategy_id=sid,
+        run_mode="screening",
+        symbols=["BTCUSDT"],
+        timeframe="4h",
+        start_date="2024-01-01",
+        end_date="2025-01-01",
+        parameters={},
     )
     r = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
     assert r.status_code == 400
@@ -287,7 +309,9 @@ async def test_promote_allows_1m_short_with_opposing_regime_pass(
 # --- Replay tests ---
 
 
-async def test_replay_creates_run_with_dsl_override(client: tuple[AsyncClient, StateManager]) -> None:
+async def test_replay_creates_run_with_dsl_override(
+    client: tuple[AsyncClient, StateManager],
+) -> None:
     ac, state = client
     run_id = _create_discovery_run_with_results(state)
 
@@ -374,8 +398,16 @@ def test_screening_cmd_run_with_dsl_override(tmp_path: Path) -> None:
     dsl_config = {
         "name": "test_replay",
         "strategy_type": "momentum",
-        "entry": {"conditions": [{"indicator": "RSI", "params": {"period": 14}, "operator": "<", "value": 30}]},
-        "exit": {"conditions": [{"indicator": "RSI", "params": {"period": 14}, "operator": ">", "value": 70}]},
+        "entry": {
+            "conditions": [
+                {"indicator": "RSI", "params": {"period": 14}, "operator": "<", "value": 30}
+            ]
+        },
+        "exit": {
+            "conditions": [
+                {"indicator": "RSI", "params": {"period": 14}, "operator": ">", "value": 70}
+            ]
+        },
     }
 
     run_id = state.create_backtest_run(
@@ -394,6 +426,7 @@ def test_screening_cmd_run_with_dsl_override(tmp_path: Path) -> None:
     params = run.get("parameters", {})
     if isinstance(params, str):
         import json
+
         params = json.loads(params)
     assert "dsl_override" in params
 
@@ -460,7 +493,8 @@ async def test_promote_same_genome_twice_is_idempotent(
 ) -> None:
     ac, state = client
     run_id = _create_discovery_run_with_results(
-        state, top_strategies=[{"dsl": _genome_dsl("genome_x1", 30), "score": 0.9}],
+        state,
+        top_strategies=[{"dsl": _genome_dsl("genome_x1", 30), "score": 0.9}],
     )
     r1 = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
     r2 = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
@@ -543,7 +577,8 @@ async def test_promote_validation_without_holdout_uses_full_range(
 ) -> None:
     ac, state = client
     run_id = _create_discovery_run_with_results(
-        state, top_strategies=[{"dsl": _genome_dsl("genome_h3", 30), "score": 0.9}],
+        state,
+        top_strategies=[{"dsl": _genome_dsl("genome_h3", 30), "score": 0.9}],
     )
     r = await ac.post(f"/api/discovery/results/{run_id}/promote/0?mode=validation")
     assert r.status_code == 201
@@ -565,15 +600,25 @@ async def test_regime_gate_uses_persisted_window_dates_and_blocks_neutral_base(
         "chromosome": {"direction": "short"},
         "score": 1.0,
         "cross_window": {
-            "windows_passed": 1, "total_windows": 1, "passed": True,
+            "windows_passed": 1,
+            "total_windows": 1,
+            "passed": True,
             "windows": [
-                {"sharpe": 1.2, "return_pct": 0.05, "trades": 40,
-                 "offset_months": 1, "dates": ["2024-02-01", "2024-10-19"]},
+                {
+                    "sharpe": 1.2,
+                    "return_pct": 0.05,
+                    "trades": 40,
+                    "offset_months": 1,
+                    "dates": ["2024-02-01", "2024-10-19"],
+                },
             ],
         },
     }
     run_id = _create_discovery_run_with_results(
-        state, timeframe="1m", symbols=["BTCUSDT"], top_strategies=[entry],
+        state,
+        timeframe="1m",
+        symbols=["BTCUSDT"],
+        top_strategies=[entry],
         notes_extra={
             "cross_window_months": [1],
             "train_dates": ["2024-01-01", "2024-10-19"],
@@ -586,7 +631,8 @@ async def test_regime_gate_uses_persisted_window_dates_and_blocks_neutral_base(
         return 0 if start == "2024-01-01" else -1
 
     monkeypatch.setattr(
-        "vibe_quant.discovery.gate_chain.window_regime_sign", neutral_base_bear_window,
+        "vibe_quant.discovery.gate_chain.window_regime_sign",
+        neutral_base_bear_window,
     )
     r = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
     assert r.status_code == 409
@@ -632,12 +678,14 @@ async def test_promote_without_strategy_type_defaults_to_momentum(
     dsl = _genome_dsl("genome_nostype", 30)
     assert "strategy_type" not in dsl
     run_id = _create_discovery_run_with_results(
-        state, top_strategies=[{"dsl": dsl, "score": 0.9}],
+        state,
+        top_strategies=[{"dsl": dsl, "score": 0.9}],
     )
     r = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
     assert r.status_code == 201
     row = state.conn.execute(
-        "SELECT strategy_type FROM strategies WHERE id = ?", (r.json()["strategy_id"],),
+        "SELECT strategy_type FROM strategies WHERE id = ?",
+        (r.json()["strategy_id"],),
     ).fetchone()
     assert row is not None
     assert row[0] == "momentum"
@@ -893,7 +941,9 @@ def _both_champion(
     return entry
 
 
-def _cross_window(shifted_sharpe: float, shifted_return_pct: float, *, passed: bool) -> dict[str, object]:
+def _cross_window(
+    shifted_sharpe: float, shifted_return_pct: float, *, passed: bool
+) -> dict[str, object]:
     """Legacy cross-window payload: slot 0 in-sample, slot 1 the +1-month window."""
     return {
         "windows_passed": 1 if passed else 0,
@@ -973,7 +1023,14 @@ def test_predicate_both_with_unreadable_dsl_fails_closed(dsl: object) -> None:
     [
         ({"dsl": {"entry_conditions": {"short": ["rsi_short_entry_0 > 70"]}}}, True),
         (
-            {"dsl": {"entry_conditions": {"long": ["rsi_entry_0 < 30"], "short": ["rsi_short_entry_0 > 70"]}}},
+            {
+                "dsl": {
+                    "entry_conditions": {
+                        "long": ["rsi_entry_0 < 30"],
+                        "short": ["rsi_short_entry_0 > 70"],
+                    }
+                }
+            },
             True,
         ),
         ({"dsl": {"entry_conditions": _LEGACY_IDENTICAL_SIDES}}, False),
@@ -1017,7 +1074,9 @@ async def test_promote_allows_1m_both_champion_with_opposing_regime_pass(
 ) -> None:
     """The same both 1m champion promotes once a bull window passes."""
     ac, state = client
-    entry = _both_champion(_OWN_SHORT_SIDES, _cross_window(0.9, 0.04, passed=True), name="ga_both_1m_pass")
+    entry = _both_champion(
+        _OWN_SHORT_SIDES, _cross_window(0.9, 0.04, passed=True), name="ga_both_1m_pass"
+    )
     run_id = _create_discovery_run_with_results(
         state,
         timeframe="1m",
@@ -1044,7 +1103,9 @@ async def test_promote_allows_1m_legacy_both_with_identical_sides(
     """
     ac, state = client
     entry = _both_champion(
-        _LEGACY_IDENTICAL_SIDES, _cross_window(-1.2, -0.09, passed=False), name="ga_both_legacy_1m",
+        _LEGACY_IDENTICAL_SIDES,
+        _cross_window(-1.2, -0.09, passed=False),
+        name="ga_both_legacy_1m",
     )
     run_id = _create_discovery_run_with_results(
         state,
@@ -1074,7 +1135,10 @@ async def test_promote_blocks_1m_both_champion_with_unreadable_dsl(
         "sharpe": 0.8,
     }
     run_id = _create_discovery_run_with_results(
-        state, timeframe="1m", symbols=["BTCUSDT"], top_strategies=[entry],
+        state,
+        timeframe="1m",
+        symbols=["BTCUSDT"],
+        top_strategies=[entry],
     )
 
     r = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
@@ -1155,7 +1219,9 @@ async def test_promote_allows_non_1m_both_champion_without_proof(
 ) -> None:
     """The gate is 1m-only -- a 4h both champion promotes without proof."""
     ac, state = client
-    entry = _both_champion(_OWN_SHORT_SIDES, _cross_window(-1.2, -0.09, passed=False), name="ga_both_4h")
+    entry = _both_champion(
+        _OWN_SHORT_SIDES, _cross_window(-1.2, -0.09, passed=False), name="ga_both_4h"
+    )
     run_id = _create_discovery_run_with_results(
         state,
         timeframe="4h",

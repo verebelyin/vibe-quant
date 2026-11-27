@@ -44,9 +44,13 @@ def _bars_1m(klines: list[tuple[Any, ...]]) -> list[Bar]:
     inst = create_instrument(_SYM)
     return klines_to_bars(
         [
-            dict(zip(
-                ("open_time", "open", "high", "low", "close", "volume", "close_time"), k, strict=True
-            ))
+            dict(
+                zip(
+                    ("open_time", "open", "high", "low", "close", "volume", "close_time"),
+                    k,
+                    strict=True,
+                )
+            )
             for k in klines
         ],
         inst.id,
@@ -59,7 +63,11 @@ def _bars_1m(klines: list[tuple[Any, ...]]) -> list[Bar]:
 def _agg(klines: list[tuple[Any, ...]], interval: str, minutes: int) -> list[Bar]:
     inst = create_instrument(_SYM)
     return aggregate_bars(
-        _bars_1m(klines), get_bar_type(_SYM, interval), minutes, inst.size_precision, inst.price_precision
+        _bars_1m(klines),
+        get_bar_type(_SYM, interval),
+        minutes,
+        inst.size_precision,
+        inst.price_precision,
     )
 
 
@@ -105,7 +113,9 @@ def test_update_then_complete_writes_completed_bar(
     archive = RawDataArchive(tmp_path / "b.db")
     try:
         archive.insert_klines(_SYM, "1m", _klines(0, 1440 + 600), "seed")
-        monkeypatch.setattr(ingest, "download_recent_klines", lambda *a, **k: _klines(1440 + 600, 1440 + 601))
+        monkeypatch.setattr(
+            ingest, "download_recent_klines", lambda *a, **k: _klines(1440 + 600, 1440 + 601)
+        )
         cat1 = _Catalog()
         update_symbol(_SYM, archive=archive, catalog=cat1, verbose=False)
         d1 = [b for b in cat1.written if "1-DAY" in str(b.bar_type)]

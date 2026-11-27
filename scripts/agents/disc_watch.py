@@ -326,7 +326,9 @@ def watch(
                     and not run.killed and clock() - started >= kill_after
                 ):  # fmt: skip
                     run.killed = True
-                    _emit(out, run.run_id, f"KILL after {clock() - started:.0f}s ({kill(run.run_id)})")
+                    _emit(
+                        out, run.run_id, f"KILL after {clock() - started:.0f}s ({kill(run.run_id)})"
+                    )
             for run, terminal in zip(runs, terminals, strict=True):
                 if run.log is None:
                     run.log = newest_log(logs_dir, run.run_id)
@@ -354,7 +356,9 @@ def http_cancel(api: str) -> Callable[[str], str]:
     import urllib.request
 
     def cancel(run_id: str) -> str:
-        req = urllib.request.Request(f"{api.rstrip('/')}/api/discovery/jobs/{run_id}", method="DELETE")
+        req = urllib.request.Request(
+            f"{api.rstrip('/')}/api/discovery/jobs/{run_id}", method="DELETE"
+        )
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 return f"HTTP {resp.status}"
@@ -376,9 +380,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--logs", type=Path, default=None, metavar="DIR")
     parser.add_argument("--db", type=Path, default=None, metavar="PATH")
     parser.add_argument("--interval", type=float, default=DEFAULT_INTERVAL, metavar="SEC")
-    parser.add_argument("--all-gens", action="store_true", help="print every gen, not just improving ones")
-    parser.add_argument("--kill-after", type=float, default=None, metavar="SEC",
-                        help="cancel runs still going SEC seconds after the watcher started")
+    parser.add_argument(
+        "--all-gens", action="store_true", help="print every gen, not just improving ones"
+    )
+    parser.add_argument(
+        "--kill-after",
+        type=float,
+        default=None,
+        metavar="SEC",
+        help="cancel runs still going SEC seconds after the watcher started",
+    )
     parser.add_argument("--api", default="http://127.0.0.1:8000", help="backend for --kill-after")
     args = parser.parse_args(argv)
     root = main_checkout_root()

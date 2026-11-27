@@ -230,9 +230,7 @@ def _approx_equity_path(
     return values, gross + mark_peak
 
 
-def _require_daily_ruin_scan(
-    run: CarryRun, inputs: CarryInputs, boundaries: Sequence[int]
-) -> None:
+def _require_daily_ruin_scan(run: CarryRun, inputs: CarryInputs, boundaries: Sequence[int]) -> None:
     """R22/CF1: raise unless every daily boundary has ``E(B) > 0``, as ``carry_metrics`` does.
 
     Runs :func:`_approx_equity_path` once, keeps the days it clears by more than
@@ -392,7 +390,8 @@ def _legs(run: CarryRun, inputs: CarryInputs) -> list[dict[str, Any]]:
         fees.setdefault(key, []).append(fill.fee)
         spreads.setdefault(key, []).append(fill.spread)
         turnover.setdefault(key, []).append(
-            abs(fill.qty * fill.price) / equities[times[_decision_index(times, fill.ts, fill.symbol)]]
+            abs(fill.qty * fill.price)
+            / equities[times[_decision_index(times, fill.ts, fill.symbol)]]
         )
         steps[fill.symbol] = prior + fill.steps
     book = _book(run)
@@ -415,9 +414,7 @@ def _legs(run: CarryRun, inputs: CarryInputs) -> list[dict[str, Any]]:
         if mark is None:
             raise CarryDataError(f"no price for held {symbol} at {run.spec.end_ns}")
         key = (symbol, "long" if held > 0 else "short")
-        price.setdefault(key, []).append(
-            float(Decimal(held) * inputs.specs[symbol].step) * mark
-        )
+        price.setdefault(key, []).append(float(Decimal(held) * inputs.specs[symbol].step) * mark)
     keys = sorted(set(price) | set(fees) | set(funding) | set(turnover))
     trend = run.spec.signal == "trend"
     return [
@@ -514,9 +511,7 @@ def _by_year(
             "funding_paid": funding,
             "fees": fees,
             "weekly_sharpe": _weekly_sharpe(returns),
-            "turnover": math.fsum(
-                value for ts, value in turnover if y0 <= ts < y1
-            ),
+            "turnover": math.fsum(value for ts, value in turnover if y0 <= ts < y1),
             "fees_pct_equity": fees / equities[y0],
         }
         if trend:
@@ -614,7 +609,8 @@ def carry_metrics(run: CarryRun, inputs: CarryInputs) -> CarryReport:
         "funding_fallback_amount": math.fsum(payment.amount for payment in fallback),
         "price_pnl_total": math.fsum(leg["price_pnl"] for leg in legs),
         "turnover_total": turnover_total,
-        "turnover_annual": turnover_total / ((spec.end_ns - spec.start_ns) / (_DAYS_PER_YEAR * DAY_NS)),
+        "turnover_annual": turnover_total
+        / ((spec.end_ns - spec.start_ns) / (_DAYS_PER_YEAR * DAY_NS)),
         "rounding_drift_mean": math.fsum(drifts) / len(drifts) if drifts else None,
         "rounding_drift_max": max(drifts) if drifts else None,
         "band_skips": sum(decision.band_skips for decision in run.decisions),
@@ -693,11 +689,7 @@ def data_fingerprint(inputs: CarryInputs) -> dict[str, dict[str, str]]:
             mark = [np.asarray(bars.ts, dtype="<i8"), np.asarray(bars.close, dtype="<f8")]
         else:
             series = inputs.marks.get(symbol)
-            keep = (
-                np.zeros(0, dtype=bool)
-                if series is None
-                else np.asarray(series.ts) < end_ns
-            )
+            keep = np.zeros(0, dtype=bool) if series is None else np.asarray(series.ts) < end_ns
             mark = (
                 [np.zeros(0, dtype="<i8"), np.zeros(0, dtype="<f8")]
                 if series is None

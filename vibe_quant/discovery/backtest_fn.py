@@ -42,6 +42,7 @@ class PooledSeriesError(ValueError):
     goes on.
     """
 
+
 # Default settings for a callable built without one: mode off (B008 wants a
 # module-level singleton, not a call in the signature default).
 _LIQUIDATION_OFF = LiquidationSettings()
@@ -80,9 +81,7 @@ def _sum_liquidation_fields(
         return {}
     return {
         "liquidation_count": sum(int(r.get("liquidation_count", 0)) for r in results),
-        "liquidation_forfeited": sum(
-            float(r.get("liquidation_forfeited", 0.0)) for r in results
-        ),
+        "liquidation_forfeited": sum(float(r.get("liquidation_forfeited", 0.0)) for r in results),
     }
 
 
@@ -318,9 +317,7 @@ class NTBacktestFn:
             sink.append((runner.last_trade_spans, float(runner.last_starting_balance)))
 
         out: dict[str, float | int] = {
-            "sharpe_ratio": result.sharpe_ratio
-            if result.sharpe_ratio != float("-inf")
-            else -1.0,
+            "sharpe_ratio": result.sharpe_ratio if result.sharpe_ratio != float("-inf") else -1.0,
             "max_drawdown": result.max_drawdown,
             "profit_factor": result.profit_factor,
             "total_trades": result.total_trades,
@@ -346,9 +343,7 @@ class NTBacktestFn:
             # Report-only liquidation accounting (bead vibe-quant-2gyk1.1.9): the
             # keys exist ONLY when the mode is on (R4); the aggregates sum them.
             out["liquidation_count"] = int(getattr(result, "liquidation_count", 0))
-            out["liquidation_forfeited"] = float(
-                getattr(result, "liquidation_forfeited", 0.0)
-            )
+            out["liquidation_forfeited"] = float(getattr(result, "liquidation_forfeited", 0.0))
         return out
 
     @staticmethod
@@ -449,7 +444,8 @@ class NTBacktestFn:
             "skewness": sum(float(r.get("skewness", 0.0)) for r in results) / n,  # type: ignore[arg-type]
             "kurtosis": max(float(r.get("kurtosis", 3.0)) for r in results),  # type: ignore[arg-type]
             "trade_returns": sum(  # type: ignore[dict-item]
-                (r.get("trade_returns", ()) for r in results), ()  # type: ignore[arg-type]
+                (r.get("trade_returns", ()) for r in results),
+                (),  # type: ignore[arg-type]
             ),
             "window_trades": tuple(per_window_trades),  # type: ignore[dict-item]
             "window_returns": window_returns,  # type: ignore[dict-item]
@@ -566,10 +562,7 @@ class NTBacktestFn:
         mtm_series = [cast("DailyReturns | None", r.get("mtm_daily_returns")) for r in results]
         # The per-symbol series feed only the pools + per-symbol stats below;
         # they must not ride along in symbol_results (memory, bd yul7u.24).
-        results = [
-            {k: v for k, v in r.items() if k != "mtm_daily_returns"}
-            for r in results
-        ]
+        results = [{k: v for k, v in r.items() if k != "mtm_daily_returns"} for r in results]
         out: dict[str, float | int] = {
             "sharpe_ratio": min(0.0 if math.isnan(x) else x for x in sharpes),
             "max_drawdown": max(1.0 if math.isnan(x) else x for x in dds),
@@ -579,7 +572,8 @@ class NTBacktestFn:
             "skewness": sum(float(r.get("skewness", 0.0)) for r in results) / n,  # type: ignore[arg-type]
             "kurtosis": max(float(r.get("kurtosis", 3.0)) for r in results),  # type: ignore[arg-type]
             "trade_returns": sum(  # type: ignore[dict-item]
-                (r.get("trade_returns", ()) for r in results), ()  # type: ignore[arg-type]
+                (r.get("trade_returns", ()) for r in results),
+                (),  # type: ignore[arg-type]
             ),
             "symbol_trades": trades,  # type: ignore[dict-item]
             # Per-symbol breakdown + portfolio-comparable trade count: validation
@@ -732,9 +726,7 @@ class NTBacktestFn:
             "sharpe_ratio": sharpe,
             "max_drawdown": min(max(dd, 0.0), 1.0),
             "profit_factor": profit_factor(
-                p
-                for r in parts
-                for p in cast("tuple[float, ...]", r.get("trade_pnls", ()))
+                p for r in parts for p in cast("tuple[float, ...]", r.get("trade_pnls", ()))
             ),
             "total_trades": sum(int(r["total_trades"]) for r in parts),
             "total_return": equity - 1.0,

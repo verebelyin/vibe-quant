@@ -115,9 +115,7 @@ def realized_exposure(n: int, hold: int, T: int) -> float:
     return n * hold / T
 
 
-def zero_inflated_daily_sharpe(
-    f_real: float, mu: float, sigma: float = DEFAULT_SIGMA
-) -> float:
+def zero_inflated_daily_sharpe(f_real: float, mu: float, sigma: float = DEFAULT_SIGMA) -> float:
     """Population daily mean/std of the zero-inflated series (design §6 R5b).
 
     Each day is in position with probability ``f_real`` (in-position return ``mu``
@@ -218,9 +216,7 @@ def slot_bounds(window: tuple[str, str]) -> tuple[int, int]:
     return day_index(ws) + 1, day_index(we)
 
 
-def place_entries(
-    windows: Sequence[tuple[str, str]], n: int, hold: int
-) -> tuple[int, ...]:
+def place_entries(windows: Sequence[tuple[str, str]], n: int, hold: int) -> tuple[int, ...]:
     """Absolute entry days of ``n`` whole, non-overlapping ``hold``-day trades.
 
     The trades are split across the windows in proportion to their schedulable
@@ -344,9 +340,7 @@ def window_daily_returns(sched: Schedule, ws: str, we: str) -> DailyReturns:
 
 def make_window(sched: Schedule, ws: str, we: str) -> WindowGen:
     """Build one window's bt dict, trades and realized cash events (R8/R9)."""
-    return grid_window(
-        sched.returns, sched.first_day, sched.entries, sched.hold, ws, we
-    )
+    return grid_window(sched.returns, sched.first_day, sched.entries, sched.hold, ws, we)
 
 
 def grid_window(
@@ -390,14 +384,10 @@ def grid_window(
     pnls = [t.pnl for t in trades]
     trade_returns = tuple(t.return_frac for t in trades)
     sharpe, sortino = sharpe_sortino_from_returns(
-        daily_balance_returns(
-            STARTING_BALANCE, cash_events, ws_day * DAY_NS, we_day * DAY_NS
-        )
+        daily_balance_returns(STARTING_BALANCE, cash_events, ws_day * DAY_NS, we_day * DAY_NS)
     )
     equity = np.cumprod(1.0 + values) * STARTING_BALANCE
-    peaks = np.maximum.accumulate(
-        np.concatenate([np.array([STARTING_BALANCE]), equity])
-    )[:-1]
+    peaks = np.maximum.accumulate(np.concatenate([np.array([STARTING_BALANCE]), equity]))[:-1]
     max_dd = float(np.max((peaks - equity) / peaks))
     skewness, kurtosis, _ = moments_from_returns(list(trade_returns))
     bt: dict[str, Any] = {
@@ -414,9 +404,7 @@ def grid_window(
         "starting_balance": STARTING_BALANCE,
         "days": we_day - ws_day,
     }
-    return WindowGen(
-        window=(ws, we), bt=bt, trades=tuple(trades), cash_events=tuple(cash_events)
-    )
+    return WindowGen(window=(ws, we), bt=bt, trades=tuple(trades), cash_events=tuple(cash_events))
 
 
 def train_mtm_values(sched: Schedule) -> NDArray[np.float64]:

@@ -145,9 +145,7 @@ class TestFindScreeningReference:
                 parameters={},
             )
             state.update_backtest_run_status(rid, "completed")
-            notes = json.dumps(
-                {"top_strategies": [{"dsl": dsl, "sharpe": sharpe, "trades": 64}]}
-            )
+            notes = json.dumps({"top_strategies": [{"dsl": dsl, "sharpe": sharpe, "trades": 64}]})
             state.save_backtest_result(rid, {"sharpe_ratio": sharpe, "notes": notes})
             ids.append(rid)
 
@@ -246,8 +244,13 @@ class TestScreeningReferenceMatchesValidationScope:
         state: StateManager, sid: int, symbols: list[str], start: str, end: str, sharpe: float
     ) -> int:
         run_id = state.create_backtest_run(
-            strategy_id=sid, run_mode="screening", symbols=symbols, timeframe="4h",
-            start_date=start, end_date=end, parameters={},
+            strategy_id=sid,
+            run_mode="screening",
+            symbols=symbols,
+            timeframe="4h",
+            start_date=start,
+            end_date=end,
+            parameters={},
         )
         state.update_backtest_run_status(run_id, "completed")
         state.conn.execute(
@@ -286,14 +289,17 @@ class TestScreeningReferenceMatchesValidationScope:
         same = self._screening(state, sid, self.PORTFOLIO, "2020-10-01", "2022-05-31", 1.81)
         self._screening(state, sid, ["BTCUSDT"], "2020-10-01", "2022-05-31", 0.9)
         ref = find_screening_reference(
-            state, sid, "h2b",
+            state,
+            sid,
+            "h2b",
             val_window=("2020-10-01", "2022-05-31"),
             val_symbols=list(reversed(self.PORTFOLIO)),  # symbol order is irrelevant
         )
         assert ref is not None
         assert ref.source == f"screening_run:{same}"
         assert ref.sharpe == 1.81
-        report = assess_consistency(ref, val_sharpe=1.78, val_trades=273,
-                                    val_window=("2020-10-01", "2022-05-31"))
+        report = assess_consistency(
+            ref, val_sharpe=1.78, val_trades=273, val_window=("2020-10-01", "2022-05-31")
+        )
         assert not report.is_flagged
         state.close()

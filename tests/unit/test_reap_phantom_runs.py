@@ -187,9 +187,7 @@ class TestReapOrphanRuns:
         self, jobs: BacktestJobManager, state: StateManager
     ) -> None:
         """Sparing is not blanket: a dead PID + old heartbeat is still reaped."""
-        stale = (datetime.now(UTC) - timedelta(seconds=10 * 120)).strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
+        stale = (datetime.now(UTC) - timedelta(seconds=10 * 120)).strftime("%Y-%m-%d %H:%M:%S")
         run_id = _run(state, "running")
         state.conn.execute(
             "UPDATE backtest_runs SET pid = 99999999, heartbeat_at = ? WHERE id = ?",

@@ -529,9 +529,7 @@ class RawDataArchive:
         for day_index, total, count, bad in rows:
             day = datetime.fromtimestamp(int(day_index) * 86_400, UTC).date().isoformat()
             if bad:
-                raise ValueError(
-                    f"{symbol}: {bad} malformed 1m quote_volume row(s) on {day} UTC"
-                )
+                raise ValueError(f"{symbol}: {bad} malformed 1m quote_volume row(s) on {day} UTC")
             if total is None or not math.isfinite(float(total)):
                 raise ValueError(f"{symbol}: non-finite 1m quote_volume sum on {day} UTC")
             days[int(day_index) * 86_400_000 * 10**6] = (float(total), int(count))
@@ -748,8 +746,7 @@ class RawDataArchive:
             Missing UTC days, oldest first.
         """
         row = self.conn.execute(
-            f"SELECT MIN(open_time), MAX(open_time) FROM {table} "
-            "WHERE symbol = ? AND interval = ?",
+            f"SELECT MIN(open_time), MAX(open_time) FROM {table} WHERE symbol = ? AND interval = ?",
             (symbol, interval),
         ).fetchone()
         if row is None or row[0] is None:
@@ -801,8 +798,7 @@ class RawDataArchive:
             Sorted unique symbols from both tables.
         """
         rows = self.conn.execute(
-            "SELECT symbol FROM raw_klines UNION SELECT symbol FROM raw_mark_klines "
-            "ORDER BY symbol"
+            "SELECT symbol FROM raw_klines UNION SELECT symbol FROM raw_mark_klines ORDER BY symbol"
         )
         return [r[0] for r in rows]
 
@@ -847,9 +843,7 @@ class RawDataArchive:
         result: list[tuple[str, int, int | None, int | None, int]] = []
         for (symbol,) in symbol_rows:
             kline_count, min_time, max_time = kline_stats.get(symbol, (0, None, None))
-            result.append(
-                (symbol, kline_count, min_time, max_time, funding_counts.get(symbol, 0))
-            )
+            result.append((symbol, kline_count, min_time, max_time, funding_counts.get(symbol, 0)))
         return result
 
     # -- Audit log methods --

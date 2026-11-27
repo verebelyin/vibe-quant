@@ -193,9 +193,7 @@ def _load_dsl_config(sid: int | None, dsl_path: str | None, tf: str | None) -> d
             raise SystemExit(f"state DB not found: {db_path} (set VIBE_QUANT_DB to override)")
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         try:
-            row = conn.execute(
-                "SELECT dsl_config FROM strategies WHERE id=?", (sid,)
-            ).fetchone()
+            row = conn.execute("SELECT dsl_config FROM strategies WHERE id=?", (sid,)).fetchone()
         finally:
             conn.close()
         if row is None:
@@ -283,7 +281,9 @@ def _single_mode(a: argparse.Namespace) -> int:
             print(f"   {k:28s} {v:7.3f}s")
         if "node._run_oneshot" in TIMES:
             derived = (
-                TIMES["node._run_oneshot"] - TIMES["data: catalog query"] - TIMES["data: engine.add_data"]
+                TIMES["node._run_oneshot"]
+                - TIMES["data: catalog query"]
+                - TIMES["data: engine.add_data"]
             )
             print(f"   {'=> engine sort+run (derived)':28s} {derived:7.3f}s")
         excluded = (
@@ -352,7 +352,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--profile", action="store_true")
     ap.add_argument("--top", type=int, default=15)
     ap.add_argument(
-        "--random-genomes", type=int, default=0,
+        "--random-genomes",
+        type=int,
+        default=0,
         help="phase-split mode: evaluate N seeded random LONG genomes from --pool",
     )
     ap.add_argument(

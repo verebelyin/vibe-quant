@@ -96,7 +96,8 @@ def _test_functions(tree: ast.AST) -> list[ast.FunctionDef | ast.AsyncFunctionDe
     found = [
         node
         for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_")
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name.startswith("test_")
     ]
     return sorted(found, key=lambda node: (node.lineno, node.col_offset))
 
@@ -155,7 +156,9 @@ def _dump_stripped(node: ast.AST) -> str:
 
 
 def _is_test_def(node: ast.stmt) -> TypeGuard[ast.FunctionDef | ast.AsyncFunctionDef]:
-    return isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_")
+    return isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith(
+        "test_"
+    )
 
 
 def _class_header(node: ast.ClassDef) -> str:
@@ -196,7 +199,9 @@ def fingerprint_tests(source: str) -> dict[str, TestFingerprint]:
 
 
 def _stores(node: ast.AST) -> list[str]:
-    return [n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)]
+    return [
+        n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)
+    ]
 
 
 def _bound_names(stmt: ast.stmt) -> list[str]:
@@ -240,12 +245,12 @@ def env_fingerprints(source: str) -> dict[str, str]:
 
 
 def _class_has_test(node: ast.ClassDef) -> bool:
-    return any(_is_test_def(m) or (isinstance(m, ast.ClassDef) and _class_has_test(m)) for m in node.body)
+    return any(
+        _is_test_def(m) or (isinstance(m, ast.ClassDef) and _class_has_test(m)) for m in node.body
+    )
 
 
-def compare_source(
-    base_source: str, head_source: str
-) -> tuple[bool, int, int, str | None]:
+def compare_source(base_source: str, head_source: str) -> tuple[bool, int, int, str | None]:
     """Compare one module's base and head source.
 
     Returns ``(same, base_tests, head_tests, diff)``; ``diff`` is None when same or
@@ -278,7 +283,10 @@ def check_file(repo: Path, base: str, relpath: str) -> tuple[str, bool]:
     same, base_tests, head_tests, diff = compare_source(base_source, head_path.read_text())
     if not same:
         if diff is None:
-            return f"DIFF {relpath}: {base_tests} test functions at base, {head_tests} at head", False
+            return (
+                f"DIFF {relpath}: {base_tests} test functions at base, {head_tests} at head",
+                False,
+            )
         return f"DIFF {relpath}: {diff}", False
     return f"SAME {relpath}", True
 

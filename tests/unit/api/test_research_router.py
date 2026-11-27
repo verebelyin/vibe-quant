@@ -35,9 +35,7 @@ def sm(tmp_path: Path) -> Generator[StateManager]:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_log_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> Generator[Path]:
+def _isolate_log_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[Path]:
     """Redirect on-disk extraction logs into tmp so router tests don't leak
     writes into the repo's data/research/logs/ tree."""
     root = tmp_path / "research-logs"
@@ -295,9 +293,7 @@ def test_delete_scrape_kills_or_refuses(client: TestClient, sm: StateManager) ->
     assert resp.json()["status"] == "killed"
 
     dead = sm.create_scrape_run(source="reddit", pid=999999)
-    with patch(
-        "vibe_quant.api.routers.research.os.kill", side_effect=ProcessLookupError
-    ):
+    with patch("vibe_quant.api.routers.research.os.kill", side_effect=ProcessLookupError):
         resp = client.delete(f"/api/research/scrape/{dead}")
     assert resp.status_code == 200
     row = sm.get_scrape_run(dead)
@@ -396,9 +392,7 @@ def test_list_items_sort_credibility(client: TestClient, sm: StateManager) -> No
     ]
     for external_id, evidence_level, completeness in cases:
         iid = _seed_item(sm, external_id=external_id)
-        _seed_extraction(
-            sm, iid, evidence_level=evidence_level, completeness=completeness
-        )
+        _seed_extraction(sm, iid, evidence_level=evidence_level, completeness=completeness)
 
     resp = client.get("/api/research/items", params={"sort": "credibility"})
 
@@ -455,9 +449,7 @@ def test_get_item_surfaces_the_failed_job(client: TestClient, sm: StateManager) 
 # ------------------------------------------- /items/{id}/extract
 
 
-def test_extract_item_enqueues_and_the_worker_drains(
-    client: TestClient, sm: StateManager
-) -> None:
+def test_extract_item_enqueues_and_the_worker_drains(client: TestClient, sm: StateManager) -> None:
     iid = _seed_item(sm)
     _seed_extraction(sm, iid)  # existing one — must not be overwritten
 

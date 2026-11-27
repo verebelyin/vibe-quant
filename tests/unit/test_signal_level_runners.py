@@ -81,7 +81,9 @@ def run_screening(catalog: Path, d: dict[str, Any]) -> list[Ord]:
     seen: list[list[Ord]] = []
     orig = NTScreeningRunner._extract_metrics
 
-    def spy(self: NTScreeningRunner, params: Any, bt_result: Any, engine: Any, *args: Any, **kwargs: Any) -> Any:
+    def spy(
+        self: NTScreeningRunner, params: Any, bt_result: Any, engine: Any, *args: Any, **kwargs: Any
+    ) -> Any:
         seen.append(_orders(engine))
         return orig(self, params, bt_result, engine, *args, **kwargs)
 
@@ -133,7 +135,9 @@ def run_validation(tmp_path: Path, catalog: Path, d: dict[str, Any]) -> list[Ord
 
 @pytest.fixture(scope="module")
 def catalog(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    return _write_catalog(tmp_path_factory.mktemp("catalog"), ("BTCUSDT",), timeframes=("1m", "15m", "1h", "4h"))
+    return _write_catalog(
+        tmp_path_factory.mktemp("catalog"), ("BTCUSDT",), timeframes=("1m", "15m", "1h", "4h")
+    )
 
 
 def first_pair(orders: list[Ord]) -> tuple[Ord, Ord, Ord]:
@@ -143,7 +147,9 @@ def first_pair(orders: list[Ord]) -> tuple[Ord, Ord, Ord]:
     return entry, stop, target
 
 
-def test_screening_snapshots_the_signal_bar_levels_and_sizes_on_the_stop_distance(catalog: Path) -> None:
+def test_screening_snapshots_the_signal_bar_levels_and_sizes_on_the_stop_distance(
+    catalog: Path,
+) -> None:
     entry, stop, target = first_pair(run_screening(catalog, dsl("slr_screening")))
 
     assert (entry.side, entry.qty) == ("BUY", 0.033)
@@ -173,11 +179,17 @@ def test_screening_refresh_moves_the_stop_up_with_every_signal(catalog: Path) ->
     assert _stop_triggers(orders)[:4] == [9999.0, 10014.0, 10029.0, 10044.0]
     live = [o for o in orders if o.type == "STOP_MARKET" and o.status not in ("CANCELED", "FILLED")]
     assert len(live) == 1  # one live stop at the end of the data
-    assert all(o.status == "CANCELED" for o in orders if o.type == "STOP_MARKET" and o is not live[0])
+    assert all(
+        o.status == "CANCELED" for o in orders if o.type == "STOP_MARKET" and o is not live[0]
+    )
 
 
-def test_validation_refresh_moves_the_stop_up_with_every_signal(catalog: Path, tmp_path: Path) -> None:
-    orders = run_validation(tmp_path, catalog, dsl("slr_refresh_val", target=False, refresh_on_signal=True))
+def test_validation_refresh_moves_the_stop_up_with_every_signal(
+    catalog: Path, tmp_path: Path
+) -> None:
+    orders = run_validation(
+        tmp_path, catalog, dsl("slr_refresh_val", target=False, refresh_on_signal=True)
+    )
 
     assert _stop_triggers(orders)[:4] == [9999.0, 10014.0, 10029.0, 10044.0]
 

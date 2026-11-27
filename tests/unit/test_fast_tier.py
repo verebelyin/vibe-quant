@@ -22,7 +22,9 @@ from vibe_quant.fast_tier import FastTierUnsupported
 from vibe_quant.fast_tier.fills import bar_quarter_sizes, bar_ticks
 
 REPO = Path(__file__).resolve().parents[2]
-CATALOG_BARS = REPO / "data" / "catalog" / "data" / "bar" / "BTCUSDT-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL"
+CATALOG_BARS = (
+    REPO / "data" / "catalog" / "data" / "bar" / "BTCUSDT-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL"
+)
 METRICS = ("total_trades", "total_return", "sharpe_ratio", "profit_factor", "max_drawdown")
 START, END = "2026-03-02", "2026-03-04"
 # the memo tests compare runs with each other, not with NT: one day is enough
@@ -43,7 +45,10 @@ def test_bar_ticks_order_and_skips() -> None:
     q, cs = 7, 9
     # |H-O| = 5 < |L-O| = 10: high first
     assert bar_ticks(100, 105, 90, 95, 99, q, cs) == [
-        (100, "O", q), (105, "H", q), (90, "L", q), (95, "C", cs),
+        (100, "O", q),
+        (105, "H", q),
+        (90, "L", q),
+        (95, "C", cs),
     ]
     # tie -> low first; an open equal to the last price is not a tick
     assert bar_ticks(100, 110, 90, 90, 100, q, cs) == [(90, "L", q), (110, "H", q), (90, "C", cs)]
@@ -62,13 +67,17 @@ def _genomes() -> list[StrategyChromosome]:
         StrategyChromosome(
             entry_genes=[StrategyGene("CCI", {"period": 20.0}, C.CROSSES_ABOVE, 100.0)],
             exit_genes=[StrategyGene("STOCH", stoch, C.GT, 95.0)],
-            stop_loss_pct=0.5, take_profit_pct=0.6, direction=Direction.LONG,
+            stop_loss_pct=0.5,
+            take_profit_pct=0.6,
+            direction=Direction.LONG,
         ),
         # both directions with a compute_fn (pandas) indicator on the exit side
         StrategyChromosome(
             entry_genes=[StrategyGene("RSI", {"period": 14.0}, C.CROSSES_BELOW, 30.0)],
             exit_genes=[StrategyGene("WILLR", {"period": 14.0}, C.GT, -20.0)],
-            stop_loss_pct=0.8, take_profit_pct=1.0, direction=Direction.BOTH,
+            stop_loss_pct=0.8,
+            take_profit_pct=1.0,
+            direction=Direction.BOTH,
             short_entry_genes=[StrategyGene("RSI", {"period": 14.0}, C.CROSSES_ABOVE, 70.0)],
             short_exit_genes=[StrategyGene("WILLR", {"period": 14.0}, C.LT, -80.0)],
         ),
@@ -77,8 +86,14 @@ def _genomes() -> list[StrategyChromosome]:
 
 def _fills(positions: list[Any]) -> list[tuple[Any, ...]]:
     return [
-        (int(f.ts_event), f.order_side.name, f.order_type.name, str(f.last_qty), str(f.last_px),
-         str(f.commission))
+        (
+            int(f.ts_event),
+            f.order_side.name,
+            f.order_type.name,
+            str(f.last_qty),
+            str(f.last_px),
+            str(f.commission),
+        )
         for pos in sorted(positions, key=lambda p: int(p.ts_opened))
         for f in pos.events
     ]
@@ -135,7 +150,9 @@ def test_fast_tier_matches_nt_fill_for_fill(
 
 
 FUNDED_SYMBOL = "ZECUSDT"
-FUNDED_BARS = REPO / "data" / "catalog" / "data" / "bar" / "ZECUSDT-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL"
+FUNDED_BARS = (
+    REPO / "data" / "catalog" / "data" / "bar" / "ZECUSDT-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL"
+)
 FUNDED_ARCHIVE = REPO / "data" / "archive" / "raw_data.db"
 # One day on an 8h-funding symbol: three settlements, and every genome trades.
 FUNDED_START, FUNDED_END = "2026-03-06", "2026-03-07"
@@ -145,15 +162,16 @@ def _funded_genome() -> StrategyChromosome:
     return StrategyChromosome(
         entry_genes=[StrategyGene("FUNDING", {"period": 6.0}, C.GT, 0.0)],
         exit_genes=[StrategyGene("WILLR", {"period": 14.0}, C.GT, -20.0)],
-        stop_loss_pct=0.8, take_profit_pct=1.0, direction=Direction.LONG,
+        stop_loss_pct=0.8,
+        take_profit_pct=1.0,
+        direction=Direction.LONG,
     )
 
 
 def _entry_quantities(positions: list[Any]) -> list[str]:
     """Qty of each position's entry fill, in fill order."""
     return [
-        str(pos.events[0].last_qty)
-        for pos in sorted(positions, key=lambda p: int(p.ts_opened))
+        str(pos.events[0].last_qty) for pos in sorted(positions, key=lambda p: int(p.ts_opened))
     ]
 
 
@@ -212,16 +230,17 @@ def test_fast_tier_sizes_on_costed_balance(
 
     raw_entries = _entry_quantities(raw_fn.last_positions)
     assert len(raw_entries) == len(funded_entries)
-    differ = [i for i, (raw, costed) in enumerate(zip(raw_entries, funded_entries, strict=True))
-              if raw != costed]
+    differ = [
+        i
+        for i, (raw, costed) in enumerate(zip(raw_entries, funded_entries, strict=True))
+        if raw != costed
+    ]
     assert differ, "funding never changed a size: the ledger is not wired into sizing"
     assert min(differ) >= 1, "the first entry must be sized on the untouched balance"
     assert float(funded_entries[differ[0]]) < float(raw_entries[differ[0]])
 
 
-def _replay_for_ledger(
-    qty: str | None, *, sl: float | None = None, tp: float | None = None
-) -> Any:
+def _replay_for_ledger(qty: str | None, *, sl: float | None = None, tp: float | None = None) -> Any:
     """A 3-bar replay over a real BTC instrument whose fake strategy enters at bar 1."""
     from nautilus_trader.model.data import Bar, BarType
     from nautilus_trader.model.objects import Price, Quantity
@@ -234,7 +253,8 @@ def _replay_for_ledger(
     px = Price.from_str("100.0")
     volume = Quantity.from_str("1")
     bars = [
-        Bar(bar_type, px, px, px, px, volume, ts, ts) for ts in (60 * 10**9, 120 * 10**9, 180 * 10**9)
+        Bar(bar_type, px, px, px, px, volume, ts, ts)
+        for ts in (60 * 10**9, 120 * 10**9, 180 * 10**9)
     ]
 
     def size(_bar: Any, _is_long: bool) -> Any:
@@ -345,21 +365,34 @@ def _pool_genomes() -> list[StrategyChromosome]:
                 continue
             lo, hi = operators.THRESHOLD_RANGES.get(name, (0.0, 100.0))
             sub = {"BBANDS": "percent_b", "DONCHIAN": "position"}.get(name)
-            genomes.append(StrategyChromosome(
-                entry_genes=[StrategyGene(name, operators._random_params(name), C.GT, (lo + hi) / 2, sub)],
-                exit_genes=[StrategyGene(name, operators._random_params(name), C.LT, (lo + hi) / 2, sub)],
-                stop_loss_pct=0.8, take_profit_pct=1.0, direction=Direction.LONG,
-            ))
+            genomes.append(
+                StrategyChromosome(
+                    entry_genes=[
+                        StrategyGene(name, operators._random_params(name), C.GT, (lo + hi) / 2, sub)
+                    ],
+                    exit_genes=[
+                        StrategyGene(name, operators._random_params(name), C.LT, (lo + hi) / 2, sub)
+                    ],
+                    stop_loss_pct=0.8,
+                    take_profit_pct=1.0,
+                    direction=Direction.LONG,
+                )
+            )
         from vibe_quant.discovery.genome import MA_POOL
 
         for name in MA_POOL:
             fast, slow = operators._random_ma_params(name), operators._random_ma_params(name)
-            genomes.append(StrategyChromosome(
-                entry_genes=[StrategyGene("RSI", {"period": 14.0}, C.GT, 50.0)], exit_genes=[],
-                ma_entry_genes=[PriceVsMAConditionGene(name, fast, C.CROSSES_ABOVE)],
-                ma_exit_genes=[PriceVsMAConditionGene(name, slow, C.CROSSES_BELOW)],
-                stop_loss_pct=0.8, take_profit_pct=1.0, direction=Direction.LONG,
-            ))
+            genomes.append(
+                StrategyChromosome(
+                    entry_genes=[StrategyGene("RSI", {"period": 14.0}, C.GT, 50.0)],
+                    exit_genes=[],
+                    ma_entry_genes=[PriceVsMAConditionGene(name, fast, C.CROSSES_ABOVE)],
+                    ma_exit_genes=[PriceVsMAConditionGene(name, slow, C.CROSSES_BELOW)],
+                    stop_loss_pct=0.8,
+                    take_profit_pct=1.0,
+                    direction=Direction.LONG,
+                )
+            )
         return genomes
     finally:
         random.setstate(rng_state)
@@ -413,7 +446,9 @@ def test_replay_memo_never_shares_an_entry_across_params(
         return StrategyChromosome(
             entry_genes=[StrategyGene("WILLR", {"period": period}, C.LT, -90.0)],
             exit_genes=[StrategyGene("WILLR", {"period": period}, C.GT, -10.0)],
-            stop_loss_pct=0.8, take_profit_pct=1.0, direction=Direction.LONG,
+            stop_loss_pct=0.8,
+            take_profit_pct=1.0,
+            direction=Direction.LONG,
         )
 
     _cold(monkeypatch)

@@ -107,7 +107,10 @@ def main(out_dir: str) -> None:
                 gross = op[ex] / op[ent] - 1 if len(tr) else np.array([])
                 net = gross - COST
                 row: dict[str, object] = {
-                    "rsi": n, "thr": thr, "hold": hold, "trades": len(tr),
+                    "rsi": n,
+                    "thr": thr,
+                    "hold": hold,
+                    "trades": len(tr),
                     "gross_mean": float(gross.mean()) if len(tr) else None,
                     "net_mean": float(net.mean()) if len(tr) else None,
                     "net_maker_mean": float((gross - COST_MAKER).mean()) if len(tr) else None,

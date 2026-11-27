@@ -40,7 +40,9 @@ class FakeFn(NTBacktestFn):
     """Per-symbol results from a table; ``fail`` maps symbol -> exception."""
 
     def __init__(self, fail: dict[str, Exception] | None = None) -> None:
-        super().__init__(SYMS, "4h", "2024-01-01", "2024-06-01", symbol_agg="worst", min_trades=MIN_TRADES)
+        super().__init__(
+            SYMS, "4h", "2024-01-01", "2024-06-01", symbol_agg="worst", min_trades=MIN_TRADES
+        )
         self.fail = fail or {}
         self.calls: list[list[str] | None] = []
 
@@ -136,7 +138,9 @@ class ProcFake(NTBacktestFn):
     """Module-level (picklable) fake; raises TwoArgError for ``bad_uid`` on ETH."""
 
     def __init__(self, bad_uid: str) -> None:
-        super().__init__(SYMS, "4h", "2024-01-01", "2024-06-01", symbol_agg="worst", min_trades=MIN_TRADES)
+        super().__init__(
+            SYMS, "4h", "2024-01-01", "2024-06-01", symbol_agg="worst", min_trades=MIN_TRADES
+        )
         self.bad_uid = bad_uid
 
     def _run_single(self, chromosome, start_date, end_date, symbols=None):  # type: ignore[no-untyped-def]
@@ -156,7 +160,13 @@ def test_unpicklable_worker_exception_does_not_break_pool() -> None:
             chroms, fn, None, max_workers=2, executor=pool, min_trades=MIN_TRADES, timeframe="4h"
         )
         again = evaluate_population(
-            chroms[1:], fn, None, max_workers=2, executor=pool, min_trades=MIN_TRADES, timeframe="4h"
+            chroms[1:],
+            fn,
+            None,
+            max_workers=2,
+            executor=pool,
+            min_trades=MIN_TRADES,
+            timeframe="4h",
         )
     assert got[0].error == "TwoArgError: a-b" and got[0].adjusted_score == 0.0
     for fr in [*got[1:], *again]:

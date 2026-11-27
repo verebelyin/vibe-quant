@@ -313,8 +313,14 @@ def test_failure_outcome(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_failure_outcome_real_liquidation_class() -> None:
     """R11a with T6's real ``CarryLiquidated``: after D1 -> liquidated, at D1 -> no trial;
     any other ``CarryEquityTooSmall`` subclass stays ruined."""
-    assert failure_outcome(CarryLiquidated(("ETHUSDT",), _D2, -502.0, 62.0), _DECISIONS) == "liquidated"
-    assert failure_outcome(CarryLiquidated(("ETHUSDT",), _D1 + 1, 0.0, 1.0), _DECISIONS) == "liquidated"
+    assert (
+        failure_outcome(CarryLiquidated(("ETHUSDT",), _D2, -502.0, 62.0), _DECISIONS)
+        == "liquidated"
+    )
+    assert (
+        failure_outcome(CarryLiquidated(("ETHUSDT",), _D1 + 1, 0.0, 1.0), _DECISIONS)
+        == "liquidated"
+    )
     assert failure_outcome(CarryLiquidated(("ETHUSDT",), _D1, -502.0, 62.0), _DECISIONS) is None
     assert failure_outcome(_StubLiquidated("X", _D2, 1.0, 2.0), _DECISIONS) == "ruined"
 

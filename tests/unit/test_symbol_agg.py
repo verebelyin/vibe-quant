@@ -51,8 +51,9 @@ class FakeFn(NTBacktestFn):
         self.table = table
         self.calls: list[tuple[str, ...]] = []
 
-    def _run_single(self, chromosome: Any, start_date: str, end_date: str,
-                    symbols: list[str] | None = None) -> dict[str, Any]:  # type: ignore[override]
+    def _run_single(
+        self, chromosome: Any, start_date: str, end_date: str, symbols: list[str] | None = None
+    ) -> dict[str, Any]:  # type: ignore[override]
         key = tuple(symbols if symbols is not None else self.symbols)
         self.calls.append(key)
         return dict(self.table[key])
@@ -257,8 +258,9 @@ def test_holdout_and_full_range_fns_use_same_mode(
     rid = _create_run(db)
     monkeypatch.setattr(
         "sys.argv",
-        _argv(db, rid, "--symbol-agg", "worst", "--eval-windows", "2",
-              "--cross-window-months", "1"),  # fmt: skip
+        _argv(
+            db, rid, "--symbol-agg", "worst", "--eval-windows", "2", "--cross-window-months", "1"
+        ),  # fmt: skip
     )
     main()
     assert len(made) >= 2  # GA fn + holdout (+ full-range / train-return)
@@ -659,8 +661,20 @@ def test_worst_mode_notes_soft_score_and_symbol_scores(
         _argv(
             # This test checks worst-mode notes/soft scores, not the buy-hold
             # gate; FakeFn emits no MTM series, so the gate correctly rejects.
-            db, rid, "--symbol-agg", "worst", "--max-generations", "1", "--eval-windows", "1",
-            "--train-test-split", "0", "--max-workers", "-1", "--no-dsr", "--no-bootstrap-ci",
+            db,
+            rid,
+            "--symbol-agg",
+            "worst",
+            "--max-generations",
+            "1",
+            "--eval-windows",
+            "1",
+            "--train-test-split",
+            "0",
+            "--max-workers",
+            "-1",
+            "--no-dsr",
+            "--no-bootstrap-ci",
             "--no-buy-hold-gate",
         ),  # fmt: skip
     )
@@ -691,7 +705,9 @@ def test_portfolio_pin_nonzero_penalties() -> None:
     assert r.overtrade_penalty > 0
     assert r.sl_tp_penalty == 0.0
     assert r.symbol_scores is None
-    assert r.adjusted_score == pytest.approx(r.raw_score - r.complexity_penalty - r.overtrade_penalty)
+    assert r.adjusted_score == pytest.approx(
+        r.raw_score - r.complexity_penalty - r.overtrade_penalty
+    )
     assert r.adjusted_score == 0.22833333333333344
 
 
@@ -736,8 +752,9 @@ class PooledFake(NTBacktestFn):
         self.shift = shift or {}
         self.calls: list[tuple[str, str]] = []
 
-    def _run_single(self, chromosome: Any, start_date: str, end_date: str,
-                    symbols: list[str] | None = None) -> dict[str, Any]:  # type: ignore[override]
+    def _run_single(
+        self, chromosome: Any, start_date: str, end_date: str, symbols: list[str] | None = None
+    ) -> dict[str, Any]:  # type: ignore[override]
         assert symbols is not None and len(symbols) == 1
         self.calls.append((symbols[0], start_date))
         out = dict(self.table[(symbols[0], start_date)])
@@ -800,7 +817,11 @@ def test_pooled_total_trade_gate(total: int, passes: bool) -> None:
 
 def test_pooled_runs_every_window() -> None:
     """C7: a symbol losing window 1 of 3 still runs windows 2 and 3 (no early exit)."""
-    wins = [("2024-01-01", "2024-02-01"), ("2024-02-01", "2024-03-01"), ("2024-03-01", "2024-04-01")]
+    wins = [
+        ("2024-01-01", "2024-02-01"),
+        ("2024-02-01", "2024-03-01"),
+        ("2024-03-01", "2024-04-01"),
+    ]
     lose = [0.0, -0.05, -0.02, 0.01, -0.03, 0.0, -0.01, 0.0, -0.02, -0.01]
     table: dict[tuple[str, str], dict[str, Any]] = {}
     for w, (ws, _we) in enumerate(wins):
@@ -853,7 +874,10 @@ def test_pooled_misaligned_next_to_valid(parallel: bool, monkeypatch: pytest.Mon
                                       min_trades=10, timeframe="4h")  # fmt: skip
     else:
         got = evaluate_population([bad, good], fn, None, min_trades=10, timeframe="4h")
-    assert got[0].error == "PooledSeriesError: pooled series misaligned (ETHUSDT first day 19725 != 19724)"
+    assert (
+        got[0].error
+        == "PooledSeriesError: pooled series misaligned (ETHUSDT first day 19725 != 19724)"
+    )
     assert got[0].adjusted_score == 0.0
     assert got[1].error is None and got[1].adjusted_score > 0
 
@@ -916,14 +940,19 @@ def test_pooled_bootstrap() -> None:
     alone = _evaluate_single(_chrom(), _pooled_fn({"A": _pwin(strong, 80), "B": _pwin(strong, 80)}),
                              None, 10, "4h")  # fmt: skip
     syms = [f"S{i}" for i in range(6)]
-    six = _evaluate_single(_chrom(), _pooled_fn({s: _pwin(strong, 80) for s in syms}), None, 10, "4h")
+    six = _evaluate_single(
+        _chrom(), _pooled_fn({s: _pwin(strong, 80) for s in syms}), None, 10, "4h"
+    )
     assert len(six.trade_returns) == n - 1
     single_lower = _boot_lower(tuple(strong[1:]))
     assert _boot_lower(six.trade_returns) == pytest.approx(single_lower, rel=1e-9)
     assert _boot_lower(alone.trade_returns) == pytest.approx(single_lower, rel=1e-9)
     assert single_lower > 1.0
 
-    mixed = {"S0": _pwin(strong, 80), **{s: _pwin(_noise(i, n), 80) for i, s in enumerate(syms[1:])}}
+    mixed = {
+        "S0": _pwin(strong, 80),
+        **{s: _pwin(_noise(i, n), 80) for i, s in enumerate(syms[1:])},
+    }
     diluted = _evaluate_single(_chrom(), _pooled_fn(mixed), None, 10, "4h")
     assert _boot_lower(diluted.trade_returns) < single_lower
 
@@ -951,16 +980,26 @@ def test_pooled_k_eff() -> None:
     z = h[1]
     six = [[a + b for a, b in zip(z, h[i], strict=True)] for i in range(2, 8)]  # pairwise rho 0.5
     assert pooled_k_eff(_k_series(six)) == (1.7142857142857142, None, 0.5)
-    anti = [[a + b for a, b in zip(z, h[2], strict=True)], [-a + b for a, b in zip(z, h[3], strict=True)]]
+    anti = [
+        [a + b for a, b in zip(z, h[2], strict=True)],
+        [-a + b for a, b in zip(z, h[3], strict=True)],
+    ]
     assert pooled_k_eff(_k_series(anti)) == (4.0, None, -0.5)  # just above the -1/(N-1) edge
     opposite = [h[1], [-v for v in h[1]]]
-    assert pooled_k_eff(_k_series(opposite)) == (None, "mean correlation -1.0000: K_eff undefined", -1.0)
+    assert pooled_k_eff(_k_series(opposite)) == (
+        None,
+        "mean correlation -1.0000: K_eff undefined",
+        -1.0,
+    )
     const = [0.5] * 8
     assert pooled_k_eff(_k_series([six[0], const, six[1]])) == (2 / 1.5, None, 0.5)
     assert pooled_k_eff(_k_series([six[0], const, const])) == (
         None, "fewer than 2 non-constant symbol series", None,
     )  # fmt: skip
-    shifted = {"A": _series([v / 64 for v in six[0]]), "B": _series([v / 64 for v in six[1]], POOL_DAY0 + 1)}
+    shifted = {
+        "A": _series([v / 64 for v in six[0]]),
+        "B": _series([v / 64 for v in six[1]], POOL_DAY0 + 1),
+    }
     assert pooled_k_eff(shifted) == (None, "symbol series misaligned", None)
 
 
@@ -974,7 +1013,10 @@ def test_pooled_symbol_order_and_shape() -> None:
         assert fwd[key] == rev[key]
     assert list(fwd["mtm_daily_returns"].values) == list(rev["mtm_daily_returns"].values)
     assert fwd["profit_factor"] == 5.0 / 5.0  # trade PnLs of both coins, one pool
-    assert fwd["pooled_symbol_stats"] == {"A": (a["total_return"], 30), "B": (b["total_return"], 40)}
+    assert fwd["pooled_symbol_stats"] == {
+        "A": (a["total_return"], 30),
+        "B": (b["total_return"], 40),
+    }
     assert "symbol_results" not in fwd and "synthetic_symbols" not in fwd
     assert fwd["trades_sum"] == 70 and fwd["starting_balance"] == 2000.0
     assert fwd["days"] == 12  # shared calendar of the coins, not their sum (fee-rate input)
@@ -994,7 +1036,9 @@ def test_pooled_drawdown_counts_a_losing_first_day() -> None:
 def _pooled_fit(per_sym: dict[str, dict[str, Any]], min_trades: int = 10) -> Any:
     from vibe_quant.discovery.fitness import _evaluate_single
 
-    fr = _evaluate_single(_chrom(), _pooled_fn(per_sym, min_trades=min_trades), None, min_trades, "4h")
+    fr = _evaluate_single(
+        _chrom(), _pooled_fn(per_sym, min_trades=min_trades), None, min_trades, "4h"
+    )
     assert fr.error is None
     return fr
 
@@ -1038,12 +1082,17 @@ def test_pooled_gate_fails_closed_without_symbol_stats() -> None:
 
     from vibe_quant.discovery.gate_chain import pooled_symbol_gate_reasons
 
-    fr = replace(_pooled_fit({"A": _pwin(STRONG, 30), "B": _pwin(STRONG, 30)}), pooled_symbol_stats=None)
+    fr = replace(
+        _pooled_fit({"A": _pwin(STRONG, 30), "B": _pwin(STRONG, 30)}), pooled_symbol_stats=None
+    )
     assert pooled_symbol_gate_reasons(fr) == ["pooled symbol stats missing"]
     pipe = _pooled_pipe(require_dsr=True)
     assert pipe.gates.screen([(_chrom(), fr)], TrialBudget(1, {})) == []
     (row,) = pipe.gates.rejections
-    assert (row["stage"], row["reasons"]) == ("pooled_symbol_train", ["pooled symbol stats missing"])
+    assert (row["stage"], row["reasons"]) == (
+        "pooled_symbol_train",
+        ["pooled symbol stats missing"],
+    )
 
 
 WEAK = [0.0, 0.003, -0.004, 0.002, -0.001, 0.003, -0.003, 0.002, -0.002, 0.001, -0.001, 0.0021]
@@ -1074,7 +1123,10 @@ def test_pooled_screen_dsr_on_pool_no_per_symbol_floor() -> None:
 def test_pooled_sign_floor_rejects_before_dsr() -> None:
     """C11: a sign-floor failure is stage ``pooled_symbol_train`` and never reaches DSR."""
     fr = _pooled_fit({"A": _pwin(STRONG, 30), "B": _pwin(LOSE, 30)})
-    for pool, dsr in (("top_k", None), ("all", {"status": "skipped", "reason": "pooled_symbol_train"})):
+    for pool, dsr in (
+        ("top_k", None),
+        ("all", {"status": "skipped", "reason": "pooled_symbol_train"}),
+    ):
         pipe = _pooled_pipe(require_dsr=True, gate_pool=pool)
         chrom = _chrom()
         assert pipe.gates.screen([(chrom, fr)], TrialBudget(1, {})) == []
@@ -1096,7 +1148,9 @@ def test_pooled_bootstrap_reason_counts_days(days: int, insufficient: bool) -> N
     assert pipe.gates.screen([(_chrom(), fr)], TrialBudget(1, {})) == []
     (reason,) = [r for r in pipe.gates.rejections[0]["reasons"] if "Bootstrap" in r]  # type: ignore[attr-defined]
     if insufficient:
-        assert reason == "Bootstrap CI required but insufficient pooled daily returns (got 3, need ≥5)"
+        assert (
+            reason == "Bootstrap CI required but insufficient pooled daily returns (got 3, need ≥5)"
+        )
     else:
         assert reason.endswith(", pooled daily returns (n=11))"), reason
         assert "trade" not in reason
@@ -1126,15 +1180,22 @@ def test_pooled_ranks_sign_floor_passers_first(monkeypatch: pytest.MonkeyPatch) 
     table[passer.uid] = {"A": _pwin(STRONG, 30), "B": _pwin(STRONG, 30)}
 
     class ByUid(PooledFake):
-        def _run_single(self, chromosome: Any, start_date: str, end_date: str,
-                        symbols: list[str] | None = None) -> dict[str, Any]:  # type: ignore[override]
+        def _run_single(
+            self, chromosome: Any, start_date: str, end_date: str, symbols: list[str] | None = None
+        ) -> dict[str, Any]:  # type: ignore[override]
             assert symbols is not None
             return dict(table[chromosome.uid][symbols[0]])
 
     fn = ByUid({}, ["A", "B"], min_trades=10)
     pipe = DiscoveryPipeline(
-        _cfg(symbol_agg="pooled", min_trades=10, max_generations=1, min_diversity_distance=0.0,
-             require_buy_hold=False, gate_pool="top_k"),
+        _cfg(
+            symbol_agg="pooled",
+            min_trades=10,
+            max_generations=1,
+            min_diversity_distance=0.0,
+            require_buy_hold=False,
+            gate_pool="top_k",
+        ),
         backtest_fn=fn,
     )
     monkeypatch.setattr(
@@ -1236,7 +1297,9 @@ def test_portfolio_and_worst_rows_have_no_pooled_block() -> None:
     ],
     ids=["sorted-first-of-3", "sorted-first-of-2", "last-of-3"],
 )  # fmt: skip
-def test_pooled_misaligned_names_the_shifted_coin(shifted: str, coins: list[str], message: str) -> None:
+def test_pooled_misaligned_names_the_shifted_coin(
+    shifted: str, coins: list[str], message: str
+) -> None:
     """Carry-over: the message names the coin whose first day differs from the majority (ties:
     the earliest first day is the reference), also when it sorts first."""
     chrom = _chrom()
@@ -1255,9 +1318,7 @@ def _pooled_mock(chrom: Any) -> dict[str, Any]:
 
 
 @pytest.mark.slow(reason="a whole CLI discovery run per mode (mock engine), ~2 s each")
-@pytest.mark.parametrize(
-    ("agg", "fns"), [("portfolio", 1), ("worst", 2), ("pooled", 2)]
-)
+@pytest.mark.parametrize(("agg", "fns"), [("portfolio", 1), ("worst", 2), ("pooled", 2)])
 def test_full_range_headline_runs_for_pooled(
     agg: str, fns: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1294,7 +1355,9 @@ POOLED_NOTE = (
 
 
 @pytest.mark.parametrize(("val_sharpe", "val_trades"), [(-1.0, 10), (5.0, 999)])
-def test_pooled_consistency_note_no_flag(state: StateManager, val_sharpe: float, val_trades: int) -> None:
+def test_pooled_consistency_note_no_flag(
+    state: StateManager, val_sharpe: float, val_trades: int
+) -> None:
     """C14 validation side: a pooled discovery reference is labelled, never compared."""
     import json
 
@@ -1398,7 +1461,8 @@ def test_worst_validation_persists_the_note_unflagged(state: StateManager) -> No
     report = _check_consistency(state, 1.0, 60)
     assert report["screen_source"] == f"discovery_run:{rid}"
     assert (report["flags"], report["notes"]) == (
-        [], ["reference Sharpe = worst symbol (discovery symbol_agg=worst)"]
+        [],
+        ["reference Sharpe = worst symbol (discovery symbol_agg=worst)"],
     )
 
 

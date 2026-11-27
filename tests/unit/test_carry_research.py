@@ -176,7 +176,9 @@ def _cache_snapshot() -> dict[tuple[str, str], tuple[list[int], list[float]]]:
     return {key: (list(times), list(rates)) for key, (times, rates) in _RATE_CACHE.items()}
 
 
-def _decision(ts: int, signals: Mapping[str, float | None], weights: Mapping[str, float]) -> Decision:
+def _decision(
+    ts: int, signals: Mapping[str, float | None], weights: Mapping[str, float]
+) -> Decision:
     """A minimal ``Decision`` carrying only the fields ``_persistence`` reads."""
     return Decision(
         ts=ts,
@@ -205,9 +207,7 @@ def test_hooks_default_is_identical(tmp_path: Path) -> None:
 
     assert default.fills and default.decisions
     assert (
-        compare_runs(
-            default, hooked, carry_metrics(default, inputs), carry_metrics(hooked, inputs)
-        )
+        compare_runs(default, hooked, carry_metrics(default, inputs), carry_metrics(hooked, inputs))
         == []
     )
 
@@ -217,9 +217,7 @@ def _hole_at_second_decision(inputs: CarryInputs) -> CarryInputs:
     d1 = inputs.decisions[1]
     eth = inputs.settlements["ETHUSDT"]
     keep = [
-        index
-        for index, ts in enumerate(eth.times_ns)
-        if not d1 - 3 * _DAY <= ts <= d1 - 2 * _DAY
+        index for index, ts in enumerate(eth.times_ns) if not d1 - 3 * _DAY <= ts <= d1 - 2 * _DAY
     ]
     holed = Settlements(
         times_ns=tuple(eth.times_ns[i] for i in keep), rates=tuple(eth.rates[i] for i in keep)
@@ -265,7 +263,9 @@ class _SentinelRanker:
         self.p_keep = p_keep
         self.seed = seed
 
-    def __call__(self, decision_ns: int, signals: Mapping[str, float | None]) -> dict[str, float | None]:
+    def __call__(
+        self, decision_ns: int, signals: Mapping[str, float | None]
+    ) -> dict[str, float | None]:
         return dict(signals)
 
 
@@ -293,7 +293,9 @@ class _Harness:
         self.decisions = decisions
         self.factory_calls: list[tuple[float, int]] = []
         self.draw_fees: list[float] = []  # fee_multiplier of every null-draw simulate call
-        self.strategy_fees: list[float] = []  # fee_multiplier of every ranker=None, same-inputs call
+        self.strategy_fees: list[
+            float
+        ] = []  # fee_multiplier of every ranker=None, same-inputs call
         self.other_kinds: list[tuple[str, float]] = []  # placebo / capped, with their fee
         self.weekly_runs: list[float | None] = []  # every draw's ``weekly_sharpe_only`` run
         self.report_calls = 0  # the §4 reports a draw must never build
@@ -375,7 +377,14 @@ def test_null_draws_read_the_weekly_only_sharpe(
 
     result = research.evaluate(inputs, draws=3, seed=_SEED0, trials_path=tmp_path / "trials.jsonl")
 
-    assert harness.weekly_runs == [0.5, 0.6, 0.7, 1.0, 1.1, 1.2]  # the post-cost draws, then pre-cost
+    assert harness.weekly_runs == [
+        0.5,
+        0.6,
+        0.7,
+        1.0,
+        1.1,
+        1.2,
+    ]  # the post-cost draws, then pre-cost
     assert harness.report_calls == 5  # strategy, pre-cost strategy, placebo, 2x fees, capped
     assert result["p_value"] == 1 / 4  # 1.0 strategy beats all three post-cost draws
     assert result["p_value_pre_cost"] == 1 / 4  # 1.5 beats 1.0/1.1/1.2
@@ -402,9 +411,7 @@ def test_ruined_draw_counted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     inputs = _inputs(tmp_path, name="ruin")
     harness = _install_fakes(monkeypatch, inputs, [0.5, "ruined", 2.0], [1.6, "ruined", 1.5])
 
-    result = research.evaluate(
-        inputs, draws=3, seed=_SEED0, trials_path=tmp_path / "trials.jsonl"
-    )
+    result = research.evaluate(inputs, draws=3, seed=_SEED0, trials_path=tmp_path / "trials.jsonl")
 
     assert result["draws"] == 3
     assert result["ruined_draws"] == 1  # the pre-cost pass's ruined draw is not double counted
@@ -438,9 +445,7 @@ def test_cost_passes_use_the_right_fee_multiplier(
     inputs = _inputs(tmp_path, name="fees")
     harness = _install_fakes(monkeypatch, inputs, [0.5, 0.6, 0.7], [1.0, 1.1, 1.2])
 
-    result = research.evaluate(
-        inputs, draws=3, seed=_SEED0, trials_path=tmp_path / "trials.jsonl"
-    )
+    result = research.evaluate(inputs, draws=3, seed=_SEED0, trials_path=tmp_path / "trials.jsonl")
 
     assert sorted(harness.draw_fees) == [0.0, 0.0, 0.0, 1.0, 1.0, 1.0]
     assert sorted(harness.strategy_fees) == [0.0, 1.0, 2.0]  # pre-cost, headline, fee stress
@@ -468,9 +473,7 @@ def test_null_draws_get_the_strategys_p_keep_and_seed_plus_index(
     )
     harness = _install_fakes(monkeypatch, inputs, [0.5] * 3, [0.5] * 3, decisions)
 
-    result = research.evaluate(
-        inputs, draws=3, seed=_SEED0, trials_path=tmp_path / "trials.jsonl"
-    )
+    result = research.evaluate(inputs, draws=3, seed=_SEED0, trials_path=tmp_path / "trials.jsonl")
 
     assert result["p_keep"] == 0.5
     # the post-cost pass first, then the pre-cost pass: both reuse seeds seed + 0..2
@@ -511,21 +514,31 @@ def test_persistence_matched_null_seeded() -> None:
     """The null ranker is seeded (reproducible) and honours ``p_keep``."""
     signals = {"A": 0.0, "B": 0.0, "C": 0.0, "D": 0.0}
 
-    assert research.PersistenceMatchedRanker(0.0, 3)(0, signals) == research.PersistenceMatchedRanker(
-        0.0, 3
-    )(0, signals)
+    assert research.PersistenceMatchedRanker(0.0, 3)(
+        0, signals
+    ) == research.PersistenceMatchedRanker(0.0, 3)(0, signals)
 
     kept = research.PersistenceMatchedRanker(1.0, 3)
     first = kept(0, signals)
     assert kept(7, signals) == first  # p_keep == 1.0 always keeps the previous ordering
-    assert sorted(v for v in first.values() if v is not None) == [0.0, 1.0, 2.0, 3.0]  # rank positions, distinct floats
+    assert sorted(v for v in first.values() if v is not None) == [
+        0.0,
+        1.0,
+        2.0,
+        3.0,
+    ]  # rank positions, distinct floats
 
     reshuffled = research.PersistenceMatchedRanker(0.0, 3)
-    assert sorted(v for v in reshuffled(0, signals).values() if v is not None) == [0.0, 1.0, 2.0, 3.0]
+    assert sorted(v for v in reshuffled(0, signals).values() if v is not None) == [
+        0.0,
+        1.0,
+        2.0,
+        3.0,
+    ]
     # a different seed draws a different permutation of the same four symbols
-    assert research.PersistenceMatchedRanker(0.0, 4)(0, signals) != research.PersistenceMatchedRanker(
-        0.0, 3
-    )(0, signals)
+    assert research.PersistenceMatchedRanker(0.0, 4)(
+        0, signals
+    ) != research.PersistenceMatchedRanker(0.0, 3)(0, signals)
 
 
 # --- Capped funding --------------------------------------------------------------
@@ -655,7 +668,9 @@ def test_fee2x_doubles_the_commission(tmp_path: Path) -> None:
 
     # the first decision sizes off equity 10,000 in both runs, so its fills' fees double
     assert [fill.fee for fill in doubled.fills[:2]] == [fill.fee * 2.0 for fill in single.fills[:2]]
-    assert math.fsum(fill.fee for fill in doubled.fills) > math.fsum(fill.fee for fill in single.fills)
+    assert math.fsum(fill.fee for fill in doubled.fills) > math.fsum(
+        fill.fee for fill in single.fills
+    )
 
 
 def test_beta_ols_on_exact_line(tmp_path: Path) -> None:
@@ -703,7 +718,11 @@ def test_betas_wiring_two_separate_regressions(tmp_path: Path) -> None:
         boundary_prices={"BTCUSDT": prices(btc_returns), "ETHUSDT": prices(eth_returns)},
     )
     report = CarryReport(
-        summary={}, daily=[], weekly=list(zip(weekly_ts, portfolio, strict=True)), legs=[], by_year=[]
+        summary={},
+        daily=[],
+        weekly=list(zip(weekly_ts, portfolio, strict=True)),
+        legs=[],
+        by_year=[],
     )
 
     beta_btc, alpha_t_btc, beta_ew, alpha_t = research._betas(shaped, report)
@@ -726,7 +745,9 @@ def test_drop_top3_removes_the_three_best_weeks() -> None:
     assert research._drop_top3(returns) == pytest.approx(expected, rel=1e-12)
     # the best three are dropped, not the worst three
     assert research._drop_top3(returns) != pytest.approx(
-        statistics.mean([0.01, 0.02, 0.03, 0.04]) / statistics.stdev([0.01, 0.02, 0.03, 0.04]) * math.sqrt(52.0),
+        statistics.mean([0.01, 0.02, 0.03, 0.04])
+        / statistics.stdev([0.01, 0.02, 0.03, 0.04])
+        * math.sqrt(52.0),
         rel=1e-3,
     )
     # the edge: 6 weeks leave exactly 3 (the Sharpe minimum); 3 weeks leave none
@@ -874,7 +895,9 @@ def test_cli_evaluate_strategy_ruined_exits_2(
     monkeypatch.setattr(research, "simulate_reference", boom)
     out_dir = tmp_path / "research"
 
-    code = carry_cli.main(_evaluate_args(tmp_path, "--trials", str(tmp_path / "t.jsonl"), out=out_dir))
+    code = carry_cli.main(
+        _evaluate_args(tmp_path, "--trials", str(tmp_path / "t.jsonl"), out=out_dir)
+    )
 
     captured = capsys.readouterr()
     assert code == 2
@@ -1000,7 +1023,12 @@ def test_cli_evaluate_research_json_requires_force(
     assert "exists" in captured.err and "--force" in captured.err
     assert existing.read_text() == "old"
 
-    assert carry_cli.main(_evaluate_args(tmp_path, "--force", "--trials", str(tmp_path / "t.jsonl"), out=out_dir)) == 0
+    assert (
+        carry_cli.main(
+            _evaluate_args(tmp_path, "--force", "--trials", str(tmp_path / "t.jsonl"), out=out_dir)
+        )
+        == 0
+    )
     assert json.loads(existing.read_text())["draws"] == 1
 
 
@@ -1275,9 +1303,7 @@ def test_rotation_keeps_staggered_listing_co_movement() -> None:
 
 def test_rotation_moves_the_regime_with_its_segment() -> None:
     """C9-6: the filter regime is one more column of the segment (None stays None)."""
-    table = _table(
-        [{"A": float(i)} for i in range(5)], regime=[None, 0.2, -0.2, 0.6, 1.0]
-    )
+    table = _table([{"A": float(i)} for i in range(5)], regime=[None, 0.2, -0.2, 0.6, 1.0])
     rotated, degenerate = research.rotate_table(table, 0.5)
     # segments: [0] (regime None, degenerate), [1..4] (k = 1 + floor(0.5 * 3) = 2)
     assert rotated.regime == (None, 0.6, 1.0, 0.2, -0.2)
@@ -1328,9 +1354,7 @@ def test_filter_zeroing_equals_the_native_filter_run(
     eligible signal while the (rotated) regime is None or <= 0. With the TRUE table that
     is the native filter run bit for bit: equities, weights, targets, orders, fills and
     funding (only the book_state label differs: flat vs filter_off)."""
-    inputs = _trend_inputs(
-        tmp_path, monkeypatch, direction="long_flat", trend_filter="BTCUSDT"
-    )
+    inputs = _trend_inputs(tmp_path, monkeypatch, direction="long_flat", trend_filter="BTCUSDT")
     native = simulate_reference(inputs)
     table, mismatches = research.signal_table(inputs)
     zeroed = research.table_run(inputs, table)
@@ -1348,12 +1372,12 @@ def test_filter_zeroing_equals_the_native_filter_run(
             theirs.target_steps,
             theirs.orders,
         )
-        assert mine.book_state == ("flat" if theirs.book_state == "filter_off" else theirs.book_state)
+        assert mine.book_state == (
+            "flat" if theirs.book_state == "filter_off" else theirs.book_state
+        )
 
 
-def test_signal_table_lags_only_the_signal(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_signal_table_lags_only_the_signal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """C9-17: a K-day lag reads ``trend_signal(closes, D - K d)`` for the coins eligible
     at D (and the regime the same way); the eligibility, prices and book-vol closes are
     those of D. A lagged window without history is counted as a mask mismatch."""
@@ -1374,7 +1398,9 @@ def test_signal_table_lags_only_the_signal(
     assert closes is not None
     for index, decision_ns in enumerate(lagged.decisions):
         for symbol, value in native.signals[index].items():
-            expected = None if value is None else trend_signal(closes[symbol], decision_ns - 5 * _DAY)
+            expected = (
+                None if value is None else trend_signal(closes[symbol], decision_ns - 5 * _DAY)
+            )
             assert lagged.signals[index][symbol] == expected
         assert lagged.regime[index] == trend_signal(closes["BTCUSDT"], decision_ns - 5 * _DAY)
     assert mismatches == 0
@@ -1478,7 +1504,12 @@ def test_family_arm_identity_hashes_every_signal_param(tmp_path: Path) -> None:
     research.require_arm(
         family,
         CarrySpec.from_dates(
-            ("SOLUSDT",), "2022-01-01", "2023-01-01", initial_balance=5.0, fill_granularity="1h", **base
+            ("SOLUSDT",),
+            "2022-01-01",
+            "2023-01-01",
+            initial_balance=5.0,
+            fill_granularity="1h",
+            **base,
         ),
     )
     for change in (
@@ -1744,7 +1775,9 @@ def test_trend_cost_passes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     def spy(given: CarryInputs, **kw: object) -> object:
         fee = kw.get("fee_multiplier", 1.0)
         assert isinstance(fee, float)
-        calls.append((fee, given.spec.spread, kw.get("ranker") is not None, given.calc is inputs.calc))
+        calls.append(
+            (fee, given.spec.spread, kw.get("ranker") is not None, given.calc is inputs.calc)
+        )
         return real(given, **kw)  # type: ignore[arg-type]
 
     monkeypatch.setattr(research, "simulate_reference", spy)
@@ -1760,11 +1793,15 @@ def test_trend_cost_passes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
 def test_trend_drop_top3_weeks_drops_their_days() -> None:
     """R61: the daily Sharpe without the days of the three best Monday weeks."""
     daily = [(_START + (i + 1) * _DAY, 0.0, 0.001 * ((i * 7) % 5 - 2)) for i in range(35)]
-    weekly = [(_START + 7 * (w + 1) * _DAY, move) for w, move in enumerate([0.03, -0.01, 0.05, 0.02, 0.0])]
+    weekly = [
+        (_START + 7 * (w + 1) * _DAY, move) for w, move in enumerate([0.03, -0.01, 0.05, 0.02, 0.0])
+    ]
     kept = [
         row[2]
         for row in daily
-        if not any(end - 7 * _DAY < row[0] <= end for end in (weekly[0][0], weekly[2][0], weekly[3][0]))
+        if not any(
+            end - 7 * _DAY < row[0] <= end for end in (weekly[0][0], weekly[2][0], weekly[3][0])
+        )
     ]
     from vibe_quant.portfolio.metrics import _annualised_sharpe
 
@@ -1785,9 +1822,7 @@ def test_trend_evaluate_counts_trend_trials_only(
     )
     result = research.evaluate(inputs, draws=0, seed=0, trials_path=ledger, family=family)
     assert result["ledger_num_trials"] == 4
-    funding = research.evaluate(
-        _inputs(tmp_path, name="fund"), draws=0, seed=0, trials_path=ledger
-    )
+    funding = research.evaluate(_inputs(tmp_path, name="fund"), draws=0, seed=0, trials_path=ledger)
     assert funding["dsr_num_trials"] == 5  # deadbeef-style funding line + own; trend ignored
 
 
@@ -1806,7 +1841,10 @@ def test_regime_gate_and_duty_at_zero() -> None:
     assert gated(table.decisions[0], live) == {"A": 0.0, "B": None}
     assert gated(table.decisions[1], {"A": 0.0, "B": 0.0}) == {"A": 0.0, "B": 0.0}
     assert gated(table.decisions[2], {"A": 0.0, "B": 0.0}) == {"A": -0.2, "B": 1.0}
-    assert research.TableRanker(table, gate=False)(table.decisions[0], live) == {"A": 0.6, "B": None}
+    assert research.TableRanker(table, gate=False)(table.decisions[0], live) == {
+        "A": 0.6,
+        "B": None,
+    }
     with pytest.raises(ValueError, match="B eligible"):
         gated(table.decisions[2], {"A": 0.0, "B": None})
 
@@ -1910,7 +1948,9 @@ def test_trend_p_value_and_percentile_from_the_rotation_null(
     for index in range(draws):
         rotated, _ = research.rotate_table(table, research.draw_fraction(seed, index))
         for given, fee, out in ((inputs, 1.0, nulls), (precost, 0.0, precost_nulls)):
-            sharpe = daily_sharpe_only(research.table_run(given, rotated, fee_multiplier=fee), given)
+            sharpe = daily_sharpe_only(
+                research.table_run(given, rotated, fee_multiplier=fee), given
+            )
             assert sharpe is not None
             out.append(sharpe)
     own = result["sharpe"]
@@ -1926,9 +1966,7 @@ def test_trend_p_value_and_percentile_from_the_rotation_null(
     assert (result["ruined_draws"], result["undefined_draws"]) == (0, 0)
 
 
-def test_trend_ruined_and_undefined_draws(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_trend_ruined_and_undefined_draws(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """R58 / R-c9t5-3: a draw raising CarryEquityTooSmall is ruined: -inf (below own,
     it lowers p and raises the percentile), counted, never dropped. N1: a draw whose
     Sharpe is undefined (None) counts conservatively as >= own (raises p, never below

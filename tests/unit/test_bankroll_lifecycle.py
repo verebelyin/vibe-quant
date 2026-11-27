@@ -84,7 +84,12 @@ def make_parent(
     dsl = dsl or dict(DSL)
     strategy_id = sm.create_strategy(name, dsl)
     run_id = sm.create_backtest_run(
-        strategy_id, mode, ["BTCUSDT"], "4h", "2024-01-01", "2024-06-01",
+        strategy_id,
+        mode,
+        ["BTCUSDT"],
+        "4h",
+        "2024-01-01",
+        "2024-06-01",
         {"risk_per_trade": 0.02, "max_position_pct": 0.5},
     )
     notes: dict[str, object] = {"data_window": "x"}
@@ -99,7 +104,10 @@ def admit(
     sm: StateManager, run_id: int, job_alive: Callable[[int, str | None], bool] = alive
 ) -> BankrollAdmission:
     return sm.admit_bankroll_report(
-        run_id, {"multiples": [1.0]}, dsl_hash=dsl_hash, job_alive=job_alive,
+        run_id,
+        {"multiples": [1.0]},
+        dsl_hash=dsl_hash,
+        job_alive=job_alive,
         terminate=never_signal,
     )
 
@@ -113,8 +121,9 @@ def register(conn: sqlite3.Connection, job_id: int, pid: int) -> None:
 
 
 def kill(conn: sqlite3.Connection, job_id: int) -> None:
-    run_lifecycle.finish(conn, job_id, run_lifecycle.JobStatus.KILLED, None,
-                         reconcile=False, owner=None)
+    run_lifecycle.finish(
+        conn, job_id, run_lifecycle.JobStatus.KILLED, None, reconcile=False, owner=None
+    )
 
 
 def _fetch(db_path: Path, sql: str, key: int) -> sqlite3.Row | None:
@@ -212,8 +221,9 @@ def test_lifecycle_owner_failure_and_stale(
     run_id = make_parent(sm)
     report_id, _ = launched(sm, jobs_conn, run_id)
     assert not sm.end_bankroll_report(report_id, "stale_parent", "x", owner_pid=999)
-    assert sm.end_bankroll_report(report_id, "stale_parent", "inputs_mismatch: end_date",
-                                  owner_pid=4242)
+    assert sm.end_bankroll_report(
+        report_id, "stale_parent", "inputs_mismatch: end_date", owner_pid=4242
+    )
     row = report_row(db_path, report_id)
     assert (row["status"], row["error_message"]) == ("stale_parent", "inputs_mismatch: end_date")
     assert row["completed_at"] is not None
@@ -285,8 +295,9 @@ def test_lifecycle_open_report_job_holds_the_slot_after_parent_delete(
     assert not sm.bankroll_report_owned(report_id, 4242)
     assert sm.publish_bankroll_report(report_id, 4242, REPORT, dsl_hash=dsl_hash) is not None
     # the job ends -> the slot is released
-    run_lifecycle.finish(jobs_conn, job_id, run_lifecycle.JobStatus.FAILED, "gone",
-                         reconcile=False, owner=None)
+    run_lifecycle.finish(
+        jobs_conn, job_id, run_lifecycle.JobStatus.FAILED, "gone", reconcile=False, owner=None
+    )
     assert admit(sm, second)[0] == report_id + 1
 
 
@@ -324,8 +335,7 @@ def test_lifecycle_spawn_failure_releases_the_slot(sm: StateManager, db_path: Pa
 def _expire(db_path: Path, report_id: int) -> None:
     conn = get_connection(db_path)
     conn.execute(
-        "UPDATE bankroll_reports SET launch_deadline = datetime('now', '-2 seconds') "
-        "WHERE id = ?",
+        "UPDATE bankroll_reports SET launch_deadline = datetime('now', '-2 seconds') WHERE id = ?",
         (report_id,),
     )
     conn.commit()
@@ -338,10 +348,12 @@ def test_lifecycle_launch_gaps_are_not_dead(
     run_id = make_parent(sm)
     report_id, job_id = admit(sm, run_id)
     deadline_s = (
-        get_connection(db_path).execute(
+        get_connection(db_path)
+        .execute(
             "SELECT CAST(strftime('%s', launch_deadline) AS INTEGER) "
             "- CAST(strftime('%s', created_at) AS INTEGER) FROM bankroll_reports"
-        ).fetchone()[0]
+        )
+        .fetchone()[0]
     )
     assert deadline_s == 120
     # gap 1: no job row yet
@@ -388,11 +400,16 @@ def test_lifecycle_launcher_death_before_pid_registration(
 
 
 @pytest.mark.parametrize("job_first", [True, False])
-@pytest.mark.parametrize(("offset", "refused"), [("-2 seconds", True), ("+0 seconds", True),
-                                                 ("+30 seconds", False)])
+@pytest.mark.parametrize(
+    ("offset", "refused"), [("-2 seconds", True), ("+0 seconds", True), ("+30 seconds", False)]
+)
 def test_lifecycle_first_claim_needs_an_open_launch_window(
-    sm: StateManager, jobs_conn: sqlite3.Connection, db_path: Path,
-    job_first: bool, offset: str, refused: bool,
+    sm: StateManager,
+    jobs_conn: sqlite3.Connection,
+    db_path: Path,
+    job_first: bool,
+    offset: str,
+    refused: bool,
 ) -> None:
     """No reconcile runs between expiry and the claim: the claim checks the deadline."""
     run_id = make_parent(sm)
@@ -520,8 +537,10 @@ def test_lifecycle_admission_refusals(sm: StateManager) -> None:
         "inputs_unverified": make_parent(sm, name="old", identity=False),
     }
     edited = make_parent(sm, name="edit")
-    sm.update_strategy(sm.get_strategy_id_by_name("edit") or 0,
-                       dsl_config={**DSL, "indicators": {"rsi": {"period": 15}}})
+    sm.update_strategy(
+        sm.get_strategy_id_by_name("edit") or 0,
+        dsl_config={**DSL, "indicators": {"rsi": {"period": 15}}},
+    )
     cases["stale_parent"] = edited
     for code, run_id in cases.items():
         with pytest.raises(BankrollAdmissionError) as exc:
@@ -548,10 +567,11 @@ def test_lifecycle_admission_stores_the_input_snapshot(sm: StateManager) -> None
     assert inputs["dsl_sha256"] == dsl_hash(DSL)
     assert json.loads(inputs["dsl_json"]) == DSL
     assert json.loads(inputs["run_row"]["parameters"]) == {
-        "risk_per_trade": 0.02, "max_position_pct": 0.5}
+        "risk_per_trade": 0.02,
+        "max_position_pct": 0.5,
+    }
     assert inputs["run_row"]["symbols"] == '["BTCUSDT"]'
-    assert inputs["parent_identity"] == {"v": 1, "strategy_name": "s",
-                                         "dsl_sha256": dsl_hash(DSL)}
+    assert inputs["parent_identity"] == {"v": 1, "strategy_name": "s", "dsl_sha256": dsl_hash(DSL)}
     assert sm.list_running_bankroll_report_ids() == [report_id]
 
 
@@ -577,8 +597,9 @@ def test_lifecycle_publish_freshness(
     run_id = make_parent(sm)
     report_id, _ = launched(sm, jobs_conn, run_id)
     if change == "dsl":
-        sm.update_strategy(sm.get_strategy_id_by_name("s") or 0,
-                           dsl_config={**DSL, "indicators": {}})
+        sm.update_strategy(
+            sm.get_strategy_id_by_name("s") or 0, dsl_config={**DSL, "indicators": {}}
+        )
     elif change == "result":
         _rerun_parent(sm, run_id)
     elif change == "running":
@@ -586,7 +607,8 @@ def test_lifecycle_publish_freshness(
         jobs_conn.commit()
     elif change == "row":
         jobs_conn.execute(
-            "UPDATE backtest_runs SET end_date = '2024-07-01' WHERE id = ?", (run_id,))
+            "UPDATE backtest_runs SET end_date = '2024-07-01' WHERE id = ?", (run_id,)
+        )
         jobs_conn.commit()
     else:
         jobs_conn.execute("DELETE FROM backtest_results WHERE run_id = ?", (run_id,))
@@ -639,9 +661,7 @@ def test_lifecycle_get_masks_a_stale_recommendation(
     assert sm.get_latest_bankroll_report(run_id + 50, dsl_hash=dsl_hash) is None
 
 
-def test_lifecycle_unreadable_dsl_is_stale(
-    sm: StateManager, jobs_conn: sqlite3.Connection
-) -> None:
+def test_lifecycle_unreadable_dsl_is_stale(sm: StateManager, jobs_conn: sqlite3.Connection) -> None:
     run_id = make_parent(sm)
     launched(sm, jobs_conn, run_id)
     got = sm.get_latest_bankroll_report(run_id, dsl_hash=lambda dsl: None)
@@ -661,19 +681,25 @@ def test_lifecycle_late_registration_keeps_the_claimed_identity(
         return SimpleNamespace(pid=4242)
 
     try:
-        with patch("vibe_quant.jobs.manager.subprocess.Popen", spawn), patch(
-            "vibe_quant.jobs.manager.process_start_time", return_value=None
+        with (
+            patch("vibe_quant.jobs.manager.subprocess.Popen", spawn),
+            patch("vibe_quant.jobs.manager.process_start_time", return_value=None),
         ):
             assert jobs.start_job(job_id, "bankroll_report", ["unused"]) == 4242
         job = job_row(db_path, job_id)
         assert (job["status"], job["pid"], job["pid_start_time"]) == (
-            "running", 4242, "child-token")
+            "running",
+            4242,
+            "child-token",
+        )
         # pid 4242 now belongs to an unrelated process: the report job is dead
-        with patch.object(jobs, "is_process_alive", return_value=True), patch(
-            "vibe_quant.jobs.manager.process_start_time", return_value="recycled-token"
+        with (
+            patch.object(jobs, "is_process_alive", return_value=True),
+            patch("vibe_quant.jobs.manager.process_start_time", return_value="recycled-token"),
         ):
             flipped = sm.reconcile_bankroll_reports(
-                job_alive=jobs._job_alive, terminate=never_signal)
+                job_alive=jobs._job_alive, terminate=never_signal
+            )
         assert flipped == [report_id]
     finally:
         jobs.close()
@@ -749,8 +775,7 @@ def test_lifecycle_split_owner_is_refused(
     run_id = make_parent(sm)
     report_id, job_id = launched(sm, jobs_conn, run_id)
     jobs_conn.execute(
-        "UPDATE background_jobs SET pid = 5555, pid_start_time = 'start-5555' "
-        "WHERE run_id = ?",
+        "UPDATE background_jobs SET pid = 5555, pid_start_time = 'start-5555' WHERE run_id = ?",
         (job_id,),
     )
     jobs_conn.commit()
@@ -763,7 +788,9 @@ def test_lifecycle_split_owner_is_refused(
 
 
 def test_lifecycle_get_reads_one_snapshot(
-    sm: StateManager, jobs_conn: sqlite3.Connection, db_path: Path,
+    sm: StateManager,
+    jobs_conn: sqlite3.Connection,
+    db_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A parent edit landing between the report read and the freshness read."""
@@ -812,8 +839,12 @@ def test_schema(db_path: Path) -> None:
     setup.close()
     _drop_bankroll(db_path)
     raw = sqlite3.connect(db_path)
-    tables = [r[0] for r in raw.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+    tables = [
+        r[0]
+        for r in raw.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        )
+    ]
     before = {t: raw.execute(f"SELECT * FROM {t} ORDER BY rowid").fetchall() for t in tables}
     user_version = raw.execute("PRAGMA user_version").fetchone()[0]
     raw.close()
@@ -847,8 +878,10 @@ def test_schema(db_path: Path) -> None:
             assert [tuple(r) for r in rows] == before[t]
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
         assert conn.execute("PRAGMA user_version").fetchone()[0] == user_version
-        index = {r["name"]: (r["unique"], r["partial"]) for r in conn.execute(
-            "PRAGMA index_list('bankroll_reports')")}
+        index = {
+            r["name"]: (r["unique"], r["partial"])
+            for r in conn.execute("PRAGMA index_list('bankroll_reports')")
+        }
         columns = [r["name"] for r in conn.execute("PRAGMA index_info('one_running_bankroll')")]
     assert index["one_running_bankroll"] == (1, 1) and columns == ["status"]
     first, *_ = (admit(mgr, p) for p in parents[:1])
@@ -911,7 +944,9 @@ def test_fail_open_job(jobs_conn: sqlite3.Connection, db_path: Path) -> None:
     jobs_conn.commit()
     assert _in_txn(jobs_conn, lambda: run_lifecycle.fail_open_job(jobs_conn, -12, "second"))
     assert (job_row(db_path, -12)["status"], job_row(db_path, -12)["error_message"]) == (
-        "failed", "first")
+        "failed",
+        "first",
+    )
     # terminal and missing rows: no-op
     jobs_conn.execute("UPDATE background_jobs SET status = 'killed' WHERE run_id = -12")
     jobs_conn.commit()
@@ -932,8 +967,9 @@ def test_claim_job_row(jobs_conn: sqlite3.Connection, db_path: Path) -> None:
     assert not _in_txn(jobs_conn, lambda: run_lifecycle.claim_job_row(jobs_conn, -21, 52, "s"))
     assert dict(job_row(db_path, -21)) == before
     # a terminal row is never reopened
-    run_lifecycle.finish(jobs_conn, -21, run_lifecycle.JobStatus.FAILED, "done",
-                         reconcile=False, owner=None)
+    run_lifecycle.finish(
+        jobs_conn, -21, run_lifecycle.JobStatus.FAILED, "done", reconcile=False, owner=None
+    )
     before = dict(job_row(db_path, -21))
     assert not _in_txn(jobs_conn, lambda: run_lifecycle.claim_job_row(jobs_conn, -21, 51, "s-51"))
     assert dict(job_row(db_path, -21)) == before
@@ -948,8 +984,10 @@ def test_claim_job_row(jobs_conn: sqlite3.Connection, db_path: Path) -> None:
     ids=["fail_open_job", "claim_job_row"],
 )
 def test_job_row_helpers_leave_the_commit_to_the_caller(
-    jobs_conn: sqlite3.Connection, db_path: Path,
-    helper: Callable[[sqlite3.Connection], bool], status: str,
+    jobs_conn: sqlite3.Connection,
+    db_path: Path,
+    helper: Callable[[sqlite3.Connection], bool],
+    status: str,
 ) -> None:
     open_job(jobs_conn, -41)
     before = dict(job_row(db_path, -41))

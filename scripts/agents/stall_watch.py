@@ -49,7 +49,9 @@ if TYPE_CHECKING:
 REGISTRY_NAME = "workers.jsonl"
 KILL_RC = -15
 LOG_GROWTH_WINDOW = 3
-WALK_SKIP_DIRS = frozenset({".git", "node_modules", ".venv", "data", "__pycache__", ".pnpm-store", ".beads"})
+WALK_SKIP_DIRS = frozenset(
+    {".git", "node_modules", ".venv", "data", "__pycache__", ".pnpm-store", ".beads"}
+)
 WALK_CAP = 5000
 
 
@@ -93,7 +95,11 @@ def proc_start(pid: int) -> str:
     try:
         proc = subprocess.run(
             ["ps", "-o", "lstart=", "-p", str(pid)],
-            capture_output=True, text=True, timeout=10, check=False, env=_ps_env(),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            env=_ps_env(),
         )
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -102,18 +108,33 @@ def proc_start(pid: int) -> str:
     return proc.stdout.strip()
 
 
-def register_start(job_dir: Path, agent: str, pid: int, log: str | Path, cwd: str | Path) -> dict[str, object]:
+def register_start(
+    job_dir: Path, agent: str, pid: int, log: str | Path, cwd: str | Path
+) -> dict[str, object]:
     return _append_event(
         job_dir,
         {
-            "event": "start", "agent": agent, "pid": pid, "log": str(log), "cwd": str(cwd),
-            "pstart": proc_start(pid), "ts": time.time(),
+            "event": "start",
+            "agent": agent,
+            "pid": pid,
+            "log": str(log),
+            "cwd": str(cwd),
+            "pstart": proc_start(pid),
+            "ts": time.time(),
         },
     )
 
 
-def register_end(job_dir: Path, agent: str, pid: int, rc: int, note: str | None = None) -> dict[str, object]:
-    event: dict[str, object] = {"event": "end", "agent": agent, "pid": pid, "rc": rc, "ts": time.time()}
+def register_end(
+    job_dir: Path, agent: str, pid: int, rc: int, note: str | None = None
+) -> dict[str, object]:
+    event: dict[str, object] = {
+        "event": "end",
+        "agent": agent,
+        "pid": pid,
+        "rc": rc,
+        "ts": time.time(),
+    }
     if note:
         event["note"] = note
     return _append_event(job_dir, event)
@@ -148,7 +169,11 @@ def _is_zombie(pid: int) -> bool:
     try:
         proc = subprocess.run(
             ["ps", "-o", "stat=", "-p", str(pid)],
-            capture_output=True, text=True, timeout=10, check=False, env=_ps_env(),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            env=_ps_env(),
         )
     except (OSError, subprocess.SubprocessError):
         return False
@@ -191,7 +216,11 @@ def live_workers(job_dir: Path) -> list[Worker]:
             live.append(w)
         elif (w.agent, w.pid) not in _WARNED:
             _WARNED.add((w.agent, w.pid))
-            why = "start time differs from registration" if fresh and w.pstart else "start time unverifiable"
+            why = (
+                "start time differs from registration"
+                if fresh and w.pstart
+                else "start time unverifiable"
+            )
             print(f"WARN {w.agent} pid={w.pid} alive but {why}; not supervised", flush=True)
     return live
 
@@ -235,7 +264,10 @@ def _repo_root(cwd: Path) -> Path | None:
     try:
         proc = subprocess.run(
             ["git", "-C", str(cwd), "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=60, check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -258,7 +290,10 @@ def changed_files(cwd: Path) -> list[Path]:
     try:
         proc = subprocess.run(
             ["git", "-C", str(cwd), "status", "--porcelain", "-z", "--untracked-files=all"],
-            capture_output=True, text=True, timeout=60, check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return []
@@ -286,7 +321,10 @@ def _last_commit_ts(cwd: Path) -> float | None:
     try:
         proc = subprocess.run(
             ["git", "-C", str(cwd), "log", "-1", "--format=%ct"],
-            capture_output=True, text=True, timeout=60, check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -396,7 +434,9 @@ def _kill_worker(job_dir: Path, worker: Worker, body: str) -> None:
         return
     fresh = proc_start(worker.pid)
     if not fresh or not worker.pstart:  # "" == "" would pass the identity check unverified
-        print(f"WARN {worker.agent} pid={worker.pid} start time unverifiable; not killing", flush=True)
+        print(
+            f"WARN {worker.agent} pid={worker.pid} start time unverifiable; not killing", flush=True
+        )
         print(f"KILL-FAILED {worker.agent} start time unverifiable", flush=True)
         return
     if fresh != worker.pstart:
@@ -468,7 +508,9 @@ def watch(
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
-        prog="stall_watch.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+        prog="stall_watch.py",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = ap.add_subparsers(dest="cmd", required=True)
     rs = sub.add_parser("register-start", help="record a worker start in <job>/workers.jsonl")
@@ -488,7 +530,11 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--log-idle-min", type=float, default=10.0)
     w.add_argument("--edit-idle-min", type=float, default=20.0)
     w.add_argument("--interval-s", type=float, default=30.0)
-    w.add_argument("--kill", action="store_true", help="SIGTERM a stalled worker (killpg only for a worker leading its own group)")
+    w.add_argument(
+        "--kill",
+        action="store_true",
+        help="SIGTERM a stalled worker (killpg only for a worker leading its own group)",
+    )
     w.add_argument("--once", action="store_true", help="a single pass, then exit")
     w.add_argument("--max-passes", type=int, default=None, help=argparse.SUPPRESS)
     args = ap.parse_args(argv)

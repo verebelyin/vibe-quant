@@ -104,9 +104,7 @@ def _launch_patches(job_mgr):
 async def test_api_rejects_post_only_for_screening(client) -> None:
     ac, state, _job_mgr, _db = client
 
-    top_level = await ac.post(
-        "/api/backtest/screening", json=_body(state, entry_order="post_only")
-    )
+    top_level = await ac.post("/api/backtest/screening", json=_body(state, entry_order="post_only"))
     assert top_level.status_code == 422
     assert "validation-only" in top_level.json()["detail"]
 
@@ -122,9 +120,10 @@ async def test_validation_launch_post_only_params_stored(client) -> None:
     ac, state, job_mgr, _db = client
 
     body = _body(state, entry_order="post_only", maker_offset_ticks=2, maker_entry_timeout_bars=5)
-    with patch.object(job_mgr, "is_process_alive", return_value=True), patch(
-        "subprocess.Popen"
-    ) as mock_popen:
+    with (
+        patch.object(job_mgr, "is_process_alive", return_value=True),
+        patch("subprocess.Popen") as mock_popen,
+    ):
         mock_popen.return_value.pid = 12345
         r = await ac.post("/api/backtest/validation", json=body)
 
@@ -140,9 +139,10 @@ async def test_default_launch_params_unchanged(client) -> None:
     ac, state, job_mgr, _db = client
 
     body = _body(state, parameters={"initial_balance": 1000, "leverage": 5})
-    with patch.object(job_mgr, "is_process_alive", return_value=True), patch(
-        "subprocess.Popen"
-    ) as mock_popen:
+    with (
+        patch.object(job_mgr, "is_process_alive", return_value=True),
+        patch("subprocess.Popen") as mock_popen,
+    ):
         mock_popen.return_value.pid = 12345
         r = await ac.post("/api/backtest/validation", json=body)
 
@@ -152,9 +152,7 @@ async def test_default_launch_params_unchanged(client) -> None:
     assert run["parameters"] == {"initial_balance": 1000, "leverage": 5}
 
 
-async def test_post_only_validation_run_refused_by_paper(
-    client, tmp_path: Path
-) -> None:
+async def test_post_only_validation_run_refused_by_paper(client, tmp_path: Path) -> None:
     """Risk-officer contract: API-created post-only run -> paper resolve raises."""
     ac, state, job_mgr, db_path = client
     sid = state.create_strategy(name="entry_order_contract", dsl_config=_VALID_DSL)
@@ -169,9 +167,10 @@ async def test_post_only_validation_run_refused_by_paper(
         "maker_offset_ticks": 2,
         "maker_entry_timeout_bars": 5,
     }
-    with patch.object(job_mgr, "is_process_alive", return_value=True), patch(
-        "subprocess.Popen"
-    ) as mock_popen:
+    with (
+        patch.object(job_mgr, "is_process_alive", return_value=True),
+        patch("subprocess.Popen") as mock_popen,
+    ):
         mock_popen.return_value.pid = 12345
         r = await ac.post("/api/backtest/validation", json=body)
     assert r.status_code == 201, r.text
@@ -206,7 +205,6 @@ async def test_post_only_validation_run_refused_by_paper(
     assert str(rid) in str(excinfo.value)
 
 
-
 # ---------------------------------------------------------------------------
 # API-stored params through the REAL ValidationRunner._run_backtest (review F4)
 # ---------------------------------------------------------------------------
@@ -237,9 +235,10 @@ async def _launch_and_run(
         "parameters": {},
         **launch,
     }
-    with patch.object(job_mgr, "is_process_alive", return_value=True), patch(
-        "subprocess.Popen"
-    ) as mock_popen:
+    with (
+        patch.object(job_mgr, "is_process_alive", return_value=True),
+        patch("subprocess.Popen") as mock_popen,
+    ):
         mock_popen.return_value.pid = 12345
         r = await ac.post("/api/backtest/validation", json=body)
     assert r.status_code == 201, r.text
@@ -290,9 +289,12 @@ async def test_api_post_only_run_completes_with_twin_and_one_result(
     run = state.get_backtest_run(run_id)
     assert run is not None and run["status"] == "completed", run
     assert result.total_trades > 0
-    assert state.conn.execute(
-        "SELECT COUNT(*) FROM backtest_results WHERE run_id = ?", (run_id,)
-    ).fetchone()[0] == 1
+    assert (
+        state.conn.execute(
+            "SELECT COUNT(*) FROM backtest_results WHERE run_id = ?", (run_id,)
+        ).fetchone()[0]
+        == 1
+    )
 
     maker = result.notes["maker_entries"]
     assert isinstance(maker, dict)
@@ -333,7 +335,10 @@ async def test_api_market_run_has_no_twin_and_no_maker_notes(
     assert "maker_entries" not in result.notes
     notes_raw = state.get_result_notes_raw(run_id)
     assert notes_raw is not None and "maker_entries" not in json.loads(notes_raw)
-    assert state.conn.execute(
-        "SELECT COUNT(*) FROM backtest_results WHERE run_id = ?", (run_id,)
-    ).fetchone()[0] == 1
+    assert (
+        state.conn.execute(
+            "SELECT COUNT(*) FROM backtest_results WHERE run_id = ?", (run_id,)
+        ).fetchone()[0]
+        == 1
+    )
     assert _event_counts(tmp_path, run_id)["POSITION_OPEN"] == result.total_trades

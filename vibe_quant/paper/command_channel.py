@@ -89,9 +89,7 @@ def failed_alert_text(trader_id: str, failures: int, error: str, entries: str) -
 
 def restored_alert_text(trader_id: str, failures: int, entries: str) -> str:
     """The alert once claims work again. ``entries``: resumed, or why they stay blocked."""
-    return (
-        f"paper {trader_id}: command channel restored after {failures} failed claims; {entries}"
-    )
+    return f"paper {trader_id}: command channel restored after {failures} failed claims; {entries}"
 
 
 #: Start-up steps that wait on a worker (see ``startup_stall_alert_text``).

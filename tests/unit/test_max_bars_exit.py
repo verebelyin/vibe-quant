@@ -157,8 +157,13 @@ def _capture(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[Any]]:
             if not o.reduce_only and o.filled > 0
         ]
         return orig(
-            self, params, bt_result, engine, start_time,
-            starting_balance=starting_balance, cost_ledger=cost_ledger,
+            self,
+            params,
+            bt_result,
+            engine,
+            start_time,
+            starting_balance=starting_balance,
+            cost_ledger=cost_ledger,
         )
 
     monkeypatch.setattr(NTScreeningRunner, "_extract_metrics", spy)
@@ -245,9 +250,7 @@ def _write_gapped_catalog(
         )
         if "1m" in timeframes:
             drop = drops.get(symbol, set())
-            gapped: list[Any] = [
-                _toy_kline(base, i) for i in range(n_min) if i not in drop
-            ]
+            gapped: list[Any] = [_toy_kline(base, i) for i in range(n_min) if i not in drop]
             cm.write_bars(
                 klines_to_bars(
                     gapped,
@@ -276,9 +279,7 @@ def _entries(orders: list[_Order]) -> list[_Order]:
     return [o for o in orders if not o.reduce_only and o.filled > 0]
 
 
-def _assert_one_filled_close_per_position(
-    positions: list[_Position], closes: list[_Close]
-) -> None:
+def _assert_one_filled_close_per_position(positions: list[_Position], closes: list[_Close]) -> None:
     """Exactly one filled close, at each closed position's own instant, price and symbol."""
     assert [(c.symbol, c.ts, c.px) for c in closes] == [
         (p.symbol, p.ts_close, p.px_close) for p in positions if p.ts_close is not None
@@ -363,9 +364,7 @@ def test_4h_n1_exits_next_bar_and_reenters_bar_after(catalog: Path) -> None:
 
 
 def test_1m_screening_holds_n_bars(catalog: Path) -> None:
-    metrics, positions, _, _ = _run(
-        catalog, _dsl("1m", name="nbar_r5", n=3), end="2024-01-02"
-    )
+    metrics, positions, _, _ = _run(catalog, _dsl("1m", name="nbar_r5", n=3), end="2024-01-02")
 
     assert metrics.total_trades == 288
     assert len(positions) == 288
@@ -487,7 +486,9 @@ def test_same_bar_indicator_exit_sends_one_exit(catalog: Path) -> None:
         "01-01 00:06:59.999",
         10006.4,
     )
-    assert [c.ts for c in closes if c.ts == _ns("01-01 00:06:59.999")] == [_ns("01-01 00:06:59.999")]
+    assert [c.ts for c in closes if c.ts == _ns("01-01 00:06:59.999")] == [
+        _ns("01-01 00:06:59.999")
+    ]
     assert _utc(positions[1].ts_open) == "01-01 00:08:59.999"
 
 

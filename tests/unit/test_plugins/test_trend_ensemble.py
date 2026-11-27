@@ -90,9 +90,7 @@ def test_trim_invariance() -> None:
     value computed when the buffer starts mid-range (already trimmed).
     """
     trend = 100.0 + 2.0 * np.arange(500, dtype=np.float64)
-    sine = trend[-1] + 0.05 * np.sin(
-        2.0 * np.pi * np.arange(3000, dtype=np.float64) / 480.0
-    )
+    sine = trend[-1] + 0.05 * np.sin(2.0 * np.pi * np.arange(3000, dtype=np.float64) / 480.0)
     close = np.concatenate([trend, sine])
     df = pd.DataFrame(
         {
@@ -112,16 +110,13 @@ def test_trim_invariance() -> None:
     tail_trimmed = trimmed.iloc[-200:].to_numpy(dtype=np.float64)
     assert np.isfinite(tail_full).all()
     assert np.array_equal(tail_full, tail_trimmed, equal_nan=True), (
-        f"trimmed buffer changes tail values: "
-        f"full={tail_full[:5]}, trimmed={tail_trimmed[:5]}"
+        f"trimmed buffer changes tail values: full={tail_full[:5]}, trimmed={tail_trimmed[:5]}"
     )
 
 
 def test_max_lookback_below_five_raises() -> None:
     with pytest.raises(ValueError, match="max_lookback must be >= 5"):
-        compute_trend_ensemble(
-            _df(100.0 + np.arange(50, dtype=np.float64)), {"max_lookback": 4}
-        )
+        compute_trend_ensemble(_df(100.0 + np.arange(50, dtype=np.float64)), {"max_lookback": 4})
 
 
 def test_matches_literal_bar_loop() -> None:
@@ -168,12 +163,8 @@ def test_channels_match_pandas_reference() -> None:
     low = df["low"].to_numpy(dtype=np.float64)
     for lookback in _LOOKBACKS:
         upper, lower = _shifted_donchian_channels(high, low, lookback)
-        expected_upper = (
-            df["high"].rolling(lookback).max().shift(1).to_numpy(dtype=np.float64)
-        )
-        expected_lower = (
-            df["low"].rolling(lookback).min().shift(1).to_numpy(dtype=np.float64)
-        )
+        expected_upper = df["high"].rolling(lookback).max().shift(1).to_numpy(dtype=np.float64)
+        expected_lower = df["low"].rolling(lookback).min().shift(1).to_numpy(dtype=np.float64)
         assert np.array_equal(upper, expected_upper, equal_nan=True), lookback
         assert np.array_equal(lower, expected_lower, equal_nan=True), lookback
 

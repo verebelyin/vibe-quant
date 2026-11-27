@@ -80,8 +80,6 @@ def test_monitor_constants_and_old_count_rule_gone() -> None:
     assert not hasattr(PaperTradingNode, "_kill_switch")
 
 
-
-
 class _AlertingGuard(_RecordGuard):
     """Reports halts to the node like the real guard's state-change listener."""
 
@@ -165,8 +163,6 @@ async def test_deleted_row_halts_kill_switch_once(
         await node._shutdown()
 
 
-
-
 async def test_stale_edge_below_limit(seeded: dict[str, Any]) -> None:
     """The last clean read is 7.999 s old - no halt."""
     guard = _RecordGuard()
@@ -219,8 +215,6 @@ async def test_single_slow_read_tolerated(seeded: dict[str, Any]) -> None:
         assert guard.calls == []
     finally:
         await node._shutdown()
-
-
 
 
 class _SlowFailingReader:
@@ -374,8 +368,6 @@ async def test_hung_reader_resume_nonblocking_and_stop_bounded(
     assert closes == ["vq-kill-switch-reader"]
 
 
-
-
 async def test_engaged_detected_within_poll_plus_tick(seeded: dict[str, Any]) -> None:
     """The switch engages right after a clean read. Worst case the watcher
     tick runs just before the next poll, so the halt comes at the tick after:
@@ -399,8 +391,6 @@ async def test_engaged_detected_within_poll_plus_tick(seeded: dict[str, Any]) ->
         assert halt_at is not None and halt_at <= 1.5
     finally:
         await node._shutdown()
-
-
 
 
 async def test_recovery_needs_operator_resume(seeded: dict[str, Any]) -> None:
@@ -462,8 +452,6 @@ async def test_resume_refused_when_engaged_from_cache(seeded: dict[str, Any]) ->
         await node._shutdown()
 
 
-
-
 async def test_startup_waits_nonblocking_then_refuses(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
@@ -523,8 +511,6 @@ async def test_startup_refuses_engaged(
         assert fake_tradingnode.instances == []
     finally:
         await node._shutdown()
-
-
 
 
 def test_failure_log_class_only(caplog: pytest.LogCaptureFixture) -> None:

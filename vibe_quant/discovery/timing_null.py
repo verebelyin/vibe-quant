@@ -661,7 +661,11 @@ def _window_units(window_spans: Sequence[Sequence[TradeSpan]]) -> list[_Unit]:
             for sp in window_spans[0]
         ]
     entries = sorted(
-        ((sp.entry_bar, k, j, sp) for k, spans in enumerate(window_spans) for j, sp in enumerate(spans)),
+        (
+            (sp.entry_bar, k, j, sp)
+            for k, spans in enumerate(window_spans)
+            for j, sp in enumerate(spans)
+        ),
         key=lambda e: e[:3],
     )
     units: list[_Unit] = []
@@ -773,7 +777,9 @@ def timing_null_check(
         units.append(_window_units([spans[sym][w] for sym in symbols]))
         need = sum(length for length, _ in units[w])
         if need > n:
-            raise TimingNullError(f"Timing null: holds need {need} bars, {book} window {w + 1} has {n}")
+            raise TimingNullError(
+                f"Timing null: holds need {need} bars, {book} window {w + 1} has {n}"
+            )
         book_held += int(occupied.sum())
         book_bars += n
     exposure = sum(held_by.values()) / sum(bars_by.values())

@@ -46,15 +46,21 @@ class TestRandomModeCli:
 
         genomes = [_Genome("g0"), _Genome("g1")]
         monkeypatch.setattr(perf_phase, "_install_random_wrappers", lambda: None)
-        monkeypatch.setattr(
-            perf_phase, "random_genomes", lambda n, pool, seed, tf: genomes[:n]
-        )
+        monkeypatch.setattr(perf_phase, "random_genomes", lambda n, pool, seed, tf: genomes[:n])
         monkeypatch.setattr(
             perf_phase, "make_backtest_fn", lambda sym, tf, start, end: FakeBacktestFn()
         )
         argv = [
-            "--random-genomes", "2", "--pool", "RSI", "--tf", "4h",
-            "--start", "2024-01-01", "--end", "2024-01-05",
+            "--random-genomes",
+            "2",
+            "--pool",
+            "RSI",
+            "--tf",
+            "4h",
+            "--start",
+            "2024-01-01",
+            "--end",
+            "2024-01-05",
         ]
         assert perf_phase.main(argv) == 0
         out = capsys.readouterr().out

@@ -71,10 +71,14 @@ def _signal_level_sides(dsl: StrategyDSL) -> dict[str, tuple[bool, bool]]:
     for side in _SIDES:
         sl = getattr(dsl, f"stop_loss_{side}", None)
         tp = getattr(dsl, f"take_profit_{side}", None)
-        flags = (sl is not None and sl.type == "signal_level", tp is not None and tp.type == "signal_level")
+        flags = (
+            sl is not None and sl.type == "signal_level",
+            tp is not None and tp.type == "signal_level",
+        )
         if any(flags):
             out[side] = flags
     return out
+
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -298,7 +302,11 @@ class StrategyCompiler:
         # Combine
         parts = [imports, "", config_class, ""]
         if dsl.position_mode is not None:
-            intent = REVERSAL_INTENT_SIGNAL_LEVEL_LINES if _signal_level_sides(dsl) else REVERSAL_INTENT_LINES
+            intent = (
+                REVERSAL_INTENT_SIGNAL_LEVEL_LINES
+                if _signal_level_sides(dsl)
+                else REVERSAL_INTENT_LINES
+            )
             parts.extend([*intent, "", ""])
         source = "\n".join([*parts, strategy_class])
         return source
@@ -535,7 +543,9 @@ class StrategyCompiler:
             imports.append("")
             imports.append("# position_mode reverse: the pending-reversal record")
             imports.append("from typing import NamedTuple")
-            imports.append("from nautilus_trader.model.identifiers import ClientOrderId, PositionId")
+            imports.append(
+                "from nautilus_trader.model.identifiers import ClientOrderId, PositionId"
+            )
 
         imports.append("")
         imports.append("if TYPE_CHECKING:")
@@ -593,8 +603,12 @@ class StrategyCompiler:
             '    sizing_mode: str = "risk"  '
             '# "risk": risk / stop-loss distance; "atr": risk / (ATR * sizing_atr_multiplier)'
         )
-        lines.append("    sizing_atr_period: int = 14  # ATR period on the strategy timeframe (atr mode)")
-        lines.append("    sizing_atr_multiplier: float = 2.0  # ATR multiple used as the sizing stop distance")
+        lines.append(
+            "    sizing_atr_period: int = 14  # ATR period on the strategy timeframe (atr mode)"
+        )
+        lines.append(
+            "    sizing_atr_multiplier: float = 2.0  # ATR multiple used as the sizing stop distance"
+        )
         lines.append(
             "    execution_delay_probability: float = 0.0  "
             "# One-bar exec delay: screening/discovery=1.0 (always), sub-5m validation=0.3"
@@ -692,7 +706,9 @@ class StrategyCompiler:
                 if sl_cfg.percent is not None:
                     lines.append(f"    stop_loss_{direction}_percent: float = {sl_cfg.percent}")
                 if sl_cfg.atr_multiplier is not None:
-                    lines.append(f"    stop_loss_{direction}_atr_multiplier: float = {sl_cfg.atr_multiplier}")
+                    lines.append(
+                        f"    stop_loss_{direction}_atr_multiplier: float = {sl_cfg.atr_multiplier}"
+                    )
                 if sl_cfg.indicator is not None:
                     lines.append(
                         f'    stop_loss_{direction}_indicator: str = "{self._level_indicator(dsl, sl_cfg)}"'
@@ -708,9 +724,13 @@ class StrategyCompiler:
                 if tp_cfg.percent is not None:
                     lines.append(f"    take_profit_{direction}_percent: float = {tp_cfg.percent}")
                 if tp_cfg.atr_multiplier is not None:
-                    lines.append(f"    take_profit_{direction}_atr_multiplier: float = {tp_cfg.atr_multiplier}")
+                    lines.append(
+                        f"    take_profit_{direction}_atr_multiplier: float = {tp_cfg.atr_multiplier}"
+                    )
                 if tp_cfg.risk_reward_ratio is not None:
-                    lines.append(f"    take_profit_{direction}_risk_reward: float = {tp_cfg.risk_reward_ratio}")
+                    lines.append(
+                        f"    take_profit_{direction}_risk_reward: float = {tp_cfg.risk_reward_ratio}"
+                    )
                 if tp_cfg.indicator is not None:
                     lines.append(
                         f'    take_profit_{direction}_indicator: str = "{self._level_indicator(dsl, tp_cfg)}"'
@@ -863,7 +883,9 @@ class StrategyCompiler:
         lines.append("")
 
         # Bar types and indicator construction (shared by on_start and the paper warm seam)
-        lines.append(textwrap.indent(self._generate_init_bar_types(dsl, indicators, timeframes), "    "))
+        lines.append(
+            textwrap.indent(self._generate_init_bar_types(dsl, indicators, timeframes), "    ")
+        )
         lines.append("")
         lines.append(textwrap.indent(self._generate_build_indicators(indicators), "    "))
         lines.append("")
@@ -915,7 +937,9 @@ class StrategyCompiler:
             on_event method source code
         """
         if signal_level:
-            return "\n".join(ON_EVENT_REVERSE_SIGNAL_LEVEL_LINES if reverse else ON_EVENT_SIGNAL_LEVEL_LINES)
+            return "\n".join(
+                ON_EVENT_REVERSE_SIGNAL_LEVEL_LINES if reverse else ON_EVENT_SIGNAL_LEVEL_LINES
+            )
         return "\n".join(ON_EVENT_REVERSE_LINES if reverse else ON_EVENT_LINES)
 
     def _generate_on_stop(self, reverse: bool = False) -> str:
@@ -933,7 +957,9 @@ class StrategyCompiler:
             on_reset method source code
         """
         if signal_level:
-            return "\n".join(ON_RESET_REVERSE_SIGNAL_LEVEL_LINES if reverse else ON_RESET_SIGNAL_LEVEL_LINES)
+            return "\n".join(
+                ON_RESET_REVERSE_SIGNAL_LEVEL_LINES if reverse else ON_RESET_SIGNAL_LEVEL_LINES
+            )
         return "\n".join(ON_RESET_REVERSE_LINES if reverse else ON_RESET_LINES)
 
     def _generate_on_start(
@@ -977,7 +1003,9 @@ class StrategyCompiler:
             lines.extend(f"    {line}" for line in ON_START_SIGNAL_LEVEL_LINES)
 
         lines.append("")
-        lines.append("    # Indicators: a warm seed (_warm_from) already built them and feeds them by")
+        lines.append(
+            "    # Indicators: a warm seed (_warm_from) already built them and feeds them by"
+        )
         lines.append("    # hand; otherwise build and register them with NT")
         lines.append("    if self._warm_wm is None:")
         lines.append("        self._build_indicators()")
@@ -992,7 +1020,9 @@ class StrategyCompiler:
 
         return "\n".join(lines)
 
-    def _generate_init_bar_types(self, dsl: StrategyDSL, indicators: list[IndicatorInfo], timeframes: set[str]) -> str:
+    def _generate_init_bar_types(
+        self, dsl: StrategyDSL, indicators: list[IndicatorInfo], timeframes: set[str]
+    ) -> str:
         """Generate ``_init_bar_types()``: instrument id, every bar type, and the warm seam's per-bar-type maps.
 
         ``_warm_step`` is the bar length in ns; ``_warm_rank`` the tie order of equal-ts bars of
@@ -1063,13 +1093,16 @@ class StrategyCompiler:
         if by_type:
             lines.append("    self._warm_inds = {")
             lines.extend(
-                f"        {bar_type_var}: [{', '.join(variables)}]," for bar_type_var, variables in by_type.items()
+                f"        {bar_type_var}: [{', '.join(variables)}],"
+                for bar_type_var, variables in by_type.items()
             )
             lines.append("    }")
         else:
             lines.append("    self._warm_inds = {}")
         lines.append("    if self._sizing_atr is not None:")
-        lines.append("        self._warm_inds.setdefault(self.primary_bar_type, []).append(self._sizing_atr)")
+        lines.append(
+            "        self._warm_inds.setdefault(self.primary_bar_type, []).append(self._sizing_atr)"
+        )
         return "\n".join(lines)
 
     def _generate_indicator_init(self, info: IndicatorInfo) -> list[str]:
@@ -1086,12 +1119,11 @@ class StrategyCompiler:
 
         if spec.nt_class is None:
             label = (
-                spec.compute_fn.__name__ if spec.compute_fn is not None
+                spec.compute_fn.__name__
+                if spec.compute_fn is not None
                 else spec.pandas_ta_func or "?"
             )
-            lines.append(
-                f"    # {info.name} ({info.config.type}): compute_fn path via {label}"
-            )
+            lines.append(f"    # {info.name} ({info.config.type}): compute_fn path via {label}")
             return lines
 
         class_name = spec.nt_class.__name__
@@ -1283,21 +1315,39 @@ class StrategyCompiler:
 
         # position_mode reverse: with a position open only the OPPOSITE side's entry is
         # evaluated; it closes the position and opens the other side (_begin_reverse)
-        if dsl.position_mode is not None and (dsl.entry_conditions.long or dsl.entry_conditions.short):
+        if dsl.position_mode is not None and (
+            dsl.entry_conditions.long or dsl.entry_conditions.short
+        ):
             lines.append("")
             lines.append("    # Reverse mode: an opposite entry signal reverses the open position")
             lines.append(f"    elif self._position_open{entry_gate}:")
             opposite = (
-                ("BUY", "_check_short_entry", "short_entry", "_submit_short_entry", dsl.entry_conditions.short),
-                ("SELL", "_check_long_entry", "long_entry", "_submit_long_entry", dsl.entry_conditions.long),
+                (
+                    "BUY",
+                    "_check_short_entry",
+                    "short_entry",
+                    "_submit_short_entry",
+                    dsl.entry_conditions.short,
+                ),
+                (
+                    "SELL",
+                    "_check_long_entry",
+                    "long_entry",
+                    "_submit_long_entry",
+                    dsl.entry_conditions.long,
+                ),
             )
             first = True
             for held, check, action, submit, configured in opposite:
                 if not configured:
                     continue
-                lines.append(f"        {'if' if first else 'elif'} self._position_side == OrderSide.{held}:")
+                lines.append(
+                    f"        {'if' if first else 'elif'} self._position_side == OrderSide.{held}:"
+                )
                 lines.append(f"            if self.{check}(bar):")
-                lines.append(f"                if not self._maybe_delay_validation_action('{action}'):")
+                lines.append(
+                    f"                if not self._maybe_delay_validation_action('{action}'):"
+                )
                 lines.append(f"                    self.{submit}(bar)")
                 first = False
 
@@ -1306,16 +1356,22 @@ class StrategyCompiler:
         if refresh_sides:
             guard = " and self._intent is None" if dsl.position_mode is not None else ""
             lines.append("")
-            lines.append("    # refresh_on_signal: a same-side entry signal replaces the signal_level protection")
+            lines.append(
+                "    # refresh_on_signal: a same-side entry signal replaces the signal_level protection"
+            )
             lines.append(
                 f"    if _was_open and self._position_open{entry_gate}{guard}"
                 " and self._pending_validation_action is None:"
             )
             for i, (held, check, action, is_long) in enumerate(refresh_sides):
-                lines.append(f"        {'if' if i == 0 else 'elif'} self._position_side == OrderSide.{held}:")
+                lines.append(
+                    f"        {'if' if i == 0 else 'elif'} self._position_side == OrderSide.{held}:"
+                )
                 lines.append(f"            if self.{check}(bar):")
                 # deferred like an entry (1m validation): the levels are read on the dispatch bar
-                lines.append(f"                if not self._maybe_delay_validation_action('{action}'):")
+                lines.append(
+                    f"                if not self._maybe_delay_validation_action('{action}'):"
+                )
                 lines.append(f"                    self._refresh_levels(bar, {is_long})")
 
         # Exit conditions
@@ -1707,8 +1763,7 @@ class StrategyCompiler:
                 _scale_suffix = f" * {primary_scale}" if primary_scale != 1.0 else ""
                 if spec.primary_helper:
                     lines.append(
-                        f'    self._prev_values["{info.name}"] = '
-                        f"{self._primary_helper_call(info)}"
+                        f'    self._prev_values["{info.name}"] = {self._primary_helper_call(info)}'
                     )
                 else:
                     lines.append(
@@ -1862,9 +1917,7 @@ class StrategyCompiler:
             lines.append(
                 "        # Timeframes a backtest computes from the bar type's first catalog bar"
             )
-            lines.append(
-                "        # (EFFECTIVE params: ADX only past period 16; vibe-quant-d42m5)"
-            )
+            lines.append("        # (EFFECTIVE params: ADX only past period 16; vibe-quant-d42m5)")
             lines.append(
                 "        self._pta_origin_tfs: tuple[str, ...] = "
                 "pta_origin_tfs(self._pta_params, self._PTA_KINDS)"
@@ -1893,8 +1946,7 @@ class StrategyCompiler:
         lines.append("        self._pta_bufs: dict[str, PtaBuffer] = {")
         for tf in tfs:
             lines.append(
-                f'            "{tf}": PtaBuffer('
-                f'self._pta_buffer_cap["{tf}"], with_close_ns={ctx}),'
+                f'            "{tf}": PtaBuffer(self._pta_buffer_cap["{tf}"], with_close_ns={ctx}),'
             )
         lines.append("        }")
         if ctx:
@@ -1951,7 +2003,7 @@ class StrategyCompiler:
                     # close, no frame built (bit-equal to the last row of the vector form).
                     # NaN is a real answer for aux data: stored, never skipped.
                     lines.append(
-                        f"{ind}    self._pta_values[\"{info.name}\"] = {scalar.__name__}("
+                        f'{ind}    self._pta_values["{info.name}"] = {scalar.__name__}('
                         f"self.config.instrument_id, _buf.last_close_ns(), {params_ref})"
                     )
                     continue
@@ -1967,7 +2019,9 @@ class StrategyCompiler:
                     lines.append(f"{ind}        if _primary is not None and len(_primary) > 0:")
                     lines.append(f"{ind}            _v = _primary.iloc[-1]")
                     lines.append(f"{ind}            if not pd.isna(_v):")
-                    lines.append(f'{ind}                self._pta_values["{info.name}"] = float(_v)')
+                    lines.append(
+                        f'{ind}                self._pta_values["{info.name}"] = float(_v)'
+                    )
                     lines.append(f"{ind}        for _k, _s in _res.items():")
                     lines.append(f"{ind}            if _s is not None and len(_s) > 0:")
                     lines.append(f"{ind}                _v = _s.iloc[-1]")
@@ -1984,7 +2038,9 @@ class StrategyCompiler:
                         lines.append(f'{ind}        self._pta_values["{info.name}"] = float(_v)')
                     else:
                         lines.append(f"{ind}        if not pd.isna(_v):")
-                        lines.append(f'{ind}            self._pta_values["{info.name}"] = float(_v)')
+                        lines.append(
+                            f'{ind}            self._pta_values["{info.name}"] = float(_v)'
+                        )
 
         return lines
 
@@ -2404,7 +2460,9 @@ class StrategyCompiler:
             out.append(("SELL", "_check_short_entry", "short_refresh", False))
         return out
 
-    def _generate_order_methods(self, reverse: bool = False, signal_level: bool = False) -> list[str]:
+    def _generate_order_methods(
+        self, reverse: bool = False, signal_level: bool = False
+    ) -> list[str]:
         """Generate order submission methods with SL/TP and event-based tracking.
 
         Returns:
@@ -2412,7 +2470,9 @@ class StrategyCompiler:
         """
         if signal_level:
             return list(
-                ORDER_METHODS_REVERSE_SIGNAL_LEVEL_LINES if reverse else ORDER_METHODS_SIGNAL_LEVEL_LINES
+                ORDER_METHODS_REVERSE_SIGNAL_LEVEL_LINES
+                if reverse
+                else ORDER_METHODS_SIGNAL_LEVEL_LINES
             )
         return list(ORDER_METHODS_REVERSE_LINES if reverse else ORDER_METHODS_LINES)
 

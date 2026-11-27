@@ -166,6 +166,7 @@ def _enrich_result_with_notes(row: dict[str, Any]) -> dict[str, Any]:
 
     return enriched
 
+
 router = APIRouter(prefix="/api/results", tags=["results"])
 
 StateMgr = Annotated[StateManager, Depends(get_state_manager)]
@@ -553,9 +554,7 @@ def _reconcile_bankroll(mgr: StateManager, jobs: BacktestJobManager) -> None:
         reclaim_abandoned(default_scratch_base(), mgr.list_running_bankroll_report_ids())
 
 
-def _estimated_seconds(
-    mgr: StateManager, run_id: int, body: BankrollReportRequest
-) -> int | None:
+def _estimated_seconds(mgr: StateManager, run_id: int, body: BankrollReportRequest) -> int | None:
     """Upper estimate: the baseline plus every cell, in waves of ``workers`` engines.
 
     Scaled by the parent's own validation time; None when it recorded none.
@@ -619,9 +618,7 @@ def launch_bankroll_report(
 
 
 @router.get("/runs/{run_id}/bankroll-report", response_model=BankrollReportResponse | None)
-def get_bankroll_report(
-    run_id: int, mgr: StateMgr, jobs: JobMgr
-) -> BankrollReportResponse | None:
+def get_bankroll_report(run_id: int, mgr: StateMgr, jobs: JobMgr) -> BankrollReportResponse | None:
     """The run's latest bankroll report (None if it has none), after a reconcile.
 
     Freshness is evaluated in the same read snapshot; a stale report's recommendation
@@ -629,9 +626,7 @@ def get_bankroll_report(
     """
     _ensure_run_exists(mgr, run_id)
     _reconcile_bankroll(mgr, jobs)
-    row = mgr.get_latest_bankroll_report(
-        run_id, dsl_hash=dsl_hasher(_strategy_name(mgr, run_id))
-    )
+    row = mgr.get_latest_bankroll_report(run_id, dsl_hash=dsl_hasher(_strategy_name(mgr, run_id)))
     if row is None:
         return None
     return BankrollReportResponse(

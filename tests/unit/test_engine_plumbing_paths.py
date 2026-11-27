@@ -283,17 +283,13 @@ def test_validation_does_not_rewrite_an_existing_instrument(tmp_path: Path) -> N
 
 
 @pytest.mark.parametrize("name", ["no_bars_a", "no_bars_b"])
-def test_validation_window_is_clamped_against_the_named_catalog(
-    tmp_path: Path, name: str
-) -> None:
+def test_validation_window_is_clamped_against_the_named_catalog(tmp_path: Path, name: str) -> None:
     """The default catalog has 1m BTC bars; the named empty one does not, so the run fails."""
     from vibe_quant.db.state_manager import StateManager
     from vibe_quant.validation.runner import ValidationRunner, ValidationRunnerError
 
     db, run_id = _validation_run(tmp_path, _validation_dsl())
-    runner = ValidationRunner(
-        db_path=db, logs_path=tmp_path / "logs", catalog_path=tmp_path / name
-    )
+    runner = ValidationRunner(db_path=db, logs_path=tmp_path / "logs", catalog_path=tmp_path / name)
     with pytest.raises(ValidationRunnerError, match="No 1m bars for BTCUSDT"):
         runner.run(run_id=run_id)
     runner.close()
@@ -352,7 +348,11 @@ def test_validation_extraction_accrues_funding_from_the_named_archive(
         db_path=tmp_path / "s.db", logs_path=tmp_path / "logs", funding_archive_path=named
     )
     runner._extract_results(  # noqa: SLF001
-        run_id=1, strategy_name="x", bt_result=None, engine=None, venue_config=None  # type: ignore[arg-type]
+        run_id=1,
+        strategy_name="x",
+        bt_result=None,
+        engine=None,
+        venue_config=None,  # type: ignore[arg-type]
     )
     runner.close()
     assert seen["funding_calculator"].settlements("BTCUSDT")[1] == (rate, rate, rate)

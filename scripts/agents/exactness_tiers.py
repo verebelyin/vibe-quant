@@ -103,21 +103,48 @@ CELLS: tuple[Cell, ...] = (
     Cell("C1-defaults", _BTC, *_H1, {}, want=("trades",)),
     # Base has only fee tier VIP0 (vibe_quant/fees.py), so VIP3 is not available.
     Cell("C2-fee-bnb", _BTC, *_H1, {"fee_tier": "VIP0", "bnb_discount": True}, want=("trades",)),
-    Cell("C3-isolated-125", _BTC, *_H1,
-         {"liquidation_mode": "isolated", "leverage": 125, "max_position_pct": 100},
-         want=("trades", "liquidations")),
-    Cell("C4-cross-50", ("ETHUSDT",), *_H1,
-         {"liquidation_mode": "cross", "leverage": 50, "max_position_pct": 50,
-          "risk_per_trade": 0.5},
-         want=("trades", "liquidations")),
-    Cell("C5-margin-refusals", _PAIR, *_H1, {"max_position_pct": 2, "max_margin_pct": 0.3},
-         want=("trades", "refusals")),
-    Cell("C6-cap2-risk05", _PAIR, *_H1, {"max_position_pct": 2, "risk_per_trade": 0.05},
-         want=("trades",)),
+    Cell(
+        "C3-isolated-125",
+        _BTC,
+        *_H1,
+        {"liquidation_mode": "isolated", "leverage": 125, "max_position_pct": 100},
+        want=("trades", "liquidations"),
+    ),
+    Cell(
+        "C4-cross-50",
+        ("ETHUSDT",),
+        *_H1,
+        {
+            "liquidation_mode": "cross",
+            "leverage": 50,
+            "max_position_pct": 50,
+            "risk_per_trade": 0.5,
+        },
+        want=("trades", "liquidations"),
+    ),
+    Cell(
+        "C5-margin-refusals",
+        _PAIR,
+        *_H1,
+        {"max_position_pct": 2, "max_margin_pct": 0.3},
+        want=("trades", "refusals"),
+    ),
+    Cell(
+        "C6-cap2-risk05",
+        _PAIR,
+        *_H1,
+        {"max_position_pct": 2, "risk_per_trade": 0.05},
+        want=("trades",),
+    ),
     Cell("C7-1d", _BTC, *_D1, {}, timeframe="1d", want=("trades",)),
-    Cell("C8-1d-isolated-125", _BTC, *_D1,
-         {"liquidation_mode": "isolated", "leverage": 125, "max_position_pct": 100},
-         timeframe="1d", want=("trades", "liquidations")),
+    Cell(
+        "C8-1d-isolated-125",
+        _BTC,
+        *_D1,
+        {"liquidation_mode": "isolated", "leverage": 125, "max_position_pct": 100},
+        timeframe="1d",
+        want=("trades", "liquidations"),
+    ),
 )
 
 
@@ -141,7 +168,10 @@ def _main_checkout(root: Path | None = None) -> Path:
     """The main checkout a worktree shares: parent of `git rev-parse --git-common-dir`."""
     common = subprocess.run(
         ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-        capture_output=True, text=True, check=True, cwd=REPO_ROOT if root is None else root,
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=REPO_ROOT if root is None else root,
     ).stdout.strip()
     return Path(common).parent
 
@@ -227,15 +257,21 @@ def run_validation(cell: dict[str, Any], source_db: Path) -> dict[str, Any]:
             src.close()
         conn = sqlite3.connect(str(db))
         sid = conn.execute(
-            "INSERT INTO strategies(name, description, dsl_config, strategy_type) "
-            "VALUES (?,?,?,?)",
+            "INSERT INTO strategies(name, description, dsl_config, strategy_type) VALUES (?,?,?,?)",
             (f"tiers-golden-{cell['name']}", "exactness_tiers", json.dumps(cell["dsl"]), "golden"),
         ).lastrowid
         run_id = conn.execute(
             "INSERT INTO backtest_runs(strategy_id, run_mode, symbols, timeframe, "
             "start_date, end_date, parameters) VALUES (?,?,?,?,?,?,?)",
-            (sid, "validation", json.dumps(list(cell["symbols"])), cell["dsl"]["timeframe"],
-             cell["start"], cell["end"], json.dumps(cell["params"])),
+            (
+                sid,
+                "validation",
+                json.dumps(list(cell["symbols"])),
+                cell["dsl"]["timeframe"],
+                cell["start"],
+                cell["end"],
+                json.dumps(cell["params"]),
+            ),
         ).lastrowid
         conn.commit()
         conn.close()
@@ -346,10 +382,17 @@ def capture(path: Path, jobs: int = JOBS_DEFAULT) -> int:
         if c.timeframe is not None:
             dsl["timeframe"] = c.timeframe
         validate_strategy_dict(copy.deepcopy(dsl))  # fail early on a bad DSL
-        specs.append({
-            "name": c.name, "dsl": dsl, "symbols": list(c.symbols),
-            "start": c.start, "end": c.end, "params": c.params, "want": list(c.want),
-        })
+        specs.append(
+            {
+                "name": c.name,
+                "dsl": dsl,
+                "symbols": list(c.symbols),
+                "start": c.start,
+                "end": c.end,
+                "params": c.params,
+                "want": list(c.want),
+            }
+        )
     cells: list[dict[str, Any]] = []
     refused = False
     for spec, res in zip(specs, execute_cells(specs, source_db, jobs), strict=True):
@@ -390,16 +433,25 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument(
-        "--capture", nargs="?", const="", metavar="PATH",
+        "--capture",
+        nargs="?",
+        const="",
+        metavar="PATH",
         help=f"write the golden (default: {GOLDEN_NAME} in the main checkout's data/swarm/_goldens)",
     )
     mode.add_argument(
-        "--check", nargs="?", const="", metavar="PATH",
+        "--check",
+        nargs="?",
+        const="",
+        metavar="PATH",
         help=f"compare against the golden (default: {GOLDEN_NAME} in the main checkout's "
-             "data/swarm/_goldens)",
+        "data/swarm/_goldens)",
     )
     parser.add_argument(
-        "--jobs", type=int, default=JOBS_DEFAULT, metavar="N",
+        "--jobs",
+        type=int,
+        default=JOBS_DEFAULT,
+        metavar="N",
         help="cells to run in parallel (1 = serial; default min(4, cpu count))",
     )
     args = parser.parse_args(argv)

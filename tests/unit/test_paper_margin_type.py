@@ -216,8 +216,6 @@ async def ctx(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[
     state.close()
 
 
-
-
 def test_loader_maps_absent_or_null_to_derive_and_keeps_both_explicit_types(
     tmp_path: Path,
 ) -> None:
@@ -271,8 +269,6 @@ def test_save_writes_null_for_derive_and_round_trips_both_values(tmp_path: Path)
     save_config_to_json(config, path)
     assert json.loads(path.read_text())["margin_type"] == "ISOLATED"
     assert load_config_from_json(path).margin_type == "ISOLATED"
-
-
 
 
 async def test_api_launch_of_isolated_validation_run_trades_isolated_end_to_end(
@@ -346,8 +342,6 @@ async def test_launch_without_a_validation_run_stays_crossed(
         await node._shutdown()
 
 
-
-
 async def test_explicit_margin_type_override_is_used_and_diffed(
     ctx: Ctx, fake_tradingnode: type[_FakeTradingNode]
 ) -> None:
@@ -378,8 +372,6 @@ async def test_explicit_margin_type_override_is_used_and_diffed(
         }
     finally:
         await node._shutdown()
-
-
 
 
 async def test_off_mode_validation_names_unverified_liquidation_before_fee_schedule(
@@ -441,8 +433,7 @@ async def test_off_mode_with_an_explicit_isolated_override_names_isolated_liquid
             "validated": "off",
             "paper": "exchange liquidation (ISOLATED)",
             "note": (
-                "validation did not simulate liquidation; paper liquidation "
-                "parity is unverified"
+                "validation did not simulate liquidation; paper liquidation parity is unverified"
             ),
         }
     finally:

@@ -80,9 +80,7 @@ def is_key_rotation(newest_account: object, account: str) -> bool:
     return newest_account != account and account_env(newest_account) == account_env(account)
 
 
-def latest_own(
-    store: StatePersistence, trader_id: str, account: str
-) -> StateCheckpoint | None:
+def latest_own(store: StatePersistence, trader_id: str, account: str) -> StateCheckpoint | None:
     """Newest checkpoint of ``trader_id`` that belongs to ``account``.
 
     A row belongs to ``account`` when its ``account`` key equals it or is missing
@@ -106,9 +104,7 @@ def latest_own(
     return store.row_to_checkpoint(row)
 
 
-def latest_in_env(
-    store: StatePersistence, trader_id: str, account: str
-) -> StateCheckpoint | None:
+def latest_in_env(store: StatePersistence, trader_id: str, account: str) -> StateCheckpoint | None:
     """Newest checkpoint of ``trader_id`` in ``account``'s venue + env (any key).
 
     Ae6ah (D1=A): rotating back A -> B -> A restores the newest row of the env,
@@ -129,9 +125,7 @@ def latest_in_env(
     return store.row_to_checkpoint(row)
 
 
-def newer_other(
-    store: StatePersistence, account: str, trader_id: str
-) -> StateCheckpoint | None:
+def newer_other(store: StatePersistence, account: str, trader_id: str) -> StateCheckpoint | None:
     """Newest checkpoint of ANOTHER trader on ``account`` newer than ``trader_id``'s own.
 
     "Newer" is a higher row id than ``trader_id``'s newest row ON THIS
@@ -304,7 +298,9 @@ def restored_halt_from_status(node_status: object, checkpoint_time: str) -> Rest
 
 #: One leading prefix of a stored halt message: this module's own restore prefix or an
 #: inherited one. Stripped in a loop so messages do not grow along a chain of sessions.
-_HALT_PREFIX_RE = re.compile(rf"(?:{re.escape(RESTORED_HALT_PREFIX)}|inherited from [A-Za-z0-9_-]+: )")
+_HALT_PREFIX_RE = re.compile(
+    rf"(?:{re.escape(RESTORED_HALT_PREFIX)}|inherited from [A-Za-z0-9_-]+: )"
+)
 
 
 def inherited_halt_message(trader_id: str, message: str) -> str:
@@ -399,8 +395,7 @@ def resolve(
         if latest is not None and is_key_rotation(latest.node_status.get("account"), account):
             rotated = latest
             logger.warning(
-                "paper %s: key rotation from account %s to %s; "
-                "own risk and halt carried",
+                "paper %s: key rotation from account %s to %s; own risk and halt carried",
                 trader_id,
                 latest.node_status.get("account"),
                 account,
@@ -408,7 +403,9 @@ def resolve(
         newest = store.load_latest_checkpoint(trader_id)
         if newest is not None:
             newest_account = newest.node_status.get("account")
-            if isinstance(newest_account, str) and account_env(newest_account) != account_env(account):
+            if isinstance(newest_account, str) and account_env(newest_account) != account_env(
+                account
+            ):
                 logger.warning(
                     "paper %s: own checkpoint is for account %s, not %s; ignored",
                     trader_id,
@@ -443,8 +440,7 @@ def resolve(
         if source is None:
             if not start_fresh:
                 logger.warning(
-                    "paper %s: no prior session for account %s; "
-                    "limits start at current equity",
+                    "paper %s: no prior session for account %s; limits start at current equity",
                     trader_id,
                     account,
                 )
@@ -536,6 +532,7 @@ def resolve(
             trader_id,
             ", ".join(problems),
         )
+
     def log_restored() -> None:
         if risk_source is not None:
             # P-R8: a new trader id silently arming the old limits would surprise.

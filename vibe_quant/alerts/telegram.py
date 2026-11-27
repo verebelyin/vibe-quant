@@ -346,9 +346,7 @@ async def verify_telegram(
                 attempt = await client.post(url, json=payload)
                 attempt.raise_for_status()
     except Exception as exc:
-        raise TelegramUnavailableError(
-            FAIL_MSG.format(reason=_probe_reason(exc, config))
-        ) from None
+        raise TelegramUnavailableError(FAIL_MSG.format(reason=_probe_reason(exc, config))) from None
 
     failure = _response_failure(attempt, config)
     if failure is not None:

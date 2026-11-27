@@ -86,9 +86,7 @@ def _isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _FakeNode.seen = []
 
 
-def _create_run(
-    db_path: Path, timeframe: str, parameters: dict[str, object] | None = None
-) -> int:
+def _create_run(db_path: Path, timeframe: str, parameters: dict[str, object] | None = None) -> int:
     state = StateManager(db_path)
     sid = state.create_strategy(name="strategy_params_probe", dsl_config=_dsl(timeframe))
     run_id = state.create_backtest_run(

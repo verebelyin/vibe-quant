@@ -126,7 +126,9 @@ def run_rule(
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("yaml", type=Path, help="strategy DSL YAML (vibe_quant/dsl/schema.py)")
     ap.add_argument("--symbols", required=True, help="comma list, e.g. BTCUSDT")
     ap.add_argument("--start", required=True, help="YYYY-MM-DD (inclusive)")

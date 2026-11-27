@@ -56,9 +56,7 @@ class _MarginError(Exception):
     """A broken entry check (the class name is what the contract pins)."""
 
 
-def _order(
-    tag: str, *, symbol: str = SYMBOL, reduce_only: bool = False
-) -> MarketOrder:
+def _order(tag: str, *, symbol: str = SYMBOL, reduce_only: bool = False) -> MarketOrder:
     inst = create_instrument(symbol)
     return MarketOrder(
         trader_id=TraderId("TESTER-001"),
@@ -266,7 +264,9 @@ def test_raising_entry_check_denies_every_order_in_the_list(
         SubmitOrderList(first.trader_id, first.strategy_id, order_list, UUID4(), _TS)
     )
 
-    assert [msg.reason for _endpoint, msg in msgbus.sent] == [_gate_error_reason("_MarginError")] * 3
+    assert [msg.reason for _endpoint, msg in msgbus.sent] == [
+        _gate_error_reason("_MarginError")
+    ] * 3
     assert risk.commands == []
     assert guard.gate_denials == 3
 

@@ -311,6 +311,7 @@ TradingView hosts 150,000+ community scripts, many with proven backtesting resul
 from nautilus_trader.indicators.base.indicator import Indicator
 from nautilus_trader.model.data import Bar
 
+
 class CustomIndicator(Indicator):
     """Template for porting TradingView indicators to NautilusTrader."""
 

@@ -179,9 +179,7 @@ def _perturb_block(block: ExitBlock) -> ExitBlock:
     atr_period = block.atr_period
     if atr_period is not None:
         atr_period = round(_perturb(atr_period, 0.2, ATR_PERIOD[0], ATR_PERIOD[1]))
-    return replace(
-        block, stop_value=stop_value, target_value=target_value, atr_period=atr_period
-    )
+    return replace(block, stop_value=stop_value, target_value=target_value, atr_period=atr_period)
 
 
 def _mutate_block(block: ExitBlock, rate: float) -> ExitBlock:

@@ -138,9 +138,7 @@ def compute_pareto_front(
     # Rows with any NaN objective are never Pareto-optimal
     is_pareto = [
         not (
-            math.isnan(r.sharpe_ratio)
-            or math.isnan(r.max_drawdown)
-            or math.isnan(r.profit_factor)
+            math.isnan(r.sharpe_ratio) or math.isnan(r.max_drawdown) or math.isnan(r.profit_factor)
         )
         for r in results
     ]

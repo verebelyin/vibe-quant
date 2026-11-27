@@ -488,7 +488,8 @@ async def test_get_terminates_a_stale_heartbeat_worker_and_fails_the_report(api:
     job_id = response.json()["job_id"]
     pid = int(api.job(job_id)["pid"])
     api.sm.conn.execute(
-        "UPDATE background_jobs SET heartbeat_at = datetime('now','-1 hour') WHERE run_id=?", (job_id,)
+        "UPDATE background_jobs SET heartbeat_at = datetime('now','-1 hour') WHERE run_id=?",
+        (job_id,),
     )
     api.sm.conn.commit()
     out = (await api.get(run_id)).json()

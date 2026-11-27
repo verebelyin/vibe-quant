@@ -278,7 +278,9 @@ def klines_to_bars(
         return Price.from_str(str(Decimal(str(value)).quantize(price_q, rounding=ROUND_HALF_EVEN)))
 
     def _qty(value: object) -> Quantity:
-        return Quantity.from_str(str(Decimal(str(value)).quantize(size_q, rounding=ROUND_HALF_EVEN)))
+        return Quantity.from_str(
+            str(Decimal(str(value)).quantize(size_q, rounding=ROUND_HALF_EVEN))
+        )
 
     bars = []
     for k in klines:

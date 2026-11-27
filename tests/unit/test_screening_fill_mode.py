@@ -66,8 +66,12 @@ def _dsl(tf: str = "4h", name: str = "fill_mode", ind_tf: str | None = None) -> 
     return d
 
 
-def _write_catalog(root: Path, symbols: tuple[str, ...] = ("BTCUSDT",), n_min: int = _N_MIN,
-                   timeframes: tuple[str, ...] = ("1m", "4h")) -> Path:
+def _write_catalog(
+    root: Path,
+    symbols: tuple[str, ...] = ("BTCUSDT",),
+    n_min: int = _N_MIN,
+    timeframes: tuple[str, ...] = ("1m", "4h"),
+) -> Path:
     """Rising synthetic 1m bars (+0.01%/min, >= 10 price ticks) plus aggregated coarser bars."""
     cm = CatalogManager(root)
     for k, symbol in enumerate(symbols):
@@ -75,20 +79,33 @@ def _write_catalog(root: Path, symbols: tuple[str, ...] = ("BTCUSDT",), n_min: i
         cm.write_instrument(inst)
         base = 10_000.0 * (k + 1)
         klines: list[Any] = [
-            {"open_time": _DAY0_MS + i * _MIN_MS, "open": base * (1 + 1e-4 * i),
-             "high": base * (1 + 1e-4 * (i + 1)), "low": base * (1 + 1e-4 * (i - 1)),
-             "close": base * (1 + 1e-4 * (i + 0.5)), "volume": 10.0,
-             "close_time": _DAY0_MS + i * _MIN_MS + 59_999}
+            {
+                "open_time": _DAY0_MS + i * _MIN_MS,
+                "open": base * (1 + 1e-4 * i),
+                "high": base * (1 + 1e-4 * (i + 1)),
+                "low": base * (1 + 1e-4 * (i - 1)),
+                "close": base * (1 + 1e-4 * (i + 0.5)),
+                "volume": 10.0,
+                "close_time": _DAY0_MS + i * _MIN_MS + 59_999,
+            }
             for i in range(n_min)
         ]
-        bars_1m = klines_to_bars(klines, inst.id, get_bar_type(symbol, "1m"),
-                                 inst.size_precision, inst.price_precision)
+        bars_1m = klines_to_bars(
+            klines, inst.id, get_bar_type(symbol, "1m"), inst.size_precision, inst.price_precision
+        )
         if "1m" in timeframes:
             cm.write_bars(bars_1m)
         for tf, minutes in (("15m", 15), ("1h", 60), ("4h", 240)):
             if tf in timeframes:
-                cm.write_bars(aggregate_bars(bars_1m, get_bar_type(symbol, tf), minutes,
-                                             inst.size_precision, inst.price_precision))
+                cm.write_bars(
+                    aggregate_bars(
+                        bars_1m,
+                        get_bar_type(symbol, tf),
+                        minutes,
+                        inst.size_precision,
+                        inst.price_precision,
+                    )
+                )
     return root
 
 
@@ -97,10 +114,12 @@ def catalog(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return _write_catalog(tmp_path_factory.mktemp("catalog"), ("BTCUSDT", "ETHUSDT"))
 
 
-def _runner(catalog: Path, dsl: dict[str, Any], symbols: list[str] | None = None,
-            **kw: Any) -> NTScreeningRunner:
-    return NTScreeningRunner(dsl, symbols or ["BTCUSDT"], _START, _END,
-                             catalog_path=str(catalog), **kw)
+def _runner(
+    catalog: Path, dsl: dict[str, Any], symbols: list[str] | None = None, **kw: Any
+) -> NTScreeningRunner:
+    return NTScreeningRunner(
+        dsl, symbols or ["BTCUSDT"], _START, _END, catalog_path=str(catalog), **kw
+    )
 
 
 def _spec(runner: NTScreeningRunner) -> EngineSpec:
@@ -200,14 +219,24 @@ class TestMissingTicks:
             _runner(cat, _dsl("4h"))({})
 
     def test_given_set_missing_a_symbol_raises(self, catalog: Path) -> None:
-        ticks = FillTickSet(timeframe="4h", paths={"BTCUSDT": str(catalog)},
-                            missing_boundaries={"BTCUSDT": 0}, start_ns=_START_NS, end_ns=_END_NS)
+        ticks = FillTickSet(
+            timeframe="4h",
+            paths={"BTCUSDT": str(catalog)},
+            missing_boundaries={"BTCUSDT": 0},
+            start_ns=_START_NS,
+            end_ns=_END_NS,
+        )
         with pytest.raises(MissingBarDataError, match="ETHUSDT"):
             _runner(catalog, _dsl("4h"), ["BTCUSDT", "ETHUSDT"], fill_ticks=ticks)({})
 
     def test_given_set_wrong_timeframe_raises(self, catalog: Path) -> None:
-        ticks = FillTickSet(timeframe="1h", paths={"BTCUSDT": str(catalog)},
-                            missing_boundaries={"BTCUSDT": 0}, start_ns=_START_NS, end_ns=_END_NS)
+        ticks = FillTickSet(
+            timeframe="1h",
+            paths={"BTCUSDT": str(catalog)},
+            missing_boundaries={"BTCUSDT": 0},
+            start_ns=_START_NS,
+            end_ns=_END_NS,
+        )
         with pytest.raises(MissingBarDataError, match="1h"):
             _runner(catalog, _dsl("4h"), fill_ticks=ticks)({})
 
@@ -225,8 +254,13 @@ class TestMissingTicks:
 def test_given_set_for_another_window_raises(
     catalog: Path, start_ns: int | None, end_ns: int | None
 ) -> None:
-    ticks = FillTickSet(timeframe="4h", paths={"BTCUSDT": str(catalog)},
-                        missing_boundaries={"BTCUSDT": 0}, start_ns=start_ns, end_ns=end_ns)
+    ticks = FillTickSet(
+        timeframe="4h",
+        paths={"BTCUSDT": str(catalog)},
+        missing_boundaries={"BTCUSDT": 0},
+        start_ns=start_ns,
+        end_ns=end_ns,
+    )
     with pytest.raises(MissingBarDataError, match="window"):
         _runner(catalog, _dsl("4h"), fill_ticks=ticks)({})
 
@@ -240,7 +274,9 @@ def test_parent_resolved_set_for_the_run_window_is_accepted(catalog: Path) -> No
     assert tick.catalog_path == ticks.paths["BTCUSDT"]
 
 
-def test_given_set_is_used_without_resolving(catalog: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_given_set_is_used_without_resolving(
+    catalog: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import vibe_quant.data.fill_ticks as ft
 
     def _no_resolve(*_: Any, **__: Any) -> None:
@@ -248,8 +284,13 @@ def test_given_set_is_used_without_resolving(catalog: Path, monkeypatch: pytest.
 
     monkeypatch.setattr(ft, "resolve_fill_ticks", _no_resolve)
     # a set resolved for a wider window covers the run
-    ticks = FillTickSet(timeframe="4h", paths={"BTCUSDT": "/x/BTC"}, missing_boundaries={"BTCUSDT": 3},
-                        start_ns=_START_NS - 1, end_ns=_END_NS + 1)
+    ticks = FillTickSet(
+        timeframe="4h",
+        paths={"BTCUSDT": "/x/BTC"},
+        missing_boundaries={"BTCUSDT": 3},
+        start_ns=_START_NS - 1,
+        end_ns=_END_NS + 1,
+    )
     spec = _spec(_runner(catalog, _dsl("4h"), fill_ticks=ticks))
     (tick,) = _tick_cfgs(spec)
     assert tick.catalog_path == "/x/BTC"
@@ -338,22 +379,34 @@ def test_open_position_mark_matches_validation_extraction(
     validation: list[Any] = []
     orig = NTScreeningRunner._extract_metrics
 
-    def _spy(self: NTScreeningRunner, params: Any, bt_result: Any, engine: Any,
-             *a: Any, **k: Any) -> Any:
+    def _spy(
+        self: NTScreeningRunner, params: Any, bt_result: Any, engine: Any, *a: Any, **k: Any
+    ) -> Any:
         from vibe_quant.validation.extraction import finest_timeframe
 
-        validation.append(extract_results(
-            1, "s", bt_result, engine, self._venue_config(),
-            funding_calculator=FundingCalculator(archive),
-            run_start_date=self._start_date, run_end_date=self._end_date,
-            execution_timeframe=finest_timeframe(self._all_timeframes),
-            catalog_path=self._resolved_catalog_path,
-        ))
+        validation.append(
+            extract_results(
+                1,
+                "s",
+                bt_result,
+                engine,
+                self._venue_config(),
+                funding_calculator=FundingCalculator(archive),
+                run_start_date=self._start_date,
+                run_end_date=self._end_date,
+                execution_timeframe=finest_timeframe(self._all_timeframes),
+                catalog_path=self._resolved_catalog_path,
+            )
+        )
         return orig(self, params, bt_result, engine, *a, **k)
 
     monkeypatch.setattr(NTScreeningRunner, "_extract_metrics", _spy)
-    m = _runner(catalog, _dsl("4h", name="parity", ind_tf=ind_tf), ["BTCUSDT", "ETHUSDT"],
-                funding_archive_path=str(archive))({})
+    m = _runner(
+        catalog,
+        _dsl("4h", name="parity", ind_tf=ind_tf),
+        ["BTCUSDT", "ETHUSDT"],
+        funding_archive_path=str(archive),
+    )({})
     (v,) = validation
     assert [t.exit_reason for t in v.trades] == ["end_of_data", "end_of_data"]
     assert v.total_slippage == 0.0  # screening fill model: no SPEC slippage on either side
@@ -368,7 +421,9 @@ def test_open_position_mark_matches_validation_extraction(
     assert m.max_drawdown > 0.0
 
 
-def test_tick_dir_modified_during_run_raises(catalog: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_tick_dir_modified_during_run_raises(
+    catalog: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from nautilus_trader.backtest.node import BacktestNode
 
     runner = _runner(catalog, _dsl("4h"))
@@ -432,8 +487,9 @@ def test_each_symbol_fills_on_its_own_first_tick_any_order(
     seen: dict[str, tuple[int, float, int]] = {}
     orig = NTScreeningRunner._extract_metrics
 
-    def _spy(self: NTScreeningRunner, params: Any, bt_result: Any, engine: Any,
-             *a: Any, **k: Any) -> Any:
+    def _spy(
+        self: NTScreeningRunner, params: Any, bt_result: Any, engine: Any, *a: Any, **k: Any
+    ) -> Any:
         cache = engine.kernel.cache
         for order in cache.orders():
             if order.order_type.name == "MARKET" and order.filled_qty.as_double() > 0:
@@ -481,8 +537,9 @@ def test_symbol_order_bit_identical() -> None:
     }
 
     def run(symbols: list[str]) -> tuple[float, ...]:
-        m = NTScreeningRunner(dsl, symbols, "2024-01-01", "2024-01-15",
-                              catalog_path=str(_REAL_CATALOG))({})
+        m = NTScreeningRunner(
+            dsl, symbols, "2024-01-01", "2024-01-15", catalog_path=str(_REAL_CATALOG)
+        )({})
         return (m.sharpe_ratio, m.total_trades, m.total_return, m.profit_factor, m.max_drawdown)
 
     a = run(["BTCUSDT", "ETHUSDT"])

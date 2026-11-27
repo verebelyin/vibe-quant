@@ -90,7 +90,9 @@ def test_bar_cache_serves_each_root_its_own_bars(
     """Two roots, equal signatures, one relative path: each cwd gets its own bars."""
     _write_day_bars(tmp_path / "root-a" / "catalog", [100.0, 110.0])
     _write_day_bars(tmp_path / "root-b" / "catalog", [200.0, 220.0])
-    assert _signature(tmp_path / "root-a" / "catalog") == _signature(tmp_path / "root-b" / "catalog")
+    assert _signature(tmp_path / "root-a" / "catalog") == _signature(
+        tmp_path / "root-b" / "catalog"
+    )
 
     monkeypatch.chdir(tmp_path / "root-a")
     first = load_catalog_bars("catalog", DAY_BAR_TYPE)
@@ -133,9 +135,7 @@ def test_aux_ref_cache_serves_each_root_its_own_bars(
     aux_data.configure(None, "catalog")
     _, close_a = aux_data.ref_close_series("BTCUSDT", "1d")
     assert close_a.tolist() == [100.0, 110.0]
-    trend_a = aux_data.ref_trend_asof(
-        "BTCUSDT", np.array([DAY0 + 2 * DAY_NS], dtype=np.int64), 2
-    )
+    trend_a = aux_data.ref_trend_asof("BTCUSDT", np.array([DAY0 + 2 * DAY_NS], dtype=np.int64), 2)
     assert trend_a[0] == pytest.approx(110.0 / ((100.0 + 2 * 110.0) / 3) - 1.0)
 
     # No configure() on the second root: only the working directory changed, so
@@ -143,9 +143,7 @@ def test_aux_ref_cache_serves_each_root_its_own_bars(
     monkeypatch.chdir(tmp_path / "root-b")
     _, close_b = aux_data.ref_close_series("BTCUSDT", "1d")
     assert close_b.tolist() == [200.0, 180.0]
-    trend_b = aux_data.ref_trend_asof(
-        "BTCUSDT", np.array([DAY0 + 2 * DAY_NS], dtype=np.int64), 2
-    )
+    trend_b = aux_data.ref_trend_asof("BTCUSDT", np.array([DAY0 + 2 * DAY_NS], dtype=np.int64), 2)
     assert trend_b[0] == pytest.approx(180.0 / ((200.0 + 2 * 180.0) / 3) - 1.0)
 
 

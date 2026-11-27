@@ -345,13 +345,13 @@ def test_mfi_public_falls_back_to_library_on_missing_bar() -> None:
 
 
 def test_vidya_public_falls_back_on_leading_nan() -> None:
-    df = _synthetic(
-        [2, 3, 4, 5, 6, 7], [1, 2, 3, 4, 5, 6], [1.5, 2.5, 3.5, 4.5, 5.5, 6.5], [1] * 6
-    )
+    df = _synthetic([2, 3, 4, 5, 6, 7], [1, 2, 3, 4, 5, 6], [1.5, 2.5, 3.5, 4.5, 5.5, 6.5], [1] * 6)
     df.loc[:1, "close"] = np.nan
     expected = ta.vidya(df["close"], length=3)
     assert expected is not None
-    _assert_bit_equal(compute_vidya(df, {"period": 3}).to_numpy(), expected.to_numpy(), "VIDYA lead nan")
+    _assert_bit_equal(
+        compute_vidya(df, {"period": 3}).to_numpy(), expected.to_numpy(), "VIDYA lead nan"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -429,9 +429,9 @@ def test_squeeze_ratio_public_falls_back_to_library_on_non_float64() -> None:
 
 def _ramp(n: int = 40) -> pd.DataFrame:
     close = np.arange(1.0, n + 1.0)
-    return _synthetic(
-        list(close + 1), list(close - 1), list(close), [1.0] * n
-    ).assign(volume=np.arange(1.0, n + 1.0) % 7 + 1.0)
+    return _synthetic(list(close + 1), list(close - 1), list(close), [1.0] * n).assign(
+        volume=np.arange(1.0, n + 1.0) % 7 + 1.0
+    )
 
 
 def _outcome(fn: Any) -> tuple[str, Any]:

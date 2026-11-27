@@ -141,9 +141,7 @@ def _values(
 ) -> tuple[object, object | None, object | None]:
     config_name, cli_dest, api_name = row
     config_value = (
-        _normalise_config(config_name, config[config_name])
-        if config_name is not None
-        else None
+        _normalise_config(config_name, config[config_name]) if config_name is not None else None
     )
     api_value = _normalise_api(api_name, api[api_name]) if api_name is not None else None
     return config_value, _normalise_cli(cli_dest, cli[cli_dest]), api_value
@@ -214,7 +212,6 @@ def test_every_cli_flag_is_classified() -> None:
     """
     shared = {row[1] for row in SHARED}
     assert set(_cli_defaults()) - shared == set(CLI_ONLY)
-
 
 
 def test_sharpe_limit_defaults_resolve_to_the_config_defaults() -> None:

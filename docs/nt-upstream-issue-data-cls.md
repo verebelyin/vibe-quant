@@ -18,7 +18,7 @@ comparison against the raw `data_cls` field:
 @property
 def query(self) -> dict[str, Any]:
     identifiers = []
-    if self.data_cls is Bar:          # <-- fails when data_cls is a string
+    if self.data_cls is Bar:  # <-- fails when data_cls is a string
         if self.bar_types:
             identifiers = [str(bar_type) for bar_type in self.bar_types]
         elif self.instrument_id and self.bar_spec:

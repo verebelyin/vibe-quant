@@ -155,9 +155,7 @@ def fee_drag(fees: float, gross: float) -> float | None:
     return fees / gross
 
 
-def fees_pct_equity_per_year(
-    fees: float, starting_balance: float, days: float
-) -> float | None:
+def fees_pct_equity_per_year(fees: float, starting_balance: float, days: float) -> float | None:
     """Fees paid in a run, annualized as a fraction of equity.
 
     ``fees / starting_balance * 365 / days``. The assumption, stated because
@@ -720,9 +718,7 @@ def mark_to_market_max_drawdown(
     peak_prev = np.empty(len(equity_close))
     peak_prev[0] = starting_balance
     if len(equity_close) > 1:
-        peak_prev[1:] = np.maximum(
-            np.maximum.accumulate(equity_close[:-1]), starting_balance
-        )
+        peak_prev[1:] = np.maximum(np.maximum.accumulate(equity_close[:-1]), starting_balance)
     drawdown = (peak_prev - equity_min) / peak_prev
     worst = float(np.max(drawdown))
     return min(max(worst, 0.0), 1.0)

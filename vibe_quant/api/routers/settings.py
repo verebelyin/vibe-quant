@@ -199,17 +199,19 @@ def _get_nt_version() -> str:
         return "not installed"
 
 
-_KNOWN_TABLES: frozenset[str] = frozenset({
-    "strategies",
-    "sizing_configs",
-    "risk_configs",
-    "backtest_runs",
-    "backtest_results",
-    "trades",
-    "sweep_results",
-    "background_jobs",
-    "consistency_checks",
-})
+_KNOWN_TABLES: frozenset[str] = frozenset(
+    {
+        "strategies",
+        "sizing_configs",
+        "risk_configs",
+        "backtest_runs",
+        "backtest_results",
+        "trades",
+        "sweep_results",
+        "background_jobs",
+        "consistency_checks",
+    }
+)
 
 
 def _get_table_counts(mgr: StateManager) -> dict[str, int]:

@@ -244,9 +244,9 @@ def _good_body_for(prompt: str) -> str:
     fn_name = m.group(1) if m else "compute_x"
     return (
         f"def {fn_name}(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:\n"
-        f'    import pandas as pd\n'
+        f"    import pandas as pd\n"
         f'    period_raw = params.get("period", 14)\n'
-        f'    period = int(period_raw) if isinstance(period_raw, (int, float)) else 14\n'
+        f"    period = int(period_raw) if isinstance(period_raw, (int, float)) else 14\n"
         f'    return df["close"].rolling(period).mean()\n'
     )
 
@@ -267,9 +267,7 @@ def test_scaffold_full_happy_path_returns_result_and_commits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     plugins, tests = _isolate(tmp_path, monkeypatch)
-    monkeypatch.setattr(
-        indicator_scaffold, "_run_claude_codegen", _good_body_for
-    )
+    monkeypatch.setattr(indicator_scaffold, "_run_claude_codegen", _good_body_for)
     monkeypatch.setattr(
         indicator_scaffold,
         "run_contract_test",
@@ -299,9 +297,7 @@ def test_scaffold_full_test_failure_deletes_both_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     plugins, tests = _isolate(tmp_path, monkeypatch)
-    monkeypatch.setattr(
-        indicator_scaffold, "_run_claude_codegen", _good_body_for
-    )
+    monkeypatch.setattr(indicator_scaffold, "_run_claude_codegen", _good_body_for)
     monkeypatch.setattr(
         indicator_scaffold,
         "run_contract_test",
@@ -325,9 +321,7 @@ def test_scaffold_full_commit_failure_deletes_both_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     plugins, tests = _isolate(tmp_path, monkeypatch)
-    monkeypatch.setattr(
-        indicator_scaffold, "_run_claude_codegen", _good_body_for
-    )
+    monkeypatch.setattr(indicator_scaffold, "_run_claude_codegen", _good_body_for)
     monkeypatch.setattr(
         indicator_scaffold,
         "run_contract_test",

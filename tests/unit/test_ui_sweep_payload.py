@@ -66,7 +66,8 @@ def _launch_like_screening_main(raw: dict[str, Any], name: str, sweep: dict[str,
 
 
 _TEMPLATES: dict[str, dict[str, Any]] = {
-    str(p["name"]): p["dsl_config"] for p in list_template_payloads()  # type: ignore[misc]
+    str(p["name"]): p["dsl_config"]
+    for p in list_template_payloads()  # type: ignore[misc]
 }
 
 
@@ -143,7 +144,9 @@ def test_fractional_value_on_int_field_fails_decode() -> None:
     compiled config does not (msgspec 'Expected int, got float' on every backtest)."""
     raw = _TEMPLATES["dual_ema_crossover"]
     sweep = {"ema_fast_period": [12, 12.5, 13]}
-    dsl = StrategyDSL.model_validate({**StrategyDSL.model_validate(raw).model_dump(), "sweep": sweep})
+    dsl = StrategyDSL.model_validate(
+        {**StrategyDSL.model_validate(raw).model_dump(), "sweep": sweep}
+    )
     assert dsl.sweep["ema_fast_period"] == [12.0, 12.5, 13.0]
     with pytest.raises(msgspec.ValidationError, match="Expected `int`"):
         _decode_every_combo(_runner(dsl.model_dump()), dsl.sweep)

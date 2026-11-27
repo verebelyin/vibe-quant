@@ -85,8 +85,13 @@ def main(argv: list[str] | None = None) -> int:
     bh = {c: base._bh(closes, c) for c in coins}
     failed = sum(1 for r in ledger if r.get("failed"))
     missing = [r["key"] for r in winners if not nxt.get(r["key"])]
-    print(f"cells={len(ledger)} failed={failed} winners={len(winners)} without_blind_eval={len(missing)}")
-    print("blind B&H " + " ".join(f"{c}={bh[c]:+.4f}" if bh[c] is not None else f"{c}=n/a" for c in coins))
+    print(
+        f"cells={len(ledger)} failed={failed} winners={len(winners)} without_blind_eval={len(missing)}"
+    )
+    print(
+        "blind B&H "
+        + " ".join(f"{c}={bh[c]:+.4f}" if bh[c] is not None else f"{c}=n/a" for c in coins)
+    )
     base.PER_COIN = PER_COIN
     picked = base.select(winners)
     print(f"\n## PRIMARY: top {PER_COIN} per coin by May-Jul best Sharpe, tested once on Aug-Oct")
@@ -98,7 +103,9 @@ def main(argv: list[str] | None = None) -> int:
         coin_bh = bh[r["cell"]["symbol"]]
         blind = base.fmt_blind(n)
         if n and not n.get("error"):
-            blind += " (beats B&H)" if coin_bh is not None and n["ret"] > coin_bh else " (below B&H)"
+            blind += (
+                " (beats B&H)" if coin_bh is not None and n["ret"] > coin_bh else " (below B&H)"
+            )
         print(
             f"{'PASS' if ok else 'FAIL'} {r['key']} | train sharpe={b['sharpe']:.3f} "
             f"ret={b['ret']:+.4f} trades={b['trades']} | blind {blind} | "
@@ -107,7 +114,9 @@ def main(argv: list[str] | None = None) -> int:
     ref = sum(passes(nxt.get(r["key"])) for r in winners)
     pos = sum(1 for r in winners if (nxt.get(r["key"]) or {}).get("ret", 0) > 0)
     print(f"\nPRIMARY pass {n_pass}/{len(picked)}")
-    print(f"REFERENCE all winners: pass {ref}/{len(winners)}, blind return > 0: {pos}/{len(winners)}")
+    print(
+        f"REFERENCE all winners: pass {ref}/{len(winners)}, blind return > 0: {pos}/{len(winners)}"
+    )
     return 0
 
 

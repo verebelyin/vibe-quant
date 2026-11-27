@@ -546,9 +546,9 @@ def test_cash_events_book_funding_before_the_exit() -> None:
         assert daily_balance_returns(1.0, ledger.cash_events, 0, 2 * DAY) == {
             DAY: 20.967699999999997
         }
-        assert daily_balance_returns(
-            1.0, accumulate([other], rules).cash_events, 0, 2 * DAY
-        ) == {DAY: 5.6092}
+        assert daily_balance_returns(1.0, accumulate([other], rules).cash_events, 0, 2 * DAY) == {
+            DAY: 5.6092
+        }
 
 
 def _flat(pid: str, entry_ns: int, pnl: float) -> PositionCosts:
@@ -610,9 +610,7 @@ def test_open_mark_nets_fee_after_unrealized() -> None:
     )
     for rules in (SCREENING_RULES, VALIDATION_RULES):
         assert accumulate(cost_positions([(pos, mark)], rules), rules).net_pnls == [-0.7655]
-        assert accumulate(cost_positions([(other, other_mark)], rules), rules).net_pnls == [
-            -1.4283
-        ]
+        assert accumulate(cost_positions([(other, other_mark)], rules), rules).net_pnls == [-1.4283]
 
 
 def test_summary_uses_entry_time_order() -> None:
@@ -699,9 +697,7 @@ def test_screening_liquidated_fee_one_sum_witness() -> None:
     closed = FakePosition.closed(
         "C", BTC, entry_ns=0, exit_ns=DAY, entry_price=10.0, exit_price=11.0, entry_fee=0.1417
     )
-    liquidated = FakePosition.open(
-        "L", BTC, entry_ns=2 * DAY, entry_price=10.0, entry_fee=0.8374
-    )
+    liquidated = FakePosition.open("L", BTC, entry_ns=2 * DAY, entry_price=10.0, entry_fee=0.8374)
     key = position_key(liquidated)
     overlay = SimpleNamespace(
         dropped_keys=frozenset(),
@@ -763,7 +759,11 @@ def test_validation_liquidated_run_keeps_the_fill_at_the_hit_instant() -> None:
         )
         slip = SimpleNamespace(leg=lambda _pos, _price, _ts: 0.0)
         adjusted, ledgers = validation_liquidated_run(
-            [], [pos], overlay, slip=slip, funding_by_key={}  # type: ignore[arg-type]
+            [],
+            [pos],
+            overlay,
+            slip=slip,
+            funding_by_key={},  # type: ignore[arg-type]
         )
         assert ledgers == {}
         (item,) = adjusted
@@ -803,7 +803,11 @@ def test_liquidated_close_one_formula_both_tiers() -> None:
     )
     slip = SimpleNamespace(leg=lambda _pos, _price, _ts: 0.0)
     (item,), _ = validation_liquidated_run(
-        [], [pos], overlay, slip=slip, funding_by_key={}  # type: ignore[arg-type]
+        [],
+        [pos],
+        overlay,
+        slip=slip,
+        funding_by_key={},  # type: ignore[arg-type]
     )
     assert out.trade_pnls[0] == -8.2
     assert item.realized_pnl == -8.2
@@ -816,7 +820,14 @@ def test_liquidated_close_one_formula_both_tiers() -> None:
 def test_liquidated_close_keeps_fills_up_to_the_hit_in_order() -> None:
     """Fills at ts <= hit.ts are kept (signed commissions, fill order); later ones are not."""
     pos = FakePosition.closed(
-        "K", BTC, entry_ns=1, exit_ns=7, entry_price=10.0, exit_price=11.0, entry_fee=0.5, exit_fee=0.25
+        "K",
+        BTC,
+        entry_ns=1,
+        exit_ns=7,
+        entry_price=10.0,
+        exit_price=11.0,
+        entry_fee=0.5,
+        exit_fee=0.25,
     )
     hit = SimpleNamespace(ts=7, realized_pnl=0.0, clearance_fee=0.0, loss=0.0)
     assert liquidated_close(pos, hit)[1] == [0.5, 0.25]
@@ -859,7 +870,11 @@ def test_liquidated_funding_truncation_same_both_tiers() -> None:
         )
         slip = SimpleNamespace(leg=lambda _pos, _price, _ts: 0.0)
         (item,), _ = validation_liquidated_run(
-            [], [pos], overlay, slip=slip, funding_by_key={key: _funding_accrual()}  # type: ignore[arg-type]
+            [],
+            [pos],
+            overlay,
+            slip=slip,
+            funding_by_key={key: _funding_accrual()},  # type: ignore[arg-type]
         )
         assert item.accrual is not None
         assert (out.total_funding, out.funding_fallbacks) == (total, fallbacks)

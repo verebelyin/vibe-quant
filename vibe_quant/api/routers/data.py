@@ -108,9 +108,13 @@ def data_coverage(catalog: CatMgr) -> DataCoverageResponse:
     try:
         items: list[DataCoverageItem] = []
 
-        for symbol, kline_count, min_time, max_time, funding_rate_count in (
-            archive.get_coverage_rows("1m")
-        ):
+        for (
+            symbol,
+            kline_count,
+            min_time,
+            max_time,
+            funding_rate_count,
+        ) in archive.get_coverage_rows("1m"):
             start_date = ""
             end_date = ""
             if min_time is not None and max_time is not None:
@@ -266,9 +270,7 @@ async def start_update(jobs: JobMgr) -> dict[str, object]:
 
 @router.post("/rebuild", status_code=202)
 async def rebuild_catalog(jobs: JobMgr) -> dict[str, object]:
-    job_id, pid = _start_data_job(
-        jobs, "catalog_rebuild", "rebuild", ["rebuild", "--from-archive"]
-    )
+    job_id, pid = _start_data_job(jobs, "catalog_rebuild", "rebuild", ["rebuild", "--from-archive"])
     logger.info("catalog rebuild started job_id=%d pid=%d", job_id, pid)
     return {"status": "started", "job_id": job_id, "pid": pid}
 
@@ -459,14 +461,18 @@ def compute_indicators_endpoint(
         # Aggregate to requested interval if > 1m
         if interval_minutes > 1:
             raw_df["bucket"] = (raw_df["open_time"] // bucket_ms) * bucket_ms
-            df = raw_df.groupby("bucket").agg(
-                open_time=("bucket", "first"),
-                open=("open", "first"),
-                high=("high", "max"),
-                low=("low", "min"),
-                close=("close", "last"),
-                volume=("volume", "sum"),
-            ).reset_index(drop=True)
+            df = (
+                raw_df.groupby("bucket")
+                .agg(
+                    open_time=("bucket", "first"),
+                    open=("open", "first"),
+                    high=("high", "max"),
+                    low=("low", "min"),
+                    close=("close", "last"),
+                    volume=("volume", "sum"),
+                )
+                .reset_index(drop=True)
+            )
         else:
             df = raw_df
 

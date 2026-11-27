@@ -187,7 +187,9 @@ class TestAggregateBarsAlignment:
     """
 
     @staticmethod
-    def _minute_bar(bar_type: BarType, minute: int, o: float, h: float, low: float, c: float, v: float) -> Bar:
+    def _minute_bar(
+        bar_type: BarType, minute: int, o: float, h: float, low: float, c: float, v: float
+    ) -> Bar:
         """1m bar at an absolute minute offset (ts_event=open edge, ts_init=close edge)."""
         ts = minute * 60_000
         return make_bar(bar_type, o, h, low, c, v, ts, ts + 59_999)
@@ -217,13 +219,17 @@ class TestAggregateBarsAlignment:
         for m in range(15):
             high = 9999.0 if m == 5 else 100.0 + m + 1
             low = -9999.0 if m == 6 else 100.0 + m - 1
-            bars_1m.append(self._minute_bar(btc_bar_type_1m, m, 100.0 + m, high, low, 100.0 + m + 0.5, m + 1.0))
+            bars_1m.append(
+                self._minute_bar(btc_bar_type_1m, m, 100.0 + m, high, low, 100.0 + m + 0.5, m + 1.0)
+            )
 
         result = aggregate_bars(bars_1m, btc_bar_type_5m, 5)
         assert len(result) == 3
 
         for w, agg in enumerate(result):
-            exp_o, exp_h, exp_l, exp_c, exp_v, exp_te, exp_ti = self._expect(bars_1m[w * 5 : w * 5 + 5])
+            exp_o, exp_h, exp_l, exp_c, exp_v, exp_te, exp_ti = self._expect(
+                bars_1m[w * 5 : w * 5 + 5]
+            )
             assert float(agg.open) == exp_o
             assert float(agg.high) == exp_h
             assert float(agg.low) == exp_l
@@ -296,9 +302,7 @@ class TestAggregateBarsAlignment:
         assert len(result) == 1
         assert result[0].ts_init == (4 * 60_000 + 59_999) * 1_000_000
 
-    def test_15m_window_timestamps_use_open_and_close_edges(
-        self, btc_bar_type_1m: BarType
-    ) -> None:
+    def test_15m_window_timestamps_use_open_and_close_edges(self, btc_bar_type_1m: BarType) -> None:
         """Second target_minutes (15m): ts_event = first 1m open edge, ts_init =
         last 1m close edge; OHLCV reduced over exactly the 15 constituent bars."""
         bar_type_15m = get_bar_type("BTCUSDT", "15m")
@@ -484,7 +488,15 @@ class TestInstrumentConfigs:
             "HYPEUSDT": ("HYPE", 3, 2, "0.001", "0.01", "0.01", 5),
         }
         for symbol, row in expected.items():
-            base, price_precision, size_precision, price_increment, size_increment, min_qty, min_notional = row
+            (
+                base,
+                price_precision,
+                size_precision,
+                price_increment,
+                size_increment,
+                min_qty,
+                min_notional,
+            ) = row
             config = INSTRUMENT_CONFIGS[symbol]
             assert config["base"] == base
             assert config["quote"] == "USDT"

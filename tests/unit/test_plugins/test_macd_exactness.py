@@ -104,7 +104,9 @@ def test_macd_port_matches_ta_macd() -> None:
                 _check(df, f, s, g)
 
 
-@pytest.mark.parametrize(("f", "s", "g", "bad"), [(0, 0, 0, "fast"), (-2, 5, 3, "fast"), (5, 8, 0, "signal")])
+@pytest.mark.parametrize(
+    ("f", "s", "g", "bad"), [(0, 0, 0, "fast"), (-2, 5, 3, "fast"), (5, 8, 0, "signal")]
+)
 def test_non_positive_period_raises_like_ta_macd(f: int, s: int, g: int, bad: str) -> None:
     """pandas-ta-classic 0.9 refuses a non-positive period instead of defaulting to 12/26/9."""
     df = _walk(1, 60)

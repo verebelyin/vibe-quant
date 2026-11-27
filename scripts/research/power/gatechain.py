@@ -158,13 +158,17 @@ def posthoc_dsr_p(record: Mapping[str, object], num_trials: int) -> float:
     ``skewness_used`` / ``kurtosis_used``) and the repo's
     :class:`DeflatedSharpeRatio`, so it reproduces the gate's p at that N.
     """
-    return DeflatedSharpeRatio(0.05).calculate(
-        observed_sharpe=cast("float", record["sharpe_daily"]),
-        num_trials=num_trials,
-        num_observations=cast("int", record["observations"]),
-        skewness=cast("float", record["skewness_used"]),
-        kurtosis=cast("float", record["kurtosis_used"]),
-    ).p_value
+    return (
+        DeflatedSharpeRatio(0.05)
+        .calculate(
+            observed_sharpe=cast("float", record["sharpe_daily"]),
+            num_trials=num_trials,
+            num_observations=cast("int", record["observations"]),
+            skewness=cast("float", record["skewness_used"]),
+            kurtosis=cast("float", record["kurtosis_used"]),
+        )
+        .p_value
+    )
 
 
 def _null_backtest(_chrom: StrategyChromosome) -> dict[str, float | int]:
@@ -336,8 +340,6 @@ def evaluate_candidate(
             and marginals["bootstrap"]
             and marginals["holdout"]
         ),
-        "chain_full": {
-            n: chain_recent[n] and cross_window and wfa for n in settings.dsr_trials
-        },
+        "chain_full": {n: chain_recent[n] and cross_window and wfa for n in settings.dsr_trials},
         "buy_hold_record": buy_record,
     }

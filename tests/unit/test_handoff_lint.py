@@ -77,7 +77,9 @@ def _gate_log(repo: Path, sha: str, verdict: str = "GATE PASS", tree: str | None
     log = repo / "data" / "swarm" / "_gate-logs" / f"wt-{sha[:12]}-20261029T000000Z.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     tree = tree or _git(repo, "rev-parse", f"{sha}^{{tree}}")
-    log.write_text(f"$ ruff check\nAll checks passed!\n[exit 0]\nHEAD {sha} TREE {tree}\n{verdict}\n")
+    log.write_text(
+        f"$ ruff check\nAll checks passed!\n[exit 0]\nHEAD {sha} TREE {tree}\n{verdict}\n"
+    )
     return log
 
 
@@ -234,9 +236,13 @@ def board_ns(board_server: BoardServer, monkeypatch: pytest.MonkeyPatch, tmp_pat
     return ns
 
 
-def _board_ruling(board_server: BoardServer, ns: str, text: str, *labels: str, profile: str = "chief") -> str:
+def _board_ruling(
+    board_server: BoardServer, ns: str, text: str, *labels: str, profile: str = "chief"
+) -> str:
     args = [arg for label in labels for arg in ("--label", label)]
-    proc = board_server.vb("post", f"{ns}/job/20261120-x", "-", *args, "--json", profile=profile, stdin=text)
+    proc = board_server.vb(
+        "post", f"{ns}/job/20261120-x", "-", *args, "--json", profile=profile, stdin=text
+    )
     assert proc.returncode == 0, proc.stderr
     return str(json.loads(proc.stdout)["message"]["id"])
 

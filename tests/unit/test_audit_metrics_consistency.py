@@ -28,11 +28,18 @@ def state(tmp_path: Path) -> StateManager:
     s.close()
 
 
-def _screening_run(state: StateManager, rows: list[tuple[dict[str, object], float, int]]) -> tuple[int, int]:
+def _screening_run(
+    state: StateManager, rows: list[tuple[dict[str, object], float, int]]
+) -> tuple[int, int]:
     sid = state.create_strategy("s1", {"name": "s1"})
     run_id = state.create_backtest_run(
-        strategy_id=sid, run_mode="screening", symbols=["BTCUSDT"], timeframe="4h",
-        start_date="2024-01-01", end_date="2025-01-01", parameters={},
+        strategy_id=sid,
+        run_mode="screening",
+        symbols=["BTCUSDT"],
+        timeframe="4h",
+        start_date="2024-01-01",
+        end_date="2025-01-01",
+        parameters={},
     )
     state.update_backtest_run_status(run_id, "completed")
     for params, sharpe, trades in rows:
@@ -89,15 +96,28 @@ def test_only_junk_rows_fall_through_to_discovery(state: StateManager) -> None:
 def test_discovery_reference_prefers_full_range_metrics(state: StateManager) -> None:
     sid = state.create_strategy("genome_abc123", {"name": "genome_abc123"})
     disc_id = state.create_backtest_run(
-        strategy_id=None, run_mode="discovery", symbols=["BTCUSDT"], timeframe="4h",
-        start_date="2024-01-01", end_date="2025-01-01", parameters={},
+        strategy_id=None,
+        run_mode="discovery",
+        symbols=["BTCUSDT"],
+        timeframe="4h",
+        start_date="2024-01-01",
+        end_date="2025-01-01",
+        parameters={},
     )
     state.update_backtest_run_status(disc_id, "completed")
-    notes = json.dumps({"top_strategies": [{
-        "dsl": {"name": "genome_abc123"},
-        "sharpe": 2.4, "trades": 90,  # mean of 3 sub-windows
-        "full_range_sharpe": 1.1, "full_range_trades": 88,
-    }]})
+    notes = json.dumps(
+        {
+            "top_strategies": [
+                {
+                    "dsl": {"name": "genome_abc123"},
+                    "sharpe": 2.4,
+                    "trades": 90,  # mean of 3 sub-windows
+                    "full_range_sharpe": 1.1,
+                    "full_range_trades": 88,
+                }
+            ]
+        }
+    )
     state.save_backtest_result(disc_id, {"sharpe_ratio": 2.4, "notes": notes})
     ref = find_screening_reference(state, sid, "genome_abc123")
     assert ref is not None
@@ -109,18 +129,27 @@ def test_discovery_reference_prefers_full_range_metrics(state: StateManager) -> 
 
 def _discovery_run(state: StateManager, name: str) -> int:
     run_id = state.create_backtest_run(
-        strategy_id=None, run_mode="discovery", symbols=["BTCUSDT"], timeframe="4h",
-        start_date="2025-03-07", end_date="2026-03-07", parameters={},
+        strategy_id=None,
+        run_mode="discovery",
+        symbols=["BTCUSDT"],
+        timeframe="4h",
+        start_date="2025-03-07",
+        end_date="2026-03-07",
+        parameters={},
     )
     state.update_backtest_run_status(run_id, "completed")
     notes = {
         "holdout_dates": ["2025-12-24", "2026-03-07"],
-        "top_strategies": [{
-            "dsl": {"name": name},
-            "sharpe": 0.58, "trades": 182,
-            "full_range_sharpe": 0.29, "full_range_trades": 205,
-            "holdout": {"sharpe": 1.84, "trades": 12},
-        }],
+        "top_strategies": [
+            {
+                "dsl": {"name": name},
+                "sharpe": 0.58,
+                "trades": 182,
+                "full_range_sharpe": 0.29,
+                "full_range_trades": 205,
+                "holdout": {"sharpe": 1.84, "trades": 12},
+            }
+        ],
     }
     state.save_backtest_result(run_id, {"total_trades": 0}, trades=[])
     state.update_result_notes(run_id, json.dumps(notes))

@@ -103,9 +103,7 @@ def _r7_record() -> dict[str, Any]:
     }
 
 
-def _discovery_db(
-    tmp_path: Path, *, dsr_trials: dict[str, Any]
-) -> tuple[Path, int]:
+def _discovery_db(tmp_path: Path, *, dsr_trials: dict[str, Any]) -> tuple[Path, int]:
     db = tmp_path / "disc.db"
     sm = StateManager(db)
     rid = sm.create_backtest_run(
@@ -148,10 +146,7 @@ def test_default_is_q95_everywhere() -> None:
     assert GuardrailConfig().dsr_rule == "q95"
     assert DiscoveryConfig().dsr_rule == "q95"
     assert build_parser().parse_args(["--run-id", "1"]).dsr_rule == "q95"
-    assert (
-        build_parser().parse_args(["--run-id", "1", "--dsr-rule", "emax"]).dsr_rule
-        == "emax"
-    )
+    assert build_parser().parse_args(["--run-id", "1", "--dsr-rule", "emax"]).dsr_rule == "emax"
     # The API launch body has no DSR field: the CLI default governs.
     from vibe_quant.api.schemas.discovery import DiscoveryLaunchRequest
 
@@ -199,13 +194,9 @@ def _gate_run(**cfg_over: Any) -> Any:
     pool: dict[str, Any] = {}
     for i in range(3):
         pool[f"k{i:03d}"] = _fitness(
-            mtm_daily_returns=DailyReturns(
-                _FIRST_DAY, array("d", (row + i * 1e-6).tobytes())
-            )
+            mtm_daily_returns=DailyReturns(_FIRST_DAY, array("d", (row + i * 1e-6).tobytes()))
         )
-    fit = _fitness(
-        mtm_daily_returns=DailyReturns(_FIRST_DAY, array("d", row.tobytes()))
-    )
+    fit = _fitness(mtm_daily_returns=DailyReturns(_FIRST_DAY, array("d", row.tobytes())))
     pipe.gates.screen([(_chrom(), fit)], TrialBudget(88, pool))
     return pipe
 
@@ -281,9 +272,7 @@ def test_recheck_applies_the_q95_rule_the_run_used(tmp_path: Path) -> None:
         {"n_rule": DISC_N_RULE, "gate_n": 88, "dsr_rule": "q95", "neff_ev_q95_spread": 10**400},
     ],
 )
-def test_recheck_without_usable_rule_is_legacy(
-    tmp_path: Path, dsr_trials: dict[str, Any]
-) -> None:
+def test_recheck_without_usable_rule_is_legacy(tmp_path: Path, dsr_trials: dict[str, Any]) -> None:
     db, rid = _discovery_db(tmp_path, dsr_trials=dsr_trials)
     cand = _run_recheck(db, rid)
 
@@ -315,8 +304,7 @@ def test_recheck_q95_reject_uses_the_shared_text(tmp_path: Path) -> None:
         _r7_values(), 88, null_spread=1.5275
     )
     expected = (
-        "DSR q95 not significant: stat=1.2267 < spread=1.5275 "
-        "(SR=2.409 ann √365, T=875, N=88)"
+        "DSR q95 not significant: stat=1.2267 < spread=1.5275 (SR=2.409 ann √365, T=875, N=88)"
     )
     assert discovery_reasons == [expected]
     assert cand.passed_dsr is False
@@ -336,7 +324,9 @@ def test_legacy_spread_reject_names_the_legacy_rule(tmp_path: Path) -> None:
     assert record is not None and record["significant"] is False
     assert record["null_spread"] == LEGACY_NULL_SPREAD
     assert len(discovery_reasons) == 1
-    assert discovery_reasons[0].startswith("DSR not significant: p=0.1100 >= 0.05 (pooled daily SR=")
+    assert discovery_reasons[0].startswith(
+        "DSR not significant: p=0.1100 >= 0.05 (pooled daily SR="
+    )
 
     db, rid = _discovery_db(
         tmp_path,

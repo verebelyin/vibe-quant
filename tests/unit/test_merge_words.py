@@ -73,7 +73,8 @@ def test_two_edits_in_different_places_of_one_long_line_both_survive(
     )
     assert merge_words.main([str(spec)]) == 0
     assert spec.read_text() == (
-        "# Spec\n\n" + LONG.replace("4 bps", "5 bps").replace("90 percent", "80 percent")
+        "# Spec\n\n"
+        + LONG.replace("4 bps", "5 bps").replace("90 percent", "80 percent")
         + "\n\nend\n"
     )
 

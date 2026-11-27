@@ -60,7 +60,12 @@ MAX_LINE_CHARS = 1300
 # The always-loaded user profile: Claude Code's auto-memory index for this checkout
 # (outside the repo, so only checked where it exists). Same cap as the tiered-memory model.
 PROFILE = (
-    Path.home() / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(ROOT)) / "memory" / "MEMORY.md"
+    Path.home()
+    / ".claude"
+    / "projects"
+    / re.sub(r"[^A-Za-z0-9]", "-", str(ROOT))
+    / "memory"
+    / "MEMORY.md"
 )
 PROFILE_MAX_CHARS = 4000
 PROFILE_MAX_FACTS = 100
@@ -91,9 +96,7 @@ def test_steering_file_within_word_budget(rel: str) -> None:
 
 def test_every_agent_and_skill_has_a_budget() -> None:
     governed = [
-        _rel(f)
-        for f in _steering_files()
-        if f.parent.name == "agents" or f.name == "SKILL.md"
+        _rel(f) for f in _steering_files() if f.parent.name == "agents" or f.name == "SKILL.md"
     ]
     assert [r for r in governed if r not in BUDGETS] == []
 
@@ -107,7 +110,9 @@ def test_no_changelog_section(path: Path) -> None:
 
 @pytest.mark.parametrize("path", _steering_files(), ids=_rel)
 def test_no_overlong_lines(path: Path) -> None:
-    long = [i for i, line in enumerate(path.read_text().splitlines(), 1) if len(line) > MAX_LINE_CHARS]
+    long = [
+        i for i, line in enumerate(path.read_text().splitlines(), 1) if len(line) > MAX_LINE_CHARS
+    ]
     assert long == [], f"{_rel(path)}: lines over {MAX_LINE_CHARS} chars: {long}"
 
 

@@ -66,4 +66,3 @@ class SystemInfoResponse(BaseModel):
 class DatabaseInfoResponse(BaseModel):
     path: str
     tables: list[str]
-

@@ -77,18 +77,8 @@ def load_ohlc(
     """
     from datetime import datetime
 
-    start_ms = int(
-        datetime.strptime(start_date, "%Y-%m-%d")
-        .replace(tzinfo=UTC)
-        .timestamp()
-        * 1000
-    )
-    end_ms = int(
-        datetime.strptime(end_date, "%Y-%m-%d")
-        .replace(tzinfo=UTC)
-        .timestamp()
-        * 1000
-    )
+    start_ms = int(datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=UTC).timestamp() * 1000)
+    end_ms = int(datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=UTC).timestamp() * 1000)
 
     conn = sqlite3.connect(str(archive_path))
     conn.execute("PRAGMA journal_mode=WAL")
@@ -105,7 +95,9 @@ def load_ohlc(
         conn.close()
 
     bars = [OHLCBar(ts=r[0], open=r[1], high=r[2], low=r[3], close=r[4]) for r in rows]
-    logger.info("Loaded %d %s %s bars (%s to %s)", len(bars), symbol, interval, start_date, end_date)
+    logger.info(
+        "Loaded %d %s %s bars (%s to %s)", len(bars), symbol, interval, start_date, end_date
+    )
     return bars
 
 
@@ -509,12 +501,20 @@ def run_random_short_baseline(
 
 # Champion strategy SL/TP configs from the 1m journal
 CHAMPION_CONFIGS = {
-    "sid=212 (B28 STOCH+ATR, tail-win)": BaselineConfig(sl_pct=0.59, tp_pct=10.55, target_trades=50),
+    "sid=212 (B28 STOCH+ATR, tail-win)": BaselineConfig(
+        sl_pct=0.59, tp_pct=10.55, target_trades=50
+    ),
     "sid=220 (B30 STOCH+ATR, scalper)": BaselineConfig(sl_pct=7.18, tp_pct=0.85, target_trades=113),
-    "sid=186 (B18 STOCH+ATR, ultra-scalper)": BaselineConfig(sl_pct=7.9, tp_pct=0.5, target_trades=59),
-    "sid=185 (B18 RSI+STOCH, tail-win)": BaselineConfig(sl_pct=0.63, tp_pct=12.32, target_trades=69),
+    "sid=186 (B18 STOCH+ATR, ultra-scalper)": BaselineConfig(
+        sl_pct=7.9, tp_pct=0.5, target_trades=59
+    ),
+    "sid=185 (B18 RSI+STOCH, tail-win)": BaselineConfig(
+        sl_pct=0.63, tp_pct=12.32, target_trades=69
+    ),
     "sid=204 (B25 CCI+ROC, scalper)": BaselineConfig(sl_pct=5.44, tp_pct=0.91, target_trades=100),
-    "sid=199 (B23 CCI+ROC, ultra-scalper)": BaselineConfig(sl_pct=9.95, tp_pct=0.91, target_trades=88),
+    "sid=199 (B23 CCI+ROC, ultra-scalper)": BaselineConfig(
+        sl_pct=9.95, tp_pct=0.91, target_trades=88
+    ),
 }
 
 
@@ -558,7 +558,9 @@ def print_comparison_table(
         )
     lines.append("-" * 100)
     lines.append("")
-    lines.append("If %>=2.41 (stored Sharpe 2.0) > 10%, the SL/TP geometry alone explains the alpha.")
+    lines.append(
+        "If %>=2.41 (stored Sharpe 2.0) > 10%, the SL/TP geometry alone explains the alpha."
+    )
     lines.append("If %>=2.41 < 5%, indicator entry timing provides genuine value.")
     return "\n".join(lines)
 
@@ -577,7 +579,9 @@ def main() -> None:
     )
     parser.add_argument("--sl-pct", type=float, help="Stop loss %% (e.g. 0.59)")
     parser.add_argument("--tp-pct", type=float, help="Take profit %% (e.g. 10.55)")
-    parser.add_argument("--target-trades", type=int, default=50, help="Target trades per simulation")
+    parser.add_argument(
+        "--target-trades", type=int, default=50, help="Target trades per simulation"
+    )
     parser.add_argument("--start", type=str, default="2026-01-10", help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end", type=str, default="2026-03-10", help="End date (YYYY-MM-DD)")
     parser.add_argument("--symbol", type=str, default="BTCUSDT", help="Symbol")
@@ -590,9 +594,12 @@ def main() -> None:
         default=None,
         help="Champion's (annualized daily) Sharpe: report its Monte Carlo p-value",
     )
-    parser.add_argument("--archive", type=str, default=str(DEFAULT_ARCHIVE_PATH), help="Archive DB path")
     parser.add_argument(
-        "--all-champions", action="store_true",
+        "--archive", type=str, default=str(DEFAULT_ARCHIVE_PATH), help="Archive DB path"
+    )
+    parser.add_argument(
+        "--all-champions",
+        action="store_true",
         help="Run baseline for all champion SL/TP configs",
     )
     args = parser.parse_args()

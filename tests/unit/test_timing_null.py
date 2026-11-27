@@ -909,9 +909,7 @@ def _layouts(
     return [{sym: by_symbol[sym][d] for sym in spans} for d in range(draws)]
 
 
-def _entry_gap(
-    layouts: list[Layout], a: tuple[str, int], b: tuple[str, int]
-) -> set[int]:
+def _entry_gap(layouts: list[Layout], a: tuple[str, int], b: tuple[str, int]) -> set[int]:
     """Entry bar of the ``b`` trade minus the ``a`` trade (each named by symbol and hold)."""
     gaps: set[int] = set()
     for layout in layouts:
@@ -979,7 +977,9 @@ JOIN_EDGES = [
 
 @pytest.mark.parametrize(("a", "b", "spans", "joined"), JOIN_EDGES)
 def test_units_join_on_overlap_not_adjacency_and_on_pushed_ends(
-    a: tuple[str, int], b: tuple[str, int], spans: dict[str, list[list[tn.TradeSpan]]],
+    a: tuple[str, int],
+    b: tuple[str, int],
+    spans: dict[str, list[list[tn.TradeSpan]]],
     joined: int | None,
 ) -> None:
     gaps = _entry_gap(_layouts(spans), a, b)
@@ -1184,7 +1184,11 @@ def test_missing_seed_or_no_symbols_fail_closed() -> None:
     both = {s: [tape] for s in ("BTCUSDT", "ETHUSDT")}
     with pytest.raises(tn.TimingNullError) as err:  # per-coin seeds are not the book's
         tn.timing_null_check(
-            real, both, {s: [[]] for s in both}, seeds={"BTCUSDT": 1, "ETHUSDT": 2}, **common  # type: ignore[arg-type]
+            real,
+            both,
+            {s: [[]] for s in both},
+            seeds={"BTCUSDT": 1, "ETHUSDT": 2},
+            **common,  # type: ignore[arg-type]
         )
     assert str(err.value) == "Timing null: no null seed for BTCUSDT+ETHUSDT"
 

@@ -99,7 +99,11 @@ def _tiny_root_digest() -> str:
 
     h = hashlib.sha256(version("nautilus_trader").encode())
     repo = Path(__file__).resolve().parents[2]
-    for f in [Path(__file__).resolve(), SCRIPT_DIR / "plant.py", *sorted((repo / "vibe_quant" / "data").rglob("*.py"))]:
+    for f in [
+        Path(__file__).resolve(),
+        SCRIPT_DIR / "plant.py",
+        *sorted((repo / "vibe_quant" / "data").rglob("*.py")),
+    ]:
         h.update(f.read_bytes())
     return h.hexdigest()[:16]
 
@@ -164,11 +168,16 @@ def make_data_tree(tmp_path: Path) -> tuple[Path, Path, Path]:
     make_source_archive(data / "archive/raw_data.db", 2)
     real_db = tmp_path / "real.db"
     conn = sqlite3.connect(real_db)
-    conn.execute("CREATE TABLE backtest_runs (id INTEGER PRIMARY KEY, run_mode TEXT, created_at TEXT)")
+    conn.execute(
+        "CREATE TABLE backtest_runs (id INTEGER PRIMARY KEY, run_mode TEXT, created_at TEXT)"
+    )
     conn.executemany(
         "INSERT INTO backtest_runs (run_mode, created_at) VALUES (?, ?)",
-        [("discovery", "2026-10-01 10:00:00"), ("screening", "2026-10-02 10:00:00"),
-         ("discovery", "2026-10-03 10:00:00")],
+        [
+            ("discovery", "2026-10-01 10:00:00"),
+            ("screening", "2026-10-02 10:00:00"),
+            ("discovery", "2026-10-03 10:00:00"),
+        ],
     )
     conn.commit()
     conn.close()
@@ -191,7 +200,10 @@ def test_parent_pins_scratch_db_before_vibe_quant_import(preset: str) -> None:
         "print(os.environ['VIBE_QUANT_DB']); print(DEFAULT_DB_PATH.resolve()); print(layer2.REAL_DB)"
     )
     out = subprocess.run(
-        [sys.executable, "-c", code, str(SCRIPT_DIR)], env=env, capture_output=True, text=True,
+        [sys.executable, "-c", code, str(SCRIPT_DIR)],
+        env=env,
+        capture_output=True,
+        text=True,
         check=True,
     ).stdout.split("\n")
     pinned, default_path, real = out[0], out[1], out[2]
@@ -230,7 +242,9 @@ def test_snapshot_signatures_detect_any_change(
     assert layer2.compare_snapshot(snap, data, real_db, archive) == []
 
     # an untracked symbol may change freely
-    (data / "catalog/data/bar/ETHUSDT-PERP.BINANCE-4-HOUR-LAST-EXTERNAL/e.parquet").write_bytes(b"x")
+    (data / "catalog/data/bar/ETHUSDT-PERP.BINANCE-4-HOUR-LAST-EXTERNAL/e.parquet").write_bytes(
+        b"x"
+    )
     assert layer2.compare_snapshot(snap, data, real_db, archive) == []
 
     bar = data / "catalog/data/bar/BTCUSDT-PERP.BINANCE-4-HOUR-LAST-EXTERNAL/a.parquet"
@@ -247,7 +261,9 @@ def test_snapshot_signatures_detect_any_change(
     assert len(layer2.compare_snapshot(snap, data, real_db, archive)) == 1
     os.utime(bar, ns=(st.st_atime_ns, st.st_mtime_ns))
     (bar.parent / "extra.parquet").write_bytes(b"n")
-    assert any(p.startswith("new file") for p in layer2.compare_snapshot(snap, data, real_db, archive))
+    assert any(
+        p.startswith("new file") for p in layer2.compare_snapshot(snap, data, real_db, archive)
+    )
 
     # W-R3: another session's run shows up as a mismatch naming the new row
     (bar.parent / "extra.parquet").unlink()
@@ -274,8 +290,16 @@ def test_snapshot_signatures_detect_any_change(
     # baseline is never silently moved by a second `snapshot`
     cli_data, cli_db, cli_archive = make_data_tree(tmp_path / "cli")
     out = tmp_path / "out" / "layer2.json"
-    base = ["--out", str(out), "--data-root", str(cli_data), "--real-db", str(cli_db),
-            "--archive", str(cli_archive)]
+    base = [
+        "--out",
+        str(out),
+        "--data-root",
+        str(cli_data),
+        "--real-db",
+        str(cli_db),
+        "--archive",
+        str(cli_archive),
+    ]
     assert layer2.main([*base, "verify-untouched"]) == 2  # no snapshot yet
     assert layer2.main([*base, "snapshot"]) == 0
     first = json.loads(out.read_text())["snapshot"]
@@ -315,7 +339,10 @@ def test_found_criterion() -> None:
     )
     assert mirror["found"] is False and mirror["max_abs_corr"] == 0.7
     assert layer2.assess_found([], 2.0) == {
-        "found": False, "found_by": [], "max_abs_corr": None, "planted_train_S": 2.0,
+        "found": False,
+        "found_by": [],
+        "max_abs_corr": None,
+        "planted_train_S": 2.0,
     }
 
     # The calibrated threshold C_K replaces CORR_MIN; 0.537 clears 0.53, not 0.55,
@@ -351,7 +378,12 @@ def test_signed_corr_and_ann_sharpe_use_common_days() -> None:
     ("row", "rc", "timed_out", "want"),
     [
         (("completed", None), 0, False, {"status": "completed"}),
-        (("completed", None), 1, False, {"status": "failed", "error": "exit code 1, run status 'completed'"}),
+        (
+            ("completed", None),
+            1,
+            False,
+            {"status": "failed", "error": "exit code 1, run status 'completed'"},
+        ),
         (("running", None), -9, True, {"status": "timeout", "error": "killed after 600s"}),
     ],
 )
@@ -386,7 +418,9 @@ def test_run_discovery_isolation_and_polled_final_status(tmp_path: Path) -> None
         "con.execute(\"UPDATE backtest_runs SET status='completed' WHERE id=?\", (run_id,))\n"
         "con.commit()\n"
     )
-    rec = layer2.run_discovery(root, tmp_path / "r1", 7, command_fn=_fake_command(done), poll_s=0.05)
+    rec = layer2.run_discovery(
+        root, tmp_path / "r1", 7, command_fn=_fake_command(done), poll_s=0.05
+    )
     assert rec["status"] == "completed" and "error" not in rec and rec["seed"] == 7
     log = (tmp_path / "r1" / "run.log").read_text()
     assert f"CWD={root.resolve()}" in log
@@ -398,12 +432,16 @@ def test_run_discovery_isolation_and_polled_final_status(tmp_path: Path) -> None
         "con.execute(\"UPDATE backtest_runs SET status='failed', error_message=? WHERE id=?\","
         " ('MissingBarDataError: no bars', run_id))\ncon.commit()\nsys.exit(1)\n"
     )
-    rec = layer2.run_discovery(root, tmp_path / "r2", 1, command_fn=_fake_command(failed), poll_s=0.05)
+    rec = layer2.run_discovery(
+        root, tmp_path / "r2", 1, command_fn=_fake_command(failed), poll_s=0.05
+    )
     assert rec["status"] == "failed" and rec["error"] == "MissingBarDataError: no bars"
     assert "champions" not in rec
 
     killed = FAKE_HEAD + "import os, signal\nos.kill(os.getpid(), signal.SIGKILL)\n"
-    rec = layer2.run_discovery(root, tmp_path / "r3", 1, command_fn=_fake_command(killed), poll_s=0.05)
+    rec = layer2.run_discovery(
+        root, tmp_path / "r3", 1, command_fn=_fake_command(killed), poll_s=0.05
+    )
     assert rec["status"] == "failed" and rec["error"] == "exit code -9, run status 'pending'"
 
     # a child that outlives its timeout is killed and marked timeout, never completed
@@ -420,9 +458,17 @@ def _save_notes(db: Path, run_id: int, notes: dict[str, Any]) -> None:
     state = StateManager(db)
     state.save_backtest_result(
         run_id,
-        {"total_return": 0.0, "sharpe_ratio": 0.0, "max_drawdown": 0.0, "profit_factor": 0.0,
-         "total_trades": 0, "skewness": 0.0, "kurtosis": 3.0, "execution_time_seconds": 1.0,
-         "notes": json.dumps(notes)},
+        {
+            "total_return": 0.0,
+            "sharpe_ratio": 0.0,
+            "max_drawdown": 0.0,
+            "profit_factor": 0.0,
+            "total_trades": 0,
+            "skewness": 0.0,
+            "kurtosis": 3.0,
+            "execution_time_seconds": 1.0,
+            "notes": json.dumps(notes),
+        },
     )
     state.close()
 
@@ -431,31 +477,55 @@ def test_harvest_run_reports_champions_stages_and_isolation(tmp_path: Path) -> N
     db = tmp_path / "s.db"
     run_id = layer2.create_run(db)
     dsl = {"name": "genome_abc", "timeframe": "4h"}
-    _save_notes(db, run_id, {
-        "evaluated": 90, "outcome": None,
-        "dsr_trials": {"raw": 90, "gate_n": 90, "run_n_eff": 90, "prior_n": 0,
-                       "n_rule": N_RULE_EFFECTIVE},
-        "top_strategies": [{"dsl": dsl, "dsr": {"sharpe_daily": 0.1}}],
-        "guardrail_rejections": [
-            {"uid": "u1", "stage": "guardrails", "dsl": dsl},
-            {"uid": "u2", "stage": "holdout", "dsl": dsl},
-            {"uid": "u3", "stage": "guardrails", "dsl": dsl},
-        ],
-    })
+    _save_notes(
+        db,
+        run_id,
+        {
+            "evaluated": 90,
+            "outcome": None,
+            "dsr_trials": {
+                "raw": 90,
+                "gate_n": 90,
+                "run_n_eff": 90,
+                "prior_n": 0,
+                "n_rule": N_RULE_EFFECTIVE,
+            },
+            "top_strategies": [{"dsl": dsl, "dsr": {"sharpe_daily": 0.1}}],
+            "guardrail_rejections": [
+                {"uid": "u1", "stage": "guardrails", "dsl": dsl},
+                {"uid": "u2", "stage": "holdout", "dsl": dsl},
+                {"uid": "u3", "stage": "guardrails", "dsl": dsl},
+            ],
+        },
+    )
     h = layer2.harvest_run(db, run_id)
     assert h["champions"] == 1
     assert h["rejections_by_stage"] == {"guardrails": 2, "holdout": 1}
     assert h["r31"]["ok"] is True and h["evaluated"] == 90
     assert [(c["source"], c["uid"]) for c in h["candidates"]] == [
-        ("champion", "genome_abc"), ("rejected", "u1"), ("rejected", "u2"), ("rejected", "u3"),
+        ("champion", "genome_abc"),
+        ("rejected", "u1"),
+        ("rejected", "u2"),
+        ("rejected", "u3"),
     ]
 
     run2 = layer2.create_run(db)
-    _save_notes(db, run2, {
-        "evaluated": 90, "outcome": "no_viable_strategies", "top_strategies": [],
-        "dsr_trials": {"raw": 90, "gate_n": 94, "run_n_eff": 90, "prior_n": 4,
-                       "n_rule": N_RULE_EFFECTIVE},
-    })
+    _save_notes(
+        db,
+        run2,
+        {
+            "evaluated": 90,
+            "outcome": "no_viable_strategies",
+            "top_strategies": [],
+            "dsr_trials": {
+                "raw": 90,
+                "gate_n": 94,
+                "run_n_eff": 90,
+                "prior_n": 4,
+                "n_rule": N_RULE_EFFECTIVE,
+            },
+        },
+    )
     h2 = layer2.harvest_run(db, run2)
     assert h2["champions"] == 0 and h2["outcome"] == "no_viable_strategies"
     assert h2["r31"]["ok"] is False
@@ -466,33 +536,48 @@ def test_harvest_run_reads_the_full_ledger_counts(tmp_path: Path) -> None:
     a legacy run (no counts) is counted from its rows, a candidate failing two kinds once in each."""
     db = tmp_path / "s.db"
     run_id = layer2.create_run(db)
-    counts = {"total": 612, "by_stage": {"gate_pool_cap": 3, "guardrails": 600, "holdout": 9},
-              "by_kind": {"Bootstrap CI": 61, "DSR": 540, "Holdout": 9, "Top-K cap": 3}}
-    _save_notes(db, run_id, {
-        "evaluated": 700, "top_strategies": [], "rejection_counts": counts,
-        "guardrail_rejections": [{"uid": "u1", "stage": "guardrails", "reasons": ["DSR x"]}],
-    })
+    counts = {
+        "total": 612,
+        "by_stage": {"gate_pool_cap": 3, "guardrails": 600, "holdout": 9},
+        "by_kind": {"Bootstrap CI": 61, "DSR": 540, "Holdout": 9, "Top-K cap": 3},
+    }
+    _save_notes(
+        db,
+        run_id,
+        {
+            "evaluated": 700,
+            "top_strategies": [],
+            "rejection_counts": counts,
+            "guardrail_rejections": [{"uid": "u1", "stage": "guardrails", "reasons": ["DSR x"]}],
+        },
+    )
     h = layer2.harvest_run(db, run_id)
     assert h["rejections_by_stage"] == {"gate_pool_cap": 3, "guardrails": 600, "holdout": 9}
     assert h["rejections_total"] == 612
-    assert h["rejections_by_kind"] == {"Bootstrap CI": 61, "DSR": 540, "Holdout": 9,
-                                       "Top-K cap": 3}
+    assert h["rejections_by_kind"] == {"Bootstrap CI": 61, "DSR": 540, "Holdout": 9, "Top-K cap": 3}
 
     legacy = layer2.create_run(db)
-    _save_notes(db, legacy, {
-        "evaluated": 90, "top_strategies": [],
-        "guardrail_rejections": [
-            {"uid": "a", "stage": "guardrails",
-             "reasons": ["DSR not significant: p=0.4", "Bootstrap CI lower bound -0.1 <= 0"]},
-            {"uid": "b", "stage": "guardrails", "reasons": ["Too few trades: 3 < 50"]},
-            {"uid": "c", "stage": "holdout", "reasons": ["Holdout Sharpe -0.2 <= 0"]},
-        ],
-    })
+    _save_notes(
+        db,
+        legacy,
+        {
+            "evaluated": 90,
+            "top_strategies": [],
+            "guardrail_rejections": [
+                {
+                    "uid": "a",
+                    "stage": "guardrails",
+                    "reasons": ["DSR not significant: p=0.4", "Bootstrap CI lower bound -0.1 <= 0"],
+                },
+                {"uid": "b", "stage": "guardrails", "reasons": ["Too few trades: 3 < 50"]},
+                {"uid": "c", "stage": "holdout", "reasons": ["Holdout Sharpe -0.2 <= 0"]},
+            ],
+        },
+    )
     h2 = layer2.harvest_run(db, legacy)
     assert h2["rejections_by_stage"] == {"guardrails": 2, "holdout": 1}
     assert h2["rejections_total"] == 3
-    assert h2["rejections_by_kind"] == {"Bootstrap CI": 1, "DSR": 1, "Holdout": 1,
-                                        "Min trades": 1}
+    assert h2["rejections_by_kind"] == {"Bootstrap CI": 1, "DSR": 1, "Holdout": 1, "Min trades": 1}
     assert sum(h2["rejections_by_kind"].values()) == 4  # a = DSR AND bootstrap: kinds sum > total
 
 
@@ -558,7 +643,9 @@ def test_next_delta_secant_proportional_and_clamped() -> None:
     assert layer2.next_delta("btc2.0", [b(1e-5, -0.4)], 9.9) == pytest.approx(2e-5)
     assert layer2.next_delta("btc2.0", [b(1e-5, 1.0), b(2e-5, 1.0)], 9.9) == pytest.approx(4e-5)
     # btc5.0 calibrates on the TRAIN series toward 5.0
-    assert layer2.next_delta("btc5.0", [{"delta": 1e-5, "train_S": 2.5}], 9.9) == pytest.approx(2e-5)
+    assert layer2.next_delta("btc5.0", [{"delta": 1e-5, "train_S": 2.5}], 9.9) == pytest.approx(
+        2e-5
+    )
 
 
 @pytest.mark.slow(reason="plants and writes three real scratch catalogs (1m..1d)")
@@ -571,7 +658,9 @@ def test_build_one_plants_writes_scratch_and_reports_l_end(
     start = DAY0_MS + 2 * 86_400_000
     end = DAY0_MS + (days - 2) * 86_400_000
     monkeypatch.setattr(layer2, "plant_window_ms", lambda *_a: (start, end))
-    monkeypatch.setattr(layer2, "measure_build", lambda root, db, *_a: {"train_S": 5.5, "full_S": 2.0})
+    monkeypatch.setattr(
+        layer2, "measure_build", lambda root, db, *_a: {"train_S": 5.5, "full_S": 2.0}
+    )
     seen_kappa: list[dict[str, Any]] = []
     real_solve = plant.solve_kappa
 
@@ -631,15 +720,29 @@ def _stub_builder(
         return object()
 
     def fake_build(
-        variant: str, k: int, delta: float, _klines: object, _archive: Path, scratch: Path, _db: Path
+        variant: str,
+        k: int,
+        delta: float,
+        _klines: object,
+        _archive: Path,
+        scratch: Path,
+        _db: Path,
     ) -> dict[str, Any]:
         deltas.append(delta)
         root = layer2.build_root(scratch, variant, k)
         (root / "data" / "catalog").mkdir(parents=True, exist_ok=True)
         return {
-            "k": k, "root": str(root), "delta": delta, "kappa": 0.0, "l_end": 0.0,
-            "converged": True, "n_triggers": 9, "price_ratio": ratio, "price_ratio_gt_3": ratio > 3.0,
-            "train_S": trains[k - 1], "full_S": fulls[k - 1],
+            "k": k,
+            "root": str(root),
+            "delta": delta,
+            "kappa": 0.0,
+            "l_end": 0.0,
+            "converged": True,
+            "n_triggers": 9,
+            "price_ratio": ratio,
+            "price_ratio_gt_3": ratio > 3.0,
+            "train_S": trains[k - 1],
+            "full_S": fulls[k - 1],
         }
 
     monkeypatch.setattr(plant, "load_klines", fake_load)
@@ -648,8 +751,16 @@ def _stub_builder(
 
 
 def _cli(tmp_path: Path) -> list[str]:
-    return ["--out", str(tmp_path / "o" / "layer2.json"), "--data-root", str(tmp_path / "data"),
-            "--real-db", str(tmp_path / "none.db"), "--archive", str(tmp_path / "src.db")]
+    return [
+        "--out",
+        str(tmp_path / "o" / "layer2.json"),
+        "--data-root",
+        str(tmp_path / "data"),
+        "--real-db",
+        str(tmp_path / "none.db"),
+        "--archive",
+        str(tmp_path / "src.db"),
+    ]
 
 
 def test_build_calibrates_within_four_builds_and_gives_up_after_them(
@@ -672,8 +783,16 @@ def test_build_calibrates_within_four_builds_and_gives_up_after_them(
 
     # a variant that never lands in range stops at four builds: not_calibrated, exit 2
     out2 = tmp_path / "o2" / "layer2.json"
-    base2 = ["--out", str(out2), "--data-root", str(tmp_path / "data"),
-             "--real-db", str(tmp_path / "none.db"), "--archive", str(tmp_path / "src.db")]
+    base2 = [
+        "--out",
+        str(out2),
+        "--data-root",
+        str(tmp_path / "data"),
+        "--real-db",
+        str(tmp_path / "none.db"),
+        "--archive",
+        str(tmp_path / "src.db"),
+    ]
     deltas2 = _stub_builder(
         monkeypatch, trains=[0] * 8, fulls=[0.1, 0.2, 0.3, 0.4, 2.0, 2.0, 2.0, 2.0]
     )
@@ -701,7 +820,9 @@ def test_compare_exact_is_bitwise() -> None:
     got["sharpe"], got["trades"] = want["sharpe"], 68
     assert layer2.compare_exact(got, want) == ["trades: got 68 want 67"]
     assert layer2.EXPECTED_PLANTED_W3 == {
-        "sharpe": -0.3729222589307, "trades": 142, "return": -0.1734565196672771,
+        "sharpe": -0.3729222589307,
+        "trades": 142,
+        "return": -0.1734565196672771,
     }
 
 
@@ -710,8 +831,18 @@ def _chain_result(**over: Any) -> dict[str, Any]:
     res: dict[str, Any] = {
         "floor": True,
         "marginals": dict.fromkeys(
-            ("min_trades", "min_return", "complexity", "bootstrap", "buy_hold", "holdout",
-             "cross_window", "wfa"), True),
+            (
+                "min_trades",
+                "min_return",
+                "complexity",
+                "bootstrap",
+                "buy_hold",
+                "holdout",
+                "cross_window",
+                "wfa",
+            ),
+            True,
+        ),
         "dsr": {str(n): True for n in ns},
         "chain_full": {str(n): True for n in ns},
         "chain_recent": {str(n): True for n in ns},
@@ -733,7 +864,8 @@ def test_positive_control_failures_name_every_failed_gate(
     chain_full = _chain_result()["chain_full"]
     chain_full["167"] = False
     assert layer2.positive_control_failures(_chain_result(dsr=dsr, chain_full=chain_full)) == [
-        "dsr[167]", "chain_full[167]",
+        "dsr[167]",
+        "chain_full[167]",
     ]
     # an N outside the positive-control set does not fail it ...
     dsr = _chain_result()["dsr"]
@@ -746,16 +878,25 @@ def test_positive_control_failures_name_every_failed_gate(
     assert "marginals missing" in layer2.positive_control_failures(_chain_result(marginals={}))
     assert layer2.positive_control_failures({}) != []
 
-
     # ... and on a REAL tiny catalog: every gate is evaluated, and the ones the fixture
     # cannot pass are named by the same function (floor + min_trades here)
-    plan = plan_windows("2024-01-05", "2024-07-20", train_test_split=0.8, eval_windows=2,
-                        cross_window_months=(1,), wfa_oos_step_days=30)
+    plan = plan_windows(
+        "2024-01-05",
+        "2024-07-20",
+        train_test_split=0.8,
+        eval_windows=2,
+        cross_window_months=(1,),
+        wfa_oos_step_days=30,
+    )
     base = gatechain.settings_for("W3")
     cfg = replace(
-        base.config, start_date=plan.train_start, end_date=plan.train_end,
-        holdout_start_date=str(plan.holdout_start), holdout_end_date=str(plan.holdout_end),
-        cross_window_months=[1], wfa_oos_step_days=30,
+        base.config,
+        start_date=plan.train_start,
+        end_date=plan.train_end,
+        holdout_start_date=str(plan.holdout_start),
+        holdout_end_date=str(plan.holdout_end),
+        cross_window_months=[1],
+        wfa_oos_step_days=30,
     )
     tiny = gatechain.ChainSettings(name="TINY", config=cfg, plan=plan, symbols=("BTCUSDT",))
     monkeypatch.setattr(gatechain, "settings_for", lambda name: tiny)
@@ -763,8 +904,14 @@ def test_positive_control_failures_name_every_failed_gate(
     out = layer2.worker_chain({"root": str(tiny_root)})
     result = json.loads(json.dumps(out["result"], default=layer2._json_default))
     assert set(result["marginals"]) == {
-        "min_trades", "min_return", "complexity", "bootstrap", "buy_hold", "holdout",
-        "cross_window", "wfa",
+        "min_trades",
+        "min_return",
+        "complexity",
+        "bootstrap",
+        "buy_hold",
+        "holdout",
+        "cross_window",
+        "wfa",
     }
     assert out["holdout"]["total_trades"] > 0
     assert set(result["dsr"]) == {str(n) for n in gatechain.DSR_TRIALS}  # string keys after JSON
@@ -778,21 +925,35 @@ def test_positive_control_failures_name_every_failed_gate(
     [("btc5.0", True, 3), ("btc2.0", True, 0)],
 )
 def test_direct_chain_exit_code_stops_only_on_a_failed_positive_control(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variant: str, fail: bool, code: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    variant: str,
+    fail: bool,
+    code: int,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     out = tmp_path / "o" / "layer2.json"
     root = tmp_path / "scratch" / "r"
     (root / "data" / "catalog").mkdir(parents=True)
-    layer2.update_state(out, lambda s: layer2._variant(s, variant).update(accepted={"root": str(root)}, status="accepted"))
+    layer2.update_state(
+        out,
+        lambda s: layer2._variant(s, variant).update(
+            accepted={"root": str(root)}, status="accepted"
+        ),
+    )
     result = _chain_result(floor=not fail)
     # evaluate_candidate's output has int N keys; the CLI must cope after the JSON round trip
     result["dsr"] = {int(k): v for k, v in result["dsr"].items()}
     result["chain_recent"] = {int(k): v for k, v in result["chain_recent"].items()}
     result["chain_full"] = {int(k): v for k, v in result["chain_full"].items()}
     monkeypatch.setattr(
-        layer2, "run_worker",
-        lambda kind, r, payload, db, **kw: {"fitness": {"train_S": 5.0}, "holdout": {}, "result": result},
+        layer2,
+        "run_worker",
+        lambda kind, r, payload, db, **kw: {
+            "fitness": {"train_S": 5.0},
+            "holdout": {},
+            "result": result,
+        },
     )
     assert layer2.main([*_cli(tmp_path), "direct-chain", "--variant", variant]) == code
     rec = json.loads(out.read_text())["variants"][variant]["direct_chain"]
@@ -810,22 +971,46 @@ def test_check_btc0_cli_passes_only_on_bit_identical_numbers(
     out = tmp_path / "o" / "layer2.json"
     root = tmp_path / "scratch" / "btc0-b1"
     (root / "data" / "catalog").mkdir(parents=True)
-    layer2.update_state(out, lambda s: layer2._variant(s, "btc0").update(accepted={"root": str(root)}, status="accepted"))
+    layer2.update_state(
+        out,
+        lambda s: layer2._variant(s, "btc0").update(
+            accepted={"root": str(root)}, status="accepted"
+        ),
+    )
     monkeypatch.setattr(layer2, "read_strategy_239", lambda db: {"name": "s239"})
     good = {
-        "s239": {"tag": "s239", "sharpe": 0.8004025908124951, "trades": 67,
-                 "return": 0.16033190373604106, "profit_factor": 1.6395342752619133,
-                 "max_drawdown": 0.05714008057338487},
-        "planted_w3": {"tag": "planted_w3", "sharpe": -0.3729222589307, "trades": 142,
-                       "return": -0.1734565196672771, "profit_factor": 1.0, "max_drawdown": 0.3},
+        "s239": {
+            "tag": "s239",
+            "sharpe": 0.8004025908124951,
+            "trades": 67,
+            "return": 0.16033190373604106,
+            "profit_factor": 1.6395342752619133,
+            "max_drawdown": 0.05714008057338487,
+        },
+        "planted_w3": {
+            "tag": "planted_w3",
+            "sharpe": -0.3729222589307,
+            "trades": 142,
+            "return": -0.1734565196672771,
+            "profit_factor": 1.0,
+            "max_drawdown": 0.3,
+        },
     }
     seen: list[list[str]] = []
 
-    def worker(kind: str, r: Path, payload: dict[str, Any], db: Path, **kw: Any) -> list[dict[str, Any]]:
+    def worker(
+        kind: str, r: Path, payload: dict[str, Any], db: Path, **kw: Any
+    ) -> list[dict[str, Any]]:
         seen.append([j["tag"] for j in payload["jobs"]])
         assert r == root and payload["jobs"][1]["dsl"] == layer2.planted_dsl()
-        assert payload["jobs"][0]["start"] == "2024-01-01" and payload["jobs"][0]["end"] == "2026-03-17"
-        assert (payload["jobs"][1]["start"], payload["jobs"][1]["end"]) == ("2023-06-01", "2026-06-01")
+        assert (
+            payload["jobs"][0]["start"] == "2024-01-01"
+            and payload["jobs"][0]["end"] == "2026-03-17"
+        )
+        assert (payload["jobs"][1]["start"], payload["jobs"][1]["end"]) == (
+            "2023-06-01",
+            "2026-06-01",
+        )
         return [good["s239"], good["planted_w3"]]
 
     monkeypatch.setattr(layer2, "run_worker", worker)
@@ -844,8 +1029,14 @@ def test_check_btc0_cli_passes_only_on_bit_identical_numbers(
 
 def test_screen_worker_runs_in_the_scratch_root(tiny_root: Path, tmp_path: Path) -> None:
     jobs = [
-        {"tag": "a", "dsl": layer2.planted_dsl(), "start": "2024-01-10", "end": "2024-03-01",
-         "collect": True, "bh": True},
+        {
+            "tag": "a",
+            "dsl": layer2.planted_dsl(),
+            "start": "2024-01-10",
+            "end": "2024-03-01",
+            "collect": True,
+            "bh": True,
+        },
         {"tag": "b", "dsl": layer2.planted_dsl(), "start": "2024-01-10", "end": "2024-03-01"},
     ]
     a, b = layer2.run_worker("screen", tiny_root, {"jobs": jobs}, tmp_path / "w.db")
@@ -869,7 +1060,12 @@ def test_discover_cli_records_a_failed_run_and_never_zero_champions(
     out = tmp_path / "o" / "layer2.json"
     root = tmp_path / "o" / "scratch" / "btc2.0-b2"
     (root / "data" / "catalog").mkdir(parents=True)
-    layer2.update_state(out, lambda s: layer2._variant(s, "btc2.0").update(accepted={"root": str(root)}, status="accepted"))
+    layer2.update_state(
+        out,
+        lambda s: layer2._variant(s, "btc2.0").update(
+            accepted={"root": str(root)}, status="accepted"
+        ),
+    )
     failed = FAKE_HEAD + (
         "con.execute(\"UPDATE backtest_runs SET status='failed', error_message=? WHERE id=?\","
         " ('MissingBarDataError: no 1m bars', run_id))\ncon.commit()\nsys.exit(1)\n"
@@ -893,13 +1089,29 @@ def test_discover_cli_records_a_failed_run_and_never_zero_champions(
     # and the V4/V5 line shapes the report prints: both direct-chain readings, a found
     # seed alongside a timed-out one, and the btc0 null as info
     chain: dict[str, Any] = {"failures": [], "result": {}}
-    state = {"variants": {
-        "btc5.0": {"direct_chain": chain, "runs": {
-            "1": {"status": "completed", "harvest": {"champions": 0, "found": {"found": True, "max_abs_corr": 0.9}}},
-            "2": {"status": "timeout", "error": "killed after 600s"}}},
-        "btc2.0": {"direct_chain": {"failures": ["dsr[167]"], "result": {}}},
-        "btc0": {"runs": {"1": {"status": "completed", "harvest": {"champions": 0, "found": {"found": False, "max_abs_corr": 0.2}}}}},
-    }}
+    state = {
+        "variants": {
+            "btc5.0": {
+                "direct_chain": chain,
+                "runs": {
+                    "1": {
+                        "status": "completed",
+                        "harvest": {"champions": 0, "found": {"found": True, "max_abs_corr": 0.9}},
+                    },
+                    "2": {"status": "timeout", "error": "killed after 600s"},
+                },
+            },
+            "btc2.0": {"direct_chain": {"failures": ["dsr[167]"], "result": {}}},
+            "btc0": {
+                "runs": {
+                    "1": {
+                        "status": "completed",
+                        "harvest": {"champions": 0, "found": {"found": False, "max_abs_corr": 0.2}},
+                    }
+                }
+            },
+        }
+    }
     lines = layer2.verdict_lines(state)
     assert lines[0] == "V4 btc5.0 direct chain [positive control]: PASS"
     assert lines[1] == "V4 btc2.0 direct chain [report only]: FAIL (dsr[167])"
@@ -928,13 +1140,21 @@ def test_relative_paths_survive_cwd_change_in_real_children(
 
     out = Path("o") / "layer2.json"
     layer2.update_state(
-        out, lambda s: layer2._variant(s, "btc2.0").update(accepted={"root": str(rel_root)}, status="accepted")
+        out,
+        lambda s: layer2._variant(s, "btc2.0").update(
+            accepted={"root": str(rel_root)}, status="accepted"
+        ),
     )
     base = ["--out", str(out), "--data-root", "data", "--real-db", "none.db", "--archive", "src.db"]
-    assert layer2.main([*base, "discover", "--variant", "btc2.0", "--seed", "1", "--timeout", "120"]) == 0
+    assert (
+        layer2.main([*base, "discover", "--variant", "btc2.0", "--seed", "1", "--timeout", "120"])
+        == 0
+    )
     rec = json.loads(out.read_text())["variants"]["btc2.0"]["runs"]["1"]
     log = Path(rec["log"]).read_text()
-    assert "unable to open database" not in log and "unable to open database" not in rec.get("error", "")
+    assert "unable to open database" not in log and "unable to open database" not in rec.get(
+        "error", ""
+    )
     assert rec["run_id"] == 1 and "run status 'pending'" not in rec.get("error", "")
     assert Path(rec["db"]).is_absolute() and Path(rec["root"]).is_absolute()
 
@@ -1008,7 +1228,10 @@ def test_price_ratio_over_3x_fails_closed_and_blocks_downstream(
     assert layer2.main([*_cli(tmp_path), "build", "--variant", "btc5.0"]) == 2
     assert len(deltas) == 1
     monkeypatch.setattr(layer2, "run_worker", lambda *a, **k: pytest.fail("ran downstream"))
-    for cmd in (["direct-chain", "--variant", "btc5.0"], ["discover", "--variant", "btc5.0", "--seed", "1"]):
+    for cmd in (
+        ["direct-chain", "--variant", "btc5.0"],
+        ["discover", "--variant", "btc5.0", "--seed", "1"],
+    ):
         assert layer2.main([*_cli(tmp_path), *cmd]) == 2
     # exactly 3.0 is still allowed
     _stub_builder(monkeypatch, trains=[5.0] * 4, fulls=[2.0] * 4, ratio=3.0)
@@ -1031,22 +1254,42 @@ def test_discovery_command_budget_flags() -> None:
     appear exactly once and carry the requested values."""
     default = layer2.discovery_command(5, Path("/x/s.db"), 2)
     assert default == [
-        sys.executable, "-m", "vibe_quant", "discovery",
-        "--run-id", "5", "--db", "/x/s.db",
-        "--symbols", "BTCUSDT",
-        "--timeframe", "4h",
-        "--start-date", "2023-06-01",
-        "--end-date", "2026-06-01",
-        "--indicator-pool", "ROC,DONCHIAN,RSI,CCI,NATR",
-        "--population-size", "12",
-        "--max-generations", "4",
-        "--eval-windows", "2",
-        "--train-test-split", "0.8",
-        "--direction", "both",
-        "--max-workers", "3",
-        "--seed", "2",
-        "--dsr-rule", "emax",  # explicit pin: the CLI default is q95
-        "--gate-pool", "top_k",  # explicit pin: the CLI default is all (user Q16, 2026-11-23)
+        sys.executable,
+        "-m",
+        "vibe_quant",
+        "discovery",
+        "--run-id",
+        "5",
+        "--db",
+        "/x/s.db",
+        "--symbols",
+        "BTCUSDT",
+        "--timeframe",
+        "4h",
+        "--start-date",
+        "2023-06-01",
+        "--end-date",
+        "2026-06-01",
+        "--indicator-pool",
+        "ROC,DONCHIAN,RSI,CCI,NATR",
+        "--population-size",
+        "12",
+        "--max-generations",
+        "4",
+        "--eval-windows",
+        "2",
+        "--train-test-split",
+        "0.8",
+        "--direction",
+        "both",
+        "--max-workers",
+        "3",
+        "--seed",
+        "2",
+        "--dsr-rule",
+        "emax",  # explicit pin: the CLI default is q95
+        "--gate-pool",
+        "top_k",  # explicit pin: the CLI default is all (user Q16, 2026-11-23)
     ]
     assert "--seed-from-run" not in default
 
@@ -1078,7 +1321,12 @@ def test_discovery_command_budget_flags() -> None:
 
     # the appended pair order: a warm seed run goes before the pinned rule
     assert layer2.discovery_command(5, Path("/x/s.db"), 2, pop=7, gens=3, seed_run=9)[-6:] == [
-        "--seed-from-run", "9", "--dsr-rule", "emax", "--gate-pool", "top_k"
+        "--seed-from-run",
+        "9",
+        "--dsr-rule",
+        "emax",
+        "--gate-pool",
+        "top_k",
     ]
 
     # an explicit pool replaces the top_k pin (one pair, no duplicate)
@@ -1116,7 +1364,10 @@ def test_discover_label_records_followup_runs(
     root = tmp_path / "o" / "scratch" / "btc5.0-b1"
     (root / "data" / "catalog").mkdir(parents=True)
     layer2.update_state(
-        out, lambda s: layer2._variant(s, "btc5.0").update(accepted={"root": str(root)}, status="accepted")
+        out,
+        lambda s: layer2._variant(s, "btc5.0").update(
+            accepted={"root": str(root)}, status="accepted"
+        ),
     )
     before = layer2.verdict_lines(layer2.load_state(out))
 
@@ -1166,9 +1417,12 @@ def test_create_seed_run_makes_the_warm_start_row(tmp_path: Path) -> None:
             layer2.planted_chromosome()
         )
         assert loaded[0].direction is Direction.LONG
-        assert prior_discovery_trials(
-            state, run_id, layer2.TIMEFRAME, layer2.train_window()
-        ) == (0, [], 0, 0)
+        assert prior_discovery_trials(state, run_id, layer2.TIMEFRAME, layer2.train_window()) == (
+            0,
+            [],
+            0,
+            0,
+        )
     finally:
         state.close()
 
@@ -1188,7 +1442,10 @@ def test_warm_discover_seeds_the_runs_own_db_before_the_run(
     root = tmp_path / "o" / "scratch" / "btc5.0-b1"
     (root / "data" / "catalog").mkdir(parents=True)
     layer2.update_state(
-        out, lambda s: layer2._variant(s, "btc5.0").update(accepted={"root": str(root)}, status="accepted")
+        out,
+        lambda s: layer2._variant(s, "btc5.0").update(
+            accepted={"root": str(root)}, status="accepted"
+        ),
     )
     seen: list[dict[str, Any]] = []
 
@@ -1197,15 +1454,21 @@ def test_warm_discover_seeds_the_runs_own_db_before_the_run(
         return _done_child()(run_id, db, seed)
 
     monkeypatch.setattr(layer2, "discovery_command", fake)
-    assert layer2.main([*_cli(tmp_path), "discover", "--variant", "btc5.0", "--seed", "1", "--warm"]) == 0
+    assert (
+        layer2.main([*_cli(tmp_path), "discover", "--variant", "btc5.0", "--seed", "1", "--warm"])
+        == 0
+    )
     assert seen == [{"seed_run": 1}]  # defaults are not forwarded: the argv is unchanged
     rec = layer2.load_state(out)["variants"]["btc5.0"]["runs"]["1"]
     assert rec["run_id"] == 2
     state = StateManager(Path(rec["db"]))
     try:
-        assert prior_discovery_trials(
-            state, 2, layer2.TIMEFRAME, layer2.train_window()
-        ) == (0, [], 0, 0)
+        assert prior_discovery_trials(state, 2, layer2.TIMEFRAME, layer2.train_window()) == (
+            0,
+            [],
+            0,
+            0,
+        )
     finally:
         state.close()
 
@@ -1221,8 +1484,17 @@ def test_rescreen_refuses_an_unknown_uid_and_screens_every_root(
     db = tmp_path / "o" / "run.db"
     db.parent.mkdir(parents=True)
     run_id = layer2.create_run(db)
-    _save_notes(db, run_id, {"evaluated": 2, "top_strategies": [], "guardrail_rejections": [
-        {"uid": u, "stage": "guardrails", "dsl": {"name": u}} for u in ("u-a", "u-b")]})
+    _save_notes(
+        db,
+        run_id,
+        {
+            "evaluated": 2,
+            "top_strategies": [],
+            "guardrail_rejections": [
+                {"uid": u, "stage": "guardrails", "dsl": {"name": u}} for u in ("u-a", "u-b")
+            ],
+        },
+    )
 
     def seed(s: dict[str, Any]) -> None:
         for variant in ("btc0", "btc2.0", "btc5.0"):
@@ -1231,16 +1503,23 @@ def test_rescreen_refuses_an_unknown_uid_and_screens_every_root(
             roots[variant] = root
             layer2._variant(s, variant).update(accepted={"root": str(root)}, status="accepted")
         layer2._variant(s, "btc2.0")["runs"] = {
-            "2": {"status": "completed", "run_id": run_id, "db": str(db),
-                  "harvest": {"candidates": candidates}}
+            "2": {
+                "status": "completed",
+                "run_id": run_id,
+                "db": str(db),
+                "harvest": {"candidates": candidates},
+            }
         }
 
     layer2.update_state(out, seed)
 
     monkeypatch.setattr(layer2, "run_worker", lambda *a, **k: pytest.fail("screened an absent uid"))
-    assert layer2.main(
-        [*_cli(tmp_path), "rescreen", "--run-variant", "btc2.0", "--seed", "2", "--uid", "nope"]
-    ) == 2
+    assert (
+        layer2.main(
+            [*_cli(tmp_path), "rescreen", "--run-variant", "btc2.0", "--seed", "2", "--uid", "nope"]
+        )
+        == 2
+    )
     assert "nope" in capsys.readouterr().out
     assert "rescreen" not in layer2.load_state(out)
 
@@ -1256,9 +1535,21 @@ def test_rescreen_refuses_an_unknown_uid_and_screens_every_root(
     monkeypatch.setattr(layer2, "run_worker", fake_worker)
     for uid in ("u-a", "u-b"):
         calls.clear()
-        assert layer2.main(
-            [*_cli(tmp_path), "rescreen", "--run-variant", "btc2.0", "--seed", "2", "--uid", uid]
-        ) == 0
+        assert (
+            layer2.main(
+                [
+                    *_cli(tmp_path),
+                    "rescreen",
+                    "--run-variant",
+                    "btc2.0",
+                    "--seed",
+                    "2",
+                    "--uid",
+                    uid,
+                ]
+            )
+            == 0
+        )
         assert [c[0] for c in calls] == [str(roots[v]) for v in ("btc0", "btc2.0", "btc5.0")]
         for _r, jobs in calls:
             assert [tag for tag, _dsl in jobs] == ["planted", "planted_both", "candidate"]
@@ -1292,7 +1583,8 @@ def test_harvest_followup_refuses_without_the_null_record(
     layer2.update_state(
         tmp_path / "o" / "layer2.json",
         lambda s: s.__setitem__(
-            layer2.NULL_RECORD_KEY, {"status": "completed", "m": 600, "reps": 2000, "k": [40], "seed": 7}
+            layer2.NULL_RECORD_KEY,
+            {"status": "completed", "m": 600, "reps": 2000, "k": [40], "seed": 7},
         ),
     )
     assert layer2.main([*base, "harvest", "--followup"]) == 0
@@ -1396,20 +1688,41 @@ def test_harvest_followup_applies_the_calibrated_threshold(tmp_path: Path) -> No
     )
 
     def seed(s: dict[str, Any]) -> None:
-        layer2._variant(s, "btc0")["runs"] = {"1": {
-            "status": "completed", "pop": 12, "gens": 4,
-            "harvest": {"r31": {"ok": True},
-                        "candidates": [{"uid": "b0", "corr": 0.9, "train_S": 0.5}]},
-        }}
-        layer2._variant(s, "btc2.0")["runs"] = {"2": {
-            "status": "completed", "pop": 12, "gens": 4,
-            "harvest": {"r31": {"ok": True}, "evaluated": 41, "found": {"planted_train_S": 2.0},
-                        "candidates": [{"uid": "lo", "corr": 0.8, "train_S": 2.0},
-                                       {"uid": "hi", "corr": 0.95, "train_S": 2.0}]},
-        }}
+        layer2._variant(s, "btc0")["runs"] = {
+            "1": {
+                "status": "completed",
+                "pop": 12,
+                "gens": 4,
+                "harvest": {
+                    "r31": {"ok": True},
+                    "candidates": [{"uid": "b0", "corr": 0.9, "train_S": 0.5}],
+                },
+            }
+        }
+        layer2._variant(s, "btc2.0")["runs"] = {
+            "2": {
+                "status": "completed",
+                "pop": 12,
+                "gens": 4,
+                "harvest": {
+                    "r31": {"ok": True},
+                    "evaluated": 41,
+                    "found": {"planted_train_S": 2.0},
+                    "candidates": [
+                        {"uid": "lo", "corr": 0.8, "train_S": 2.0},
+                        {"uid": "hi", "corr": 0.95, "train_S": 2.0},
+                    ],
+                },
+            }
+        }
         s[layer2.NULL_RECORD_KEY] = {
-            "status": "completed", "m": 40, "reps": 25, "k": [], "thresholds": {},
-            "seed": 0, "pool_path": str(pool_path),
+            "status": "completed",
+            "m": 40,
+            "reps": 25,
+            "k": [],
+            "thresholds": {},
+            "seed": 0,
+            "pool_path": str(pool_path),
         }
 
     layer2.update_state(out, seed)
@@ -1435,13 +1748,23 @@ def test_worker_chain_scores_through_the_shared_w3_cell_fns(
 ) -> None:
     """The T2 extraction: worker_chain builds its train/holdout functions through the ONE shared
     ``_w3_cell_fns()``, and its gate output is byte-for-byte the pre-extraction output."""
-    plan = plan_windows("2024-01-05", "2024-07-20", train_test_split=0.8, eval_windows=2,
-                        cross_window_months=(1,), wfa_oos_step_days=30)
+    plan = plan_windows(
+        "2024-01-05",
+        "2024-07-20",
+        train_test_split=0.8,
+        eval_windows=2,
+        cross_window_months=(1,),
+        wfa_oos_step_days=30,
+    )
     base = gatechain.settings_for("W3")
     cfg = replace(
-        base.config, start_date=plan.train_start, end_date=plan.train_end,
-        holdout_start_date=str(plan.holdout_start), holdout_end_date=str(plan.holdout_end),
-        cross_window_months=[1], wfa_oos_step_days=30,
+        base.config,
+        start_date=plan.train_start,
+        end_date=plan.train_end,
+        holdout_start_date=str(plan.holdout_start),
+        holdout_end_date=str(plan.holdout_end),
+        cross_window_months=[1],
+        wfa_oos_step_days=30,
     )
     tiny = gatechain.ChainSettings(name="TINY", config=cfg, plan=plan, symbols=("BTCUSDT",))
     monkeypatch.setattr(gatechain, "settings_for", lambda name: tiny)
@@ -1458,17 +1781,27 @@ def test_worker_chain_scores_through_the_shared_w3_cell_fns(
     assert calls == [True]
     result = json.loads(json.dumps(out["result"], default=layer2._json_default))
     assert out["fitness"] == {
-        "sharpe_ratio": -1.0, "total_trades": 3, "total_return": 0.0,
-        "adjusted_score": 0.0, "train_S": None,
+        "sharpe_ratio": -1.0,
+        "total_trades": 3,
+        "total_return": 0.0,
+        "adjusted_score": 0.0,
+        "train_S": None,
     }
     assert out["holdout"] == {
-        "sharpe_ratio": -2.573613849446848, "total_trades": 1,
+        "sharpe_ratio": -2.573613849446848,
+        "total_trades": 1,
         "total_return": -0.019949909330000053,
     }
     assert result["floor"] is False
     assert result["marginals"] == {
-        "min_trades": False, "min_return": True, "complexity": True, "bootstrap": False,
-        "buy_hold": False, "holdout": False, "cross_window": False, "wfa": False,
+        "min_trades": False,
+        "min_return": True,
+        "complexity": True,
+        "bootstrap": False,
+        "buy_hold": False,
+        "holdout": False,
+        "cross_window": False,
+        "wfa": False,
     }
 
 
@@ -1476,9 +1809,18 @@ def test_worker_chain_scores_through_the_shared_w3_cell_fns(
 
 
 def _bad_isolation_notes() -> dict[str, Any]:
-    return {"evaluated": 53, "top_strategies": [],
-            "dsr_trials": {"raw": 53, "gate_n": 55, "run_n_eff": 53, "prior_n": 2,
-                           "n_rule": N_RULE_EFFECTIVE, "dsr_rule": "emax"}}
+    return {
+        "evaluated": 53,
+        "top_strategies": [],
+        "dsr_trials": {
+            "raw": 53,
+            "gate_n": 55,
+            "run_n_eff": 53,
+            "prior_n": 2,
+            "n_rule": N_RULE_EFFECTIVE,
+            "dsr_rule": "emax",
+        },
+    }
 
 
 def _seed_roots(out: Path, scratch: Path, variants: tuple[str, ...]) -> dict[str, Path]:
@@ -1506,13 +1848,29 @@ def test_rescreen_resolves_the_dsl_through_the_real_harvest_record(
     db.parent.mkdir(parents=True)
     run_id = layer2.create_run(db)
     dsl = {"name": "genome_zz", "timeframe": "4h", "marker": 7}
-    _save_notes(db, run_id, {
-        "evaluated": 90, "dsr_trials": {"raw": 90, "gate_n": 90, "run_n_eff": 90, "prior_n": 0,
-                       "n_rule": N_RULE_EFFECTIVE, "dsr_rule": "emax"},
-        "top_strategies": [], "guardrail_rejections": [{"uid": "rej9", "stage": "holdout", "dsl": dsl}],
-    })
-    layer2.update_state(out, lambda s: layer2._variant(s, "btc2.0").__setitem__("runs", {
-        "2": {"status": "completed", "run_id": run_id, "db": str(db)}}))
+    _save_notes(
+        db,
+        run_id,
+        {
+            "evaluated": 90,
+            "dsr_trials": {
+                "raw": 90,
+                "gate_n": 90,
+                "run_n_eff": 90,
+                "prior_n": 0,
+                "n_rule": N_RULE_EFFECTIVE,
+                "dsr_rule": "emax",
+            },
+            "top_strategies": [],
+            "guardrail_rejections": [{"uid": "rej9", "stage": "holdout", "dsl": dsl}],
+        },
+    )
+    layer2.update_state(
+        out,
+        lambda s: layer2._variant(s, "btc2.0").__setitem__(
+            "runs", {"2": {"status": "completed", "run_id": run_id, "db": str(db)}}
+        ),
+    )
 
     def fake_worker(kind: str, r: Path, payload: dict[str, Any], dbp: Path, **kw: Any) -> Any:
         return [
@@ -1532,16 +1890,17 @@ def test_rescreen_resolves_the_dsl_through_the_real_harvest_record(
         return fake_worker(kind, r, payload, dbp)
 
     monkeypatch.setattr(layer2, "run_worker", spy_worker)
-    assert layer2.main(
-        [*_cli(tmp_path), "rescreen", "--run-variant", "btc2.0", "--seed", "2", "--uid", "rej9"]
-    ) == 0
+    assert (
+        layer2.main(
+            [*_cli(tmp_path), "rescreen", "--run-variant", "btc2.0", "--seed", "2", "--uid", "rej9"]
+        )
+        == 0
+    )
     assert seen == [dsl, dsl, dsl]
     assert "rej9" in layer2.load_state(out)["rescreen"]
 
 
-@pytest.mark.parametrize(
-    "label", ["../up", "a/b"]
-)
+@pytest.mark.parametrize("label", ["../up", "a/b"])
 def test_discover_label_must_be_one_safe_component(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], label: str
 ) -> None:
@@ -1550,9 +1909,19 @@ def test_discover_label_must_be_one_safe_component(
     _seed_roots(out, tmp_path / "o" / "scratch", ("btc5.0",))
     monkeypatch.setattr(layer2, "run_discovery", lambda *a, **k: pytest.fail("launched"))
     before = {p for p in tmp_path.rglob("*")}
-    rc = layer2.main([
-        *_cli(tmp_path), "discover", "--variant", "btc5.0", "--seed", "1", "--warm", "--label", label,
-    ])
+    rc = layer2.main(
+        [
+            *_cli(tmp_path),
+            "discover",
+            "--variant",
+            "btc5.0",
+            "--seed",
+            "1",
+            "--warm",
+            "--label",
+            label,
+        ]
+    )
     assert rc == 2
     assert "label" in capsys.readouterr().out
     assert {p for p in tmp_path.rglob("*")} == before
@@ -1572,11 +1941,17 @@ def _followup_state(
     _seed_roots(out, tmp_path / "o" / "scratch", ("btc0", "btc5.0"))
 
     def seed(s: dict[str, Any]) -> None:
-        layer2._variant(s, "btc0")["runs"] = {"1": {
-            "status": "completed", "pop": 12, "gens": 4,
-            "harvest": {"r31": {"ok": btc0_r31_ok},
-                        "candidates": [{"uid": "b0", "corr": 0.49, "train_S": 0.5}]},
-        }}
+        layer2._variant(s, "btc0")["runs"] = {
+            "1": {
+                "status": "completed",
+                "pop": 12,
+                "gens": 4,
+                "harvest": {
+                    "r31": {"ok": btc0_r31_ok},
+                    "candidates": [{"uid": "b0", "corr": 0.49, "train_S": 0.5}],
+                },
+            }
+        }
         run: dict[str, Any] = {"status": "completed", "pop": 12, "gens": 4, "run_id": 1}
         if fresh:
             db = tmp_path / "o" / "scratch" / "runs" / "btc5.0-seed1" / "state.db"
@@ -1586,13 +1961,20 @@ def _followup_state(
             run.update(db=str(db), run_id=rid)
         else:
             run["harvest"] = {
-                "r31": {"ok": btc5_r31_ok}, "evaluated": 53, "found": {"planted_train_S": 2.0},
+                "r31": {"ok": btc5_r31_ok},
+                "evaluated": 53,
+                "found": {"planted_train_S": 2.0},
                 "candidates": [{"uid": "hi", "corr": 0.51, "train_S": 1.0}],
             }
         layer2._variant(s, "btc5.0")["runs"] = {"1": run}
         s[layer2.NULL_RECORD_KEY] = {
-            "status": "completed", "m": 40, "reps": 25, "k": [], "thresholds": {},
-            "seed": 0, "pool_path": str(pool_path),
+            "status": "completed",
+            "m": 40,
+            "reps": 25,
+            "k": [],
+            "thresholds": {},
+            "seed": 0,
+            "pool_path": str(pool_path),
         }
 
     layer2.update_state(out, seed)
@@ -1608,14 +1990,18 @@ def _followup_state(
     ],
 )
 def test_harvest_followup_fails_closed_on_isolation_violation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
-    kwargs: dict[str, Any], tag: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    kwargs: dict[str, Any],
+    tag: str,
 ) -> None:
     """Any run (cached, newly harvested, btc0 comparator) with r31.ok False gives exit 3 and
     persists no found_cal / calibration / thresholds."""
     out = _followup_state(tmp_path, fresh=kwargs["btc5_r31_ok"] is None, **kwargs)
     monkeypatch.setattr(
-        layer2, "run_worker",
+        layer2,
+        "run_worker",
         lambda kind, r, payload, dbp, **kw: [
             {"tag": j["tag"], "trades": 3, "mtm": {"first_day": 0, "values": [0.1, 0.2, 0.3, 0.4]}}
             for j in payload["jobs"]
@@ -1630,11 +2016,23 @@ def test_harvest_followup_fails_closed_on_isolation_violation(
 
     # the same state with every run isolated scores normally
     ok = _followup_state(tmp_path / "ok", btc5_r31_ok=True)
-    assert layer2.main([
-        "--out", str(ok), "--data-root", str(tmp_path / "data"),
-        "--real-db", str(tmp_path / "none.db"), "--archive", str(tmp_path / "src.db"),
-        "harvest", "--followup",
-    ]) == 0
+    assert (
+        layer2.main(
+            [
+                "--out",
+                str(ok),
+                "--data-root",
+                str(tmp_path / "data"),
+                "--real-db",
+                str(tmp_path / "none.db"),
+                "--archive",
+                str(tmp_path / "src.db"),
+                "harvest",
+                "--followup",
+            ]
+        )
+        == 0
+    )
     cal = layer2.load_state(ok)["variants"]["btc5.0"]["runs"]["1"]["harvest"]["calibration"]
     assert cal["found_cal"] is True
 
@@ -1652,8 +2050,18 @@ def _record_followup_label(out: Path, label: str, record: dict[str, Any]) -> Non
 def _discover_label_args(
     tmp_path: Path, variant: str, label: str, *, force: bool = False, sub: tuple[str, ...] = ()
 ) -> list[str]:
-    return [*_cli(tmp_path), *(["--force"] if force else []),
-            "discover", "--variant", variant, "--seed", "1", "--label", label, *sub]
+    return [
+        *_cli(tmp_path),
+        *(["--force"] if force else []),
+        "discover",
+        "--variant",
+        variant,
+        "--seed",
+        "1",
+        "--label",
+        label,
+        *sub,
+    ]
 
 
 @pytest.mark.parametrize("force", [False, True], ids=["plain", "force"])
@@ -1664,9 +2072,17 @@ def test_7vn2j_discover_label_owned_by_another_variant_fails_closed(
     nothing (not even the run dir) and leaves the btc0 comparator record byte-identical."""
     out = tmp_path / "o" / "layer2.json"
     _seed_roots(out, tmp_path / "o" / "scratch", ("btc0", "btc5.0"))
-    _record_followup_label(out, "w1", {
-        "status": "completed", "variant": "btc0", "label": "w1", "seed": 1, "run_id": 4,
-    })
+    _record_followup_label(
+        out,
+        "w1",
+        {
+            "status": "completed",
+            "variant": "btc0",
+            "label": "w1",
+            "seed": 1,
+            "run_id": 4,
+        },
+    )
     before = out.read_bytes()
     monkeypatch.setattr(layer2, "discovery_command", lambda *a, **k: pytest.fail("launched"))
     monkeypatch.setattr(layer2, "run_discovery", lambda *a, **k: pytest.fail("launched"))
@@ -1706,9 +2122,17 @@ def test_7vn2j_discover_label_same_variant_still_already_recorded(
     and launches nothing."""
     out = tmp_path / "o" / "layer2.json"
     _seed_roots(out, tmp_path / "o" / "scratch", ("btc5.0",))
-    _record_followup_label(out, "w1", {
-        "status": "completed", "variant": "btc5.0", "label": "w1", "seed": 1, "run_id": 4,
-    })
+    _record_followup_label(
+        out,
+        "w1",
+        {
+            "status": "completed",
+            "variant": "btc5.0",
+            "label": "w1",
+            "seed": 1,
+            "run_id": 4,
+        },
+    )
     before = out.read_bytes()
     monkeypatch.setattr(layer2, "discovery_command", lambda *a, **k: pytest.fail("relaunched"))
     assert layer2.main(_discover_label_args(tmp_path, "btc5.0", "w1")) == 0
@@ -1719,13 +2143,30 @@ def test_7vn2j_discover_label_same_variant_still_already_recorded(
     # by another variant never blocks it
     unlabelled = tmp_path / "unlabelled" / "o" / "layer2.json"
     _seed_roots(unlabelled, tmp_path / "unlabelled" / "o" / "scratch", ("btc5.0",))
-    _record_followup_label(unlabelled, "w1", {"status": "completed", "variant": "btc0", "label": "w1"})
+    _record_followup_label(
+        unlabelled, "w1", {"status": "completed", "variant": "btc0", "label": "w1"}
+    )
     monkeypatch.setattr(layer2, "discovery_command", _done_child())
-    assert layer2.main([
-        "--out", str(unlabelled), "--data-root", str(tmp_path / "data"),
-        "--real-db", str(tmp_path / "none.db"), "--archive", str(tmp_path / "src.db"),
-        "discover", "--variant", "btc5.0", "--seed", "3",
-    ]) == 0
+    assert (
+        layer2.main(
+            [
+                "--out",
+                str(unlabelled),
+                "--data-root",
+                str(tmp_path / "data"),
+                "--real-db",
+                str(tmp_path / "none.db"),
+                "--archive",
+                str(tmp_path / "src.db"),
+                "discover",
+                "--variant",
+                "btc5.0",
+                "--seed",
+                "3",
+            ]
+        )
+        == 0
+    )
     state = layer2.load_state(unlabelled)
     assert state["variants"]["btc5.0"]["runs"]["3"]["status"] == "completed"
     assert state[layer2.FOLLOWUP_RUNS_KEY]["w1"]["variant"] == "btc0"
@@ -1737,9 +2178,17 @@ def test_7vn2j_discover_label_same_variant_force_reruns_and_replaces(
     """--force on the owning variant still re-runs the label and replaces its record."""
     out = tmp_path / "o" / "layer2.json"
     _seed_roots(out, tmp_path / "o" / "scratch", ("btc5.0",))
-    _record_followup_label(out, "w1", {
-        "status": "failed", "variant": "btc5.0", "label": "w1", "seed": 9, "run_id": 4,
-    })
+    _record_followup_label(
+        out,
+        "w1",
+        {
+            "status": "failed",
+            "variant": "btc5.0",
+            "label": "w1",
+            "seed": 9,
+            "run_id": 4,
+        },
+    )
     seen: list[tuple[int, dict[str, Any]]] = []
 
     def fake(run_id: int, db: Path, seed: int, **kw: Any) -> list[str]:
@@ -1768,8 +2217,18 @@ def _null_entries(payload: dict[str, Any]) -> list[dict[str, Any]]:
 def _null_corr_args(
     tmp_path: Path, m: int, shards: int, *, seed: int = 0, reps: int = 5
 ) -> list[str]:
-    return [*_cli(tmp_path), "null-corr", "--m", str(m), "--shards", str(shards),
-            "--reps", str(reps), "--seed", str(seed)]
+    return [
+        *_cli(tmp_path),
+        "null-corr",
+        "--m",
+        str(m),
+        "--shards",
+        str(shards),
+        "--reps",
+        str(reps),
+        "--seed",
+        str(seed),
+    ]
 
 
 def _nonempty_offsets(m: int, shards: int) -> list[int]:
@@ -1777,9 +2236,7 @@ def _nonempty_offsets(m: int, shards: int) -> list[int]:
     return [i * chunk for i in range(shards) if max(0, min(chunk, m - i * chunk))]
 
 
-def test_q2g9o_null_corr_shards_overlap(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_q2g9o_null_corr_shards_overlap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The shards are in flight at once. A 3-way Barrier times out (5 s) and raises
     BrokenBarrierError on the old sequential loop, so this test cannot pass unless the workers
     overlap. The run_worker payloads are exactly the sequential ones."""
@@ -1806,7 +2263,9 @@ def test_q2g9o_null_corr_shards_overlap(
     assert sorted(by_offset) == [0, 10, 20]
     for offset in (0, 10, 20):
         assert by_offset[offset] == {
-            "count": 10, "seed_base": 0, "offset": offset,
+            "count": 10,
+            "seed_base": 0,
+            "offset": offset,
             "pool": list(layer2.NULL_INDICATOR_POOL),
         }
     entries = json.loads((tmp_path / "o" / "scratch" / layer2.NULL_POOL_FILE).read_text())
@@ -1825,12 +2284,33 @@ def test_q2g9o_null_corr_shards_overlap(
         submitted.clear()
         out2 = tmp_path / f"o2-{m}" / "layer2.json"
         _seed_roots(out2, tmp_path / f"o2-{m}" / "scratch", ("btc0",))
-        base2 = ["--out", str(out2), "--data-root", str(tmp_path / "data"),
-                 "--real-db", str(tmp_path / "none.db"), "--archive", str(tmp_path / "src.db")]
-        assert layer2.main([
-            *base2, "null-corr", "--m", str(m), "--shards", str(shards),
-            "--reps", "5", "--seed", "7",
-        ]) == 0
+        base2 = [
+            "--out",
+            str(out2),
+            "--data-root",
+            str(tmp_path / "data"),
+            "--real-db",
+            str(tmp_path / "none.db"),
+            "--archive",
+            str(tmp_path / "src.db"),
+        ]
+        assert (
+            layer2.main(
+                [
+                    *base2,
+                    "null-corr",
+                    "--m",
+                    str(m),
+                    "--shards",
+                    str(shards),
+                    "--reps",
+                    "5",
+                    "--seed",
+                    "7",
+                ]
+            )
+            == 0
+        )
         chunk = -(-m // shards)
         want: list[dict[str, Any]] = []
         for i in range(shards):
@@ -1883,7 +2363,8 @@ def test_profile_windows_follow_the_plan_window() -> None:
     assert layer2.train_window() == layer2.train_window(layer2.P4H)
     jobs = layer2.measure_jobs(layer2.P1D)
     assert [(j["start"], j["end"]) for j in jobs] == [
-        ("2021-01-01", "2026-10-15"), (p6.train_start, p6.train_end)
+        ("2021-01-01", "2026-10-15"),
+        (p6.train_start, p6.train_end),
     ]
     assert all(j["dsl"]["timeframe"] == "1d" for j in jobs)
     assert layer2.measure_jobs()[0]["dsl"] == layer2.planted_dsl()
@@ -1911,17 +2392,28 @@ def test_build_one_forwards_the_profile_plant_kw_and_span(
 
         class R:
             klines = None
-            report = type("Rep", (), {"l_max_abs": 0.1, "l_end": 0.0, "n_triggers": 3,
-                                      "drift_minutes": 7})()
+            report = type(
+                "Rep", (), {"l_max_abs": 0.1, "l_end": 0.0, "n_triggers": 3, "drift_minutes": 7}
+            )()
 
         return R()
 
     monkeypatch.setattr(plant, "solve_kappa", fake_kappa)
     monkeypatch.setattr(plant, "plant_drift", fake_plant)
     monkeypatch.setattr(plant, "write_scratch", lambda *a, **k: None)
-    monkeypatch.setattr(layer2, "measure_build", lambda root, db, profile=layer2.P4H: {"p": profile})
-    rec = layer2.build_one("btc2.0", 1, 1e-5, None, tmp_path / "a.db", tmp_path / "s", tmp_path / "p.db",  # type: ignore[arg-type]
-                           profile=layer2.P1D)
+    monkeypatch.setattr(
+        layer2, "measure_build", lambda root, db, profile=layer2.P4H: {"p": profile}
+    )
+    rec = layer2.build_one(
+        "btc2.0",
+        1,
+        1e-5,
+        None,
+        tmp_path / "a.db",
+        tmp_path / "s",
+        tmp_path / "p.db",  # type: ignore[arg-type]
+        profile=layer2.P1D,
+    )
     want_ms = layer2.plant_window_ms(layer2.P1D)
     for call in ("kappa", "plant"):
         assert (seen[call]["plant_start_ms"], seen[call]["plant_end_ms"]) == want_ms
@@ -1952,14 +2444,20 @@ def test_profile_1d_worker_null_draws_only_long_chromosomes(
     monkeypatch.setattr(layer2, "_cell_fns", fake_fns)
     monkeypatch.setattr(fitness, "_evaluate_single", lambda *a, **k: Fit())
     monkeypatch.setattr(
-        layer2, "worker_screen",
+        layer2,
+        "worker_screen",
         lambda p: [{"tag": j["tag"], "mtm": None} for j in p["jobs"]],
     )
     monkeypatch.chdir(tmp_path)
     for prof, want in ((layer2.P1D, "long"), (layer2.P4H, "both")):
-        out = layer2.worker_null({
-            "root": str(tmp_path), "seed_base": 11, "count": 6, "profile": prof.to_dict(),
-        })
+        out = layer2.worker_null(
+            {
+                "root": str(tmp_path),
+                "seed_base": 11,
+                "count": 6,
+                "profile": prof.to_dict(),
+            }
+        )
         assert len(out) == 6
         assert {e["chromosome"]["direction"] for e in out} == {want}
     assert seen_profiles == [layer2.P1D, layer2.P4H]
@@ -1968,13 +2466,25 @@ def test_profile_1d_worker_null_draws_only_long_chromosomes(
 @pytest.mark.parametrize(
     ("trials", "ok"),
     [
-        ({"prior_n": 0, "gate_n": 37, "run_n_eff": 37, "raw": 41, "n_rule": N_RULE_EFFECTIVE}, True),
-        ({"prior_n": 0, "gate_n": 41, "run_n_eff": 41, "raw": 41, "n_rule": N_RULE_EFFECTIVE}, True),
-        ({"prior_n": 1, "gate_n": 38, "run_n_eff": 37, "raw": 41, "n_rule": N_RULE_EFFECTIVE}, False),
+        (
+            {"prior_n": 0, "gate_n": 37, "run_n_eff": 37, "raw": 41, "n_rule": N_RULE_EFFECTIVE},
+            True,
+        ),
+        (
+            {"prior_n": 0, "gate_n": 41, "run_n_eff": 41, "raw": 41, "n_rule": N_RULE_EFFECTIVE},
+            True,
+        ),
+        (
+            {"prior_n": 1, "gate_n": 38, "run_n_eff": 37, "raw": 41, "n_rule": N_RULE_EFFECTIVE},
+            False,
+        ),
         ({"prior_n": 0, "gate_n": 37, "run_n_eff": 37, "raw": 41}, False),
         ({"prior_n": 0, "gate_n": 37, "run_n_eff": 37, "raw": 41, "n_rule": "legacy"}, False),
         ({"prior_n": 0, "gate_n": 37, "raw": 41, "n_rule": N_RULE_EFFECTIVE}, False),
-        ({"prior_n": None, "gate_n": 37, "run_n_eff": 37, "raw": 41, "n_rule": N_RULE_EFFECTIVE}, False),
+        (
+            {"prior_n": None, "gate_n": 37, "run_n_eff": 37, "raw": 41, "n_rule": N_RULE_EFFECTIVE},
+            False,
+        ),
     ],
 )
 def test_isolation_check_effective_n_rule(trials: dict[str, Any], ok: bool) -> None:
@@ -2004,8 +2514,10 @@ def test_rescreen_jobs_under_a_non_default_profile_omit_planted_both() -> None:
 
 def test_run_discovery_persists_the_profile_on_the_run_row(tmp_path: Path) -> None:
     """The run row records the profile's timeframe + window, from create_run and a launch."""
-    for prof, tf, span in ((layer2.P1D, "1d", ("2021-01-01", "2026-10-15")),
-                           (layer2.P4H, "4h", ("2023-06-01", "2026-06-01"))):
+    for prof, tf, span in (
+        (layer2.P1D, "1d", ("2021-01-01", "2026-10-15")),
+        (layer2.P4H, "4h", ("2023-06-01", "2026-06-01")),
+    ):
         db = tmp_path / f"created-{tf}.db"
         run_id = layer2.create_run(db, profile=prof)
         conn = sqlite3.connect(db)
@@ -2021,8 +2533,10 @@ def test_run_discovery_persists_the_profile_on_the_run_row(tmp_path: Path) -> No
         "con.execute(\"UPDATE backtest_runs SET status='completed' WHERE id=?\", (run_id,))\n"
         "con.commit()\n"
     )
-    for prof, want in ((layer2.P1D, ("1d", "2021-01-01", "2026-10-15")),
-                       (layer2.P4H, ("4h", "2023-06-01", "2026-06-01"))):
+    for prof, want in (
+        (layer2.P1D, ("1d", "2021-01-01", "2026-10-15")),
+        (layer2.P4H, ("4h", "2023-06-01", "2026-06-01")),
+    ):
         run_dir = tmp_path / f"r-{prof.timeframe}"
         rec = layer2.run_discovery(
             root, run_dir, 1, command_fn=_fake_command(done), poll_s=0.05, profile=prof
@@ -2038,7 +2552,7 @@ def test_run_discovery_persists_the_profile_on_the_run_row(tmp_path: Path) -> No
 
 
 def test_cell_fns_forwards_the_profile_window_and_timeframe(
-    monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """_cell_fns(P1D) builds the W6 plan with timeframe 1d (not W3/4h)."""
     import vibe_quant.discovery.run as discovery_run
@@ -2143,12 +2657,21 @@ def test_build_refuses_a_rebuilt_plant_whose_s_drifted(
 
 
 def _seed_accepted(out: Path, variant: str, root: Path, train_s: object) -> dict[str, Any]:
-    acc = {"k": 1, "delta": 1e-5, "root": str(root), "train_S": train_s, "full_S": 2.0,
-           "accepted": True, "converged": True}
+    acc = {
+        "k": 1,
+        "delta": 1e-5,
+        "root": str(root),
+        "train_S": train_s,
+        "full_S": 2.0,
+        "accepted": True,
+        "converged": True,
+    }
 
     def seed(s: dict[str, Any]) -> None:
         s.setdefault("variants", {})[variant] = {
-            "accepted": acc, "status": "accepted", "builds": [acc],
+            "accepted": acc,
+            "status": "accepted",
+            "builds": [acc],
         }
 
     layer2.update_state(out, seed)
@@ -2156,14 +2679,23 @@ def _seed_accepted(out: Path, variant: str, root: Path, train_s: object) -> dict
 
 
 def _rebuild_stub(
-    monkeypatch: pytest.MonkeyPatch, train: float, full: float = 2.0, ratio: float = 1.2, *,
+    monkeypatch: pytest.MonkeyPatch,
+    train: float,
+    full: float = 2.0,
+    ratio: float = 1.2,
+    *,
     fail: bool = False,
 ) -> list[Path]:
     """Every attempted build returns the same numbers (or fails after writing its catalog)."""
     calls: list[Path] = []
 
     def fake_build(
-        variant: str, k: int, delta: float, _klines: object, _archive: Path, scratch: Path,
+        variant: str,
+        k: int,
+        delta: float,
+        _klines: object,
+        _archive: Path,
+        scratch: Path,
         _db: Path,
     ) -> dict[str, Any]:
         calls.append(scratch)
@@ -2172,9 +2704,19 @@ def _rebuild_stub(
         if fail:
             msg = "injected failure after catalog publication"
             raise layer2.Layer2Error(msg)
-        return {"k": k, "root": str(root), "delta": delta, "kappa": 0.0, "l_end": 0.0,
-                "converged": True, "n_triggers": 9, "price_ratio": ratio,
-                "price_ratio_gt_3": ratio > 3.0, "train_S": train, "full_S": full}
+        return {
+            "k": k,
+            "root": str(root),
+            "delta": delta,
+            "kappa": 0.0,
+            "l_end": 0.0,
+            "converged": True,
+            "n_triggers": 9,
+            "price_ratio": ratio,
+            "price_ratio_gt_3": ratio > 3.0,
+            "train_S": train,
+            "full_S": full,
+        }
 
     monkeypatch.setattr(plant, "load_klines", lambda *_a, **_kw: object())
     monkeypatch.setattr(layer2, "build_one", fake_build)
@@ -2200,7 +2742,11 @@ def _catalogs(tmp_path: Path) -> list[Path]:
     ],
 )
 def test_rebuild_guards_train_plus_the_calibration_series(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variant: str, train: float, full: float,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    variant: str,
+    train: float,
+    full: float,
     code: int,
 ) -> None:
     out = _l2_out(tmp_path)
@@ -2210,7 +2756,8 @@ def test_rebuild_guards_train_plus_the_calibration_series(
     v = layer2.load_state(out)["variants"][variant]
     assert v["status"] == ("accepted" if code == 0 else "drifted")
     assert (v["accepted"]["train_S"], v["accepted"]["full_S"]) == (
-        (train, full) if code == 0 else (5.0, 2.0))
+        (train, full) if code == 0 else (5.0, 2.0)
+    )
 
 
 def test_layer2_interrupted_rebuild_publishes_nothing_and_the_retry_reruns_the_guard(

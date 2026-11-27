@@ -217,9 +217,7 @@ def discovery_db_path(tmp_path: Path) -> Path:
 class TestDiscoveryFallback:
     """Tests for discovery run fallback from backtest_results to sweep_results."""
 
-    def test_load_candidates_promotes_discovery_results(
-        self, discovery_db_path: Path
-    ) -> None:
+    def test_load_candidates_promotes_discovery_results(self, discovery_db_path: Path) -> None:
         """Discovery run results are promoted from backtest_results to sweep_results."""
         pipeline = OverfittingPipeline(discovery_db_path)
         candidates = pipeline._load_candidates(10)
@@ -230,9 +228,7 @@ class TestDiscoveryFallback:
         assert candidates[0]["strategy_name"] == "disc_strategy"
 
         # Verify promoted into sweep_results
-        row = pipeline.conn.execute(
-            "SELECT * FROM sweep_results WHERE run_id = 10"
-        ).fetchone()
+        row = pipeline.conn.execute("SELECT * FROM sweep_results WHERE run_id = 10").fetchone()
         assert row is not None
         assert row["sharpe_ratio"] == 3.2
 

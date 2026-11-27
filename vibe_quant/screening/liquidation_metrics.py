@@ -109,9 +109,7 @@ def resting_exit_inputs(
                 )
             order = cache.order(fill.client_order_id)
             if order is None:
-                raise ValueError(
-                    f"{key} fill {index}: order {order_id} is not in the engine cache"
-                )
+                raise ValueError(f"{key} fill {index}: order {order_id} is not in the engine cache")
             active_from = _active_from(order, ts)
             if active_from is None:
                 raise ValueError(

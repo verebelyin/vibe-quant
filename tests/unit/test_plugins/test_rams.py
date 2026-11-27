@@ -55,9 +55,7 @@ def test_causal_no_lookahead() -> None:
     close = pd.Series(100.0 + np.cumsum(rng.randn(400) * 0.5))
     full = compute_rams(_df(close), {"period": 50})
     truncated = compute_rams(_df(close.iloc[:300].reset_index(drop=True)), {"period": 50})
-    np.testing.assert_allclose(
-        full.iloc[:300].to_numpy(), truncated.to_numpy(), rtol=0, atol=0
-    )
+    np.testing.assert_allclose(full.iloc[:300].to_numpy(), truncated.to_numpy(), rtol=0, atol=0)
 
 
 def test_warmup_is_nan_then_valid() -> None:

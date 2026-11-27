@@ -87,9 +87,7 @@ def require_tier_symbols(symbols: Sequence[str]) -> None:
     tables = load_tier_tables()
     for symbol in symbols:
         if symbol not in tables:
-            raise CarryDataError(
-                f"no liquidation tier table for {symbol} in {tables.version}"
-            )
+            raise CarryDataError(f"no liquidation tier table for {symbol} in {tables.version}")
 
 
 def _before(series: MarkSeries, end_ns: int) -> MarkSeries:

@@ -12,7 +12,9 @@ from typing import Any
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-_spec = importlib.util.spec_from_file_location("rule_test", ROOT / "scripts" / "agents" / "rule_test.py")
+_spec = importlib.util.spec_from_file_location(
+    "rule_test", ROOT / "scripts" / "agents" / "rule_test.py"
+)
 assert _spec is not None and _spec.loader is not None
 rule_test = importlib.util.module_from_spec(_spec)
 sys.modules["rule_test"] = rule_test
@@ -78,7 +80,10 @@ def _direct_nt(yaml_path: Path, symbol: str, start: str, end: str, **launch: Any
 
 @pytest.mark.parametrize(
     ("symbol", "start", "end", "thr", "trades"),
-    [("BTCUSDT", "2026-03-02", "2026-03-04", 30, 16), ("ETHUSDT", "2026-03-09", "2026-03-11", 25, 9)],
+    [
+        ("BTCUSDT", "2026-03-02", "2026-03-04", 30, 16),
+        ("ETHUSDT", "2026-03-09", "2026-03-11", 25, 9),
+    ],
 )
 def test_nt_tier_equals_the_shared_runner(
     tmp_path: Path, symbol: str, start: str, end: str, thr: int, trades: int
@@ -105,7 +110,13 @@ def test_sizing_flags_reach_the_engine(tmp_path: Path) -> None:
     path = _write(tmp_path, 30)
     base = rule_test.run_rule(path, ["BTCUSDT"], "2026-03-02", "2026-03-04", tier="nt")
     big = rule_test.run_rule(
-        path, ["BTCUSDT"], "2026-03-02", "2026-03-04", tier="nt", max_position_pct=1.0, risk_per_trade=0.5
+        path,
+        ["BTCUSDT"],
+        "2026-03-02",
+        "2026-03-04",
+        tier="nt",
+        max_position_pct=1.0,
+        risk_per_trade=0.5,
     )
     direct = _direct_nt(path, "BTCUSDT", "2026-03-02", "2026-03-04", cap=1.0, risk=0.5)
     assert big["total_return"] == direct.total_return
@@ -113,13 +124,22 @@ def test_sizing_flags_reach_the_engine(tmp_path: Path) -> None:
     assert big["total_trades"] == base["total_trades"]
 
 
-@pytest.mark.parametrize(("leverage", "cap", "ok"), [(1, 1.0, True), (1, 1.5, False), (2, 1.5, True), (2, 2.5, False)])
-def test_leverage_reaches_the_launch_check(tmp_path: Path, leverage: int, cap: float, ok: bool) -> None:
+@pytest.mark.parametrize(
+    ("leverage", "cap", "ok"), [(1, 1.0, True), (1, 1.5, False), (2, 1.5, True), (2, 2.5, False)]
+)
+def test_leverage_reaches_the_launch_check(
+    tmp_path: Path, leverage: int, cap: float, ok: bool
+) -> None:
     from vibe_quant.sizing_settings import SizingConfigError
 
     path = _write(tmp_path, 30)
     args = (path, ["BTCUSDT"], "2026-03-02", "2026-03-03")
-    kwargs: dict[str, Any] = {"tier": "nt", "leverage": leverage, "max_position_pct": cap, "risk_per_trade": 0.5}
+    kwargs: dict[str, Any] = {
+        "tier": "nt",
+        "leverage": leverage,
+        "max_position_pct": cap,
+        "risk_per_trade": 0.5,
+    }
     if ok:
         assert rule_test.run_rule(*args, **kwargs)["total_trades"] >= 0
     else:
@@ -132,16 +152,31 @@ def test_fast_tier_refuses_a_rule_it_cannot_replay(tmp_path: Path) -> None:
     with pytest.raises(rule_test.TierUnsupported, match="max_bars_in_trade"):
         rule_test.run_rule(path, ["BTCUSDT"], "2026-03-02", "2026-03-04", tier="fast")
     # the same rule still runs on NT
-    assert rule_test.run_rule(path, ["BTCUSDT"], "2026-03-02", "2026-03-04", tier="nt")["total_trades"] >= 1
+    assert (
+        rule_test.run_rule(path, ["BTCUSDT"], "2026-03-02", "2026-03-04", tier="nt")["total_trades"]
+        >= 1
+    )
 
 
 def test_cli_prints_json_and_never_uses_the_real_state_db(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert os.environ["VIBE_QUANT_DB"] == str(tmp_path / "state.db")  # a DB is already pinned: main must replace it
+    assert os.environ["VIBE_QUANT_DB"] == str(
+        tmp_path / "state.db"
+    )  # a DB is already pinned: main must replace it
     path = _write(tmp_path, 30)
     code = rule_test.main(
-        [str(path), "--symbols", "BTCUSDT", "--start", "2026-03-02", "--end", "2026-03-04", "--tier", "nt"]
+        [
+            str(path),
+            "--symbols",
+            "BTCUSDT",
+            "--start",
+            "2026-03-02",
+            "--end",
+            "2026-03-04",
+            "--tier",
+            "nt",
+        ]
     )
     assert code == 0
     out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
@@ -154,7 +189,17 @@ def test_cli_exit_2_when_fast_tier_unsupported(
 ) -> None:
     path = _write(tmp_path, 30, extra="max_bars_in_trade: 60")
     code = rule_test.main(
-        [str(path), "--symbols", "BTCUSDT", "--start", "2026-03-02", "--end", "2026-03-04", "--tier", "fast"]
+        [
+            str(path),
+            "--symbols",
+            "BTCUSDT",
+            "--start",
+            "2026-03-02",
+            "--end",
+            "2026-03-04",
+            "--tier",
+            "fast",
+        ]
     )
     assert code == 2
     assert "use --tier nt" in capsys.readouterr().err
@@ -183,7 +228,15 @@ def test_cli_exits_nonzero_without_metrics_when_the_engine_fails(
 ) -> None:
     _fail_the_engine(monkeypatch)
     code = rule_test.main(
-        [str(_write(tmp_path, 30)), "--symbols", "BTCUSDT", "--start", "2026-03-02", "--end", "2026-03-04"]
+        [
+            str(_write(tmp_path, 30)),
+            "--symbols",
+            "BTCUSDT",
+            "--start",
+            "2026-03-02",
+            "--end",
+            "2026-03-04",
+        ]
     )
     captured = capsys.readouterr()
     assert code == 1
@@ -192,12 +245,24 @@ def test_cli_exits_nonzero_without_metrics_when_the_engine_fails(
 
 
 @pytest.mark.parametrize("tier", ["nt", "fast"])
-@pytest.mark.parametrize(("start", "end"), [("2026-03-04", "2026-03-02"), ("2026-03-04", "2026-03-04")])
+@pytest.mark.parametrize(
+    ("start", "end"), [("2026-03-04", "2026-03-02"), ("2026-03-04", "2026-03-04")]
+)
 def test_cli_exits_nonzero_for_reversed_or_empty_dates(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], tier: str, start: str, end: str
 ) -> None:
     code = rule_test.main(
-        [str(_write(tmp_path, 30)), "--symbols", "BTCUSDT", "--start", start, "--end", end, "--tier", tier]
+        [
+            str(_write(tmp_path, 30)),
+            "--symbols",
+            "BTCUSDT",
+            "--start",
+            start,
+            "--end",
+            end,
+            "--tier",
+            tier,
+        ]
     )
     captured = capsys.readouterr()
     assert code == 1

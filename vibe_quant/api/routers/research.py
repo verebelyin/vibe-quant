@@ -78,9 +78,7 @@ def _run_to_response(row: dict[str, Any]) -> ScrapeRunResponse:
 
 def _item_to_response(row: dict[str, Any]) -> ResearchItemResponse:
     extras_str = row.get("extras_json")
-    extras: dict[str, Any] | None = (
-        json.loads(extras_str) if isinstance(extras_str, str) else None
-    )
+    extras: dict[str, Any] | None = json.loads(extras_str) if isinstance(extras_str, str) else None
     if "num_comments" in row and row["num_comments"] is not None:
         if extras is None:
             extras = {}
@@ -177,9 +175,7 @@ def get_subreddits(sm: StateMgr) -> SubredditsResponse:
     saved = sm.get_research_subreddits("reddit")
     if saved:
         return SubredditsResponse(source="reddit", subreddits=saved, using_default=False)
-    return SubredditsResponse(
-        source="reddit", subreddits=subreddits_from_env(), using_default=True
-    )
+    return SubredditsResponse(source="reddit", subreddits=subreddits_from_env(), using_default=True)
 
 
 @router.put("/settings/subreddits", response_model=SubredditsResponse)
@@ -200,9 +196,7 @@ def set_subreddits(body: SubredditsUpdateRequest, sm: StateMgr) -> SubredditsRes
 def reset_subreddits(sm: StateMgr) -> SubredditsResponse:
     """Drop the saved row so the source falls back to env defaults."""
     sm.clear_research_subreddits("reddit")
-    return SubredditsResponse(
-        source="reddit", subreddits=subreddits_from_env(), using_default=True
-    )
+    return SubredditsResponse(source="reddit", subreddits=subreddits_from_env(), using_default=True)
 
 
 @router.post("/scrape", response_model=ScrapeRunResponse, status_code=201)
@@ -490,9 +484,7 @@ def extraction_queue_status(sm: StateMgr) -> ExtractionQueueStatusResponse:
     "/extraction-jobs/{job_id}/cancel",
     response_model=ExtractionJobResponse,
 )
-def cancel_extraction_job(
-    job_id: int, sm: StateMgr, response: Response
-) -> ExtractionJobResponse:
+def cancel_extraction_job(job_id: int, sm: StateMgr, response: Response) -> ExtractionJobResponse:
     """Cancel a queued or running extraction job.
 
     - **queued** → cancelled immediately (200).
@@ -520,9 +512,7 @@ def cancel_extraction_job(
         time.sleep(_CANCEL_POLL_INTERVAL_S)
         row = sm.get_extraction_job(job_id)
         if row is None:
-            raise HTTPException(
-                status_code=404, detail=f"extraction job {job_id} not found"
-            )
+            raise HTTPException(status_code=404, detail=f"extraction job {job_id} not found")
         status = str(row["status"])
         if status == "cancelled":
             return _job_to_response(row)
@@ -633,9 +623,7 @@ def rescreen_extraction(extraction_id: int, sm: StateMgr) -> ExtractionResponse:
     return _extraction_to_response(after)
 
 
-def _load_proposed_indicator(
-    sm: StateManager, extraction_id: int, idx: int
-) -> dict[str, Any]:
+def _load_proposed_indicator(sm: StateManager, extraction_id: int, idx: int) -> dict[str, Any]:
     """Resolve a single proposal from an extraction or raise 404.
 
     Returns the raw dict so callers can hand it straight to the mapper.
@@ -880,9 +868,7 @@ def promote_proposed_indicator(name: str, sm: StateMgr) -> PromoteIndicatorRespo
     # repo-relative plugin path the scaffolder writes.
     suffix = f"proposed_{name.lower()}.py"
     provenance = sm.find_scaffold_provenance_by_plugin_path(suffix)
-    extraction_id = (
-        int(provenance["extraction_id"]) if provenance is not None else None
-    )
+    extraction_id = int(provenance["extraction_id"]) if provenance is not None else None
     source_url = (
         str(provenance["item_url"])
         if provenance is not None and provenance.get("item_url")

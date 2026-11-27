@@ -63,16 +63,29 @@ def _mock_filter(chrom: StrategyChromosome, bt: dict[str, Any]) -> dict[str, boo
 
 
 def _fit(
-    sharpe: float = 2.0, trades: int = 150, ret: float = 0.4, score: float = 0.6,
-    dd: float = 0.1, pf: float = 1.8,
+    sharpe: float = 2.0,
+    trades: int = 150,
+    ret: float = 0.4,
+    score: float = 0.6,
+    dd: float = 0.1,
+    pf: float = 1.8,
 ) -> Any:
     """Minimal passing FitnessResult for gate tests."""
     from vibe_quant.discovery.fitness import FitnessResult
 
     return FitnessResult(
-        sharpe_ratio=sharpe, max_drawdown=dd, profit_factor=pf, total_trades=trades,
-        total_return=ret, complexity_penalty=0.0, overtrade_penalty=0.0, sl_tp_penalty=0.0,
-        raw_score=score, adjusted_score=score, passed_filters=True, filter_results={},
+        sharpe_ratio=sharpe,
+        max_drawdown=dd,
+        profit_factor=pf,
+        total_trades=trades,
+        total_return=ret,
+        complexity_penalty=0.0,
+        overtrade_penalty=0.0,
+        sl_tp_penalty=0.0,
+        raw_score=score,
+        adjusted_score=score,
+        passed_filters=True,
+        filter_results={},
     )
 
 
@@ -119,7 +132,10 @@ class TestDiscoveryConfig:
         assert cfg.convergence_generations == 7
         assert (
             DiscoveryConfig(
-                max_generations=4, symbols=["BTC/USDT"], start_date="2024-01-01", end_date="2024-06-01"
+                max_generations=4,
+                symbols=["BTC/USDT"],
+                start_date="2024-01-01",
+                end_date="2024-06-01",
             ).convergence_generations
             == 2
         )
@@ -379,14 +395,19 @@ class TestStructuralDedup:
         from vibe_quant.discovery.pipeline import _select_diverse_top_k
 
         gene = StrategyGene(
-            indicator_type="RSI", parameters={"period": 14.0},
-            condition=ConditionType.GT, threshold=50.0,
+            indicator_type="RSI",
+            parameters={"period": 14.0},
+            condition=ConditionType.GT,
+            threshold=50.0,
         )
         candidates = []
         for i in range(5):
             c = StrategyChromosome(
-                entry_genes=[gene.clone()], exit_genes=[gene.clone()],
-                stop_loss_pct=2.0, take_profit_pct=5.0, direction=Direction.LONG,
+                entry_genes=[gene.clone()],
+                exit_genes=[gene.clone()],
+                stop_loss_pct=2.0,
+                take_profit_pct=5.0,
+                direction=Direction.LONG,
             )
             candidates.append((c, 0.8 - i * 0.01))
         result = _select_diverse_top_k(candidates, top_k=5, min_distance=0.15)
@@ -404,12 +425,17 @@ class TestStructuralDedup:
             if ind == "STOCH":
                 params = {"k_period": 14.0, "d_period": 3.0}
             gene = StrategyGene(
-                indicator_type=ind, parameters=params,
-                condition=ConditionType.GT, threshold=50.0 if ind in ("RSI", "CCI") else 0.01,
+                indicator_type=ind,
+                parameters=params,
+                condition=ConditionType.GT,
+                threshold=50.0 if ind in ("RSI", "CCI") else 0.01,
             )
             c = StrategyChromosome(
-                entry_genes=[gene], exit_genes=[gene.clone()],
-                stop_loss_pct=2.0, take_profit_pct=5.0, direction=Direction.LONG,
+                entry_genes=[gene],
+                exit_genes=[gene.clone()],
+                stop_loss_pct=2.0,
+                take_profit_pct=5.0,
+                direction=Direction.LONG,
             )
             candidates.append((c, 0.9 - i * 0.01))
         result = _select_diverse_top_k(candidates, top_k=5, min_distance=0.15)
@@ -432,13 +458,17 @@ class TestBehaviouralDedup:
         if indicator == "STOCH":
             params = {"k_period": 14.0, "d_period": 3.0}
         gene = StrategyGene(
-            indicator_type=indicator, parameters=params,
+            indicator_type=indicator,
+            parameters=params,
             condition=ConditionType.GT,
             threshold=50.0 if indicator in ("RSI", "CCI") else 0.01,
         )
         return StrategyChromosome(
-            entry_genes=[gene], exit_genes=[gene.clone()],
-            stop_loss_pct=2.0, take_profit_pct=5.0, direction=Direction.LONG,
+            entry_genes=[gene],
+            exit_genes=[gene.clone()],
+            stop_loss_pct=2.0,
+            take_profit_pct=5.0,
+            direction=Direction.LONG,
         )
 
     def test_identical_metrics_deduped_next_distinct_fills_slot(self) -> None:
@@ -569,6 +599,7 @@ class TestSplitDateRange:
 
     def test_50_50_split(self) -> None:
         from vibe_quant.utils import split_date_range
+
         ts, te, hs, he = split_date_range("2024-01-01", "2024-05-01", 0.5)
         assert ts == "2024-01-01"
         assert te == hs  # train end == holdout start
@@ -576,6 +607,7 @@ class TestSplitDateRange:
 
     def test_invalid_ratio(self) -> None:
         from vibe_quant.utils import split_date_range
+
         with pytest.raises(ValueError, match="split_ratio"):
             split_date_range("2024-01-01", "2024-05-01", 0.0)
         with pytest.raises(ValueError, match="split_ratio"):
@@ -589,10 +621,15 @@ class TestHoldoutEvaluation:
         """When holdout_backtest_fn is provided, holdout_results should be populated."""
         # Simulate CLI pre-split: train=Jan-Mar, holdout=Mar-Jun
         cfg = _make_config(
-            population_size=6, max_generations=2, top_k=2, elite_count=1,
+            population_size=6,
+            max_generations=2,
+            top_k=2,
+            elite_count=1,
             train_test_split=0.5,
-            start_date="2024-01-01", end_date="2024-03-16",
-            holdout_start_date="2024-03-16", holdout_end_date="2024-06-01",
+            start_date="2024-01-01",
+            end_date="2024-03-16",
+            holdout_start_date="2024-03-16",
+            holdout_end_date="2024-06-01",
         )
 
         def holdout_backtest(chrom: StrategyChromosome) -> dict[str, Any]:
@@ -644,6 +681,7 @@ class TestCrossWindowValidation:
 
         def _window_backtest(start: str, end: str) -> Any:
             """Factory that returns backtest fns for different windows."""
+
             def bt(chrom: StrategyChromosome) -> dict[str, Any]:
                 call_log.append(f"{start}-{end}")
                 n = len(chrom.entry_genes) + len(chrom.exit_genes)
@@ -654,14 +692,20 @@ class TestCrossWindowValidation:
                     "total_trades": 120,
                     "total_return": 0.3,
                 }
+
             return bt
 
         cfg = _make_config(
-            population_size=6, max_generations=2, top_k=2, elite_count=1,
+            population_size=6,
+            max_generations=2,
+            top_k=2,
+            elite_count=1,
             cross_window_months=[1, 2],
         )
         pipe = DiscoveryPipeline(
-            cfg, _mock_backtest, backtest_fn_factory=_window_backtest,
+            cfg,
+            _mock_backtest,
+            backtest_fn_factory=_window_backtest,
         )
         result = pipe.run()
 
@@ -686,6 +730,7 @@ class TestCrossWindowValidation:
 
         def _failing_factory(start: str, end: str) -> Any:
             """Factory returning backtest that fails on shifted windows."""
+
             def bt(chrom: StrategyChromosome) -> dict[str, Any]:
                 call_count[0] += 1
                 return {
@@ -695,15 +740,21 @@ class TestCrossWindowValidation:
                     "total_trades": 30,
                     "total_return": -0.1,  # Negative return
                 }
+
             return bt
 
         cfg = _make_config(
-            population_size=6, max_generations=2, top_k=2, elite_count=1,
+            population_size=6,
+            max_generations=2,
+            top_k=2,
+            elite_count=1,
             cross_window_months=[1],  # One shifted window
             cross_window_min_pass=2,  # Need 2/2 to pass
         )
         pipe = DiscoveryPipeline(
-            cfg, _mock_backtest, backtest_fn_factory=_failing_factory,
+            cfg,
+            _mock_backtest,
+            backtest_fn_factory=_failing_factory,
         )
         result = pipe.run()
 
@@ -730,12 +781,17 @@ class TestWarmStart:
         from vibe_quant.discovery.operators import ConditionType, Direction, StrategyGene
 
         seed_gene = StrategyGene(
-            indicator_type="CCI", parameters={"period": 20.0},
-            condition=ConditionType.GT, threshold=100.0,
+            indicator_type="CCI",
+            parameters={"period": 20.0},
+            condition=ConditionType.GT,
+            threshold=100.0,
         )
         seed = StrategyChromosome(
-            entry_genes=[seed_gene], exit_genes=[seed_gene.clone()],
-            stop_loss_pct=3.0, take_profit_pct=6.0, direction=Direction.SHORT,
+            entry_genes=[seed_gene],
+            exit_genes=[seed_gene.clone()],
+            stop_loss_pct=3.0,
+            take_profit_pct=6.0,
+            direction=Direction.SHORT,
         )
 
         pop = initialize_population(10, seed_chromosomes=[seed])
@@ -760,12 +816,18 @@ class TestWarmStart:
         from vibe_quant.discovery.operators import ConditionType, Direction, StrategyGene
 
         gene = StrategyGene(
-            indicator_type="STOCH", parameters={"k_period": 14.0, "d_period": 3.0},
-            condition=ConditionType.LT, threshold=20.0, sub_value="k",
+            indicator_type="STOCH",
+            parameters={"k_period": 14.0, "d_period": 3.0},
+            condition=ConditionType.LT,
+            threshold=20.0,
+            sub_value="k",
         )
         original = StrategyChromosome(
-            entry_genes=[gene], exit_genes=[gene.clone()],
-            stop_loss_pct=2.5, take_profit_pct=4.0, direction=Direction.SHORT,
+            entry_genes=[gene],
+            exit_genes=[gene.clone()],
+            stop_loss_pct=2.5,
+            take_profit_pct=4.0,
+            direction=Direction.SHORT,
         )
         d = chromosome_to_serializable(original)
         restored = serializable_to_chromosome(d)
@@ -785,6 +847,7 @@ class TestWFARollingValidation:
 
     def test_wfa_rolling_produces_results(self) -> None:
         """WFA rolling should evaluate on multiple OOS windows."""
+
         def _factory(start: str, end: str) -> Any:
             def bt(chrom: StrategyChromosome) -> dict[str, Any]:
                 return {
@@ -794,18 +857,25 @@ class TestWFARollingValidation:
                     "total_trades": 80,
                     "total_return": 0.15,
                 }
+
             return bt
 
         cfg = _make_config(
-            population_size=6, max_generations=2, top_k=2, elite_count=1,
+            population_size=6,
+            max_generations=2,
+            top_k=2,
+            elite_count=1,
             train_test_split=0.5,
-            start_date="2024-01-01", end_date="2024-03-16",
-            holdout_start_date="2024-03-16", holdout_end_date="2024-06-01",
+            start_date="2024-01-01",
+            end_date="2024-03-16",
+            holdout_start_date="2024-03-16",
+            holdout_end_date="2024-06-01",
             wfa_oos_step_days=30,  # ~1 month windows
             wfa_min_consistency=0.5,
         )
         pipe = DiscoveryPipeline(
-            cfg, _mock_backtest,
+            cfg,
+            _mock_backtest,
             holdout_backtest_fn=_mock_backtest,
             backtest_fn_factory=_factory,
         )
@@ -824,6 +894,7 @@ class TestWFARollingValidation:
         Window 2: return -0.02 AND sharpe -0.5 → neither.
         """
         call_count = [0]
+
         def _factory(start: str, end: str) -> Any:
             def bt(chrom: StrategyChromosome) -> dict[str, Any]:
                 i = call_count[0] % 3
@@ -834,16 +905,27 @@ class TestWFARollingValidation:
                     (-0.5, -0.02),
                 ]
                 sr, ret = profiles[i]
-                return {"sharpe_ratio": sr, "max_drawdown": 0.1,
-                        "profit_factor": 1.2, "total_trades": 80, "total_return": ret}
+                return {
+                    "sharpe_ratio": sr,
+                    "max_drawdown": 0.1,
+                    "profit_factor": 1.2,
+                    "total_trades": 80,
+                    "total_return": ret,
+                }
+
             return bt
 
         # 91-day TRAIN range -> 3 rolling 30d windows (WFA runs on the train
         # range; the holdout is reserved for the final gate)
         cfg = _make_config(
-            population_size=6, max_generations=2, top_k=1, elite_count=1,
-            start_date="2024-01-01", end_date="2024-04-01",
-            wfa_oos_step_days=30, wfa_min_consistency=0.5,
+            population_size=6,
+            max_generations=2,
+            top_k=1,
+            elite_count=1,
+            start_date="2024-01-01",
+            end_date="2024-04-01",
+            wfa_oos_step_days=30,
+            wfa_min_consistency=0.5,
         )
         pipe = DiscoveryPipeline(cfg, _mock_backtest, backtest_fn_factory=_factory)
         top = [(initialize_population(1)[0], _fit())]
@@ -867,12 +949,21 @@ class TestWFARollingValidation:
         def _factory(start: str, end: str) -> Any:
             def bt(chrom: StrategyChromosome) -> dict[str, Any]:
                 seen.append((start, end))
-                return {"sharpe_ratio": 1.5, "max_drawdown": 0.1,
-                        "profit_factor": 1.8, "total_trades": 80, "total_return": 0.15}
+                return {
+                    "sharpe_ratio": 1.5,
+                    "max_drawdown": 0.1,
+                    "profit_factor": 1.8,
+                    "total_trades": 80,
+                    "total_return": 0.15,
+                }
+
             return bt
 
         cfg = _make_config(
-            population_size=6, max_generations=2, top_k=2, elite_count=1,
+            population_size=6,
+            max_generations=2,
+            top_k=2,
+            elite_count=1,
             wfa_oos_step_days=30,  # train_test_split defaults to 0
         )
         result = DiscoveryPipeline(cfg, _mock_backtest, backtest_fn_factory=_factory).run()
@@ -881,14 +972,20 @@ class TestWFARollingValidation:
         assert all(cfg.start_date <= s and e <= cfg.end_date for s, e in seen)
 
     def test_wfa_skip_warns_when_no_backtest_factory(
-        self, caplog: pytest.LogCaptureFixture,
+        self,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """WFA requested with split but no backtest_fn_factory → warning."""
         cfg = _make_config(
-            population_size=6, max_generations=2, top_k=2, elite_count=1,
+            population_size=6,
+            max_generations=2,
+            top_k=2,
+            elite_count=1,
             train_test_split=0.5,
-            start_date="2024-01-01", end_date="2024-03-16",
-            holdout_start_date="2024-03-16", holdout_end_date="2024-06-01",
+            start_date="2024-01-01",
+            end_date="2024-03-16",
+            holdout_start_date="2024-03-16",
+            holdout_end_date="2024-06-01",
             wfa_oos_step_days=30,
         )
         # No backtest_fn_factory passed.
@@ -898,28 +995,44 @@ class TestWFARollingValidation:
         assert any(
             "WFA requested" in r.message and "backtest_fn_factory" in r.message
             for r in caplog.records
-        ), f"expected WFA skip warning for missing factory, got: {[r.message for r in caplog.records]}"
+        ), (
+            f"expected WFA skip warning for missing factory, got: {[r.message for r in caplog.records]}"
+        )
 
     def test_wfa_skip_warns_when_no_top_strategies(
-        self, caplog: pytest.LogCaptureFixture,
+        self,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """WFA requested with everything wired but no top strategies → warning."""
+
         def _factory(start: str, end: str) -> Any:
             def bt(chrom: StrategyChromosome) -> dict[str, Any]:
-                return {"sharpe_ratio": 1.5, "max_drawdown": 0.1,
-                        "profit_factor": 1.8, "total_trades": 80, "total_return": 0.15}
+                return {
+                    "sharpe_ratio": 1.5,
+                    "max_drawdown": 0.1,
+                    "profit_factor": 1.8,
+                    "total_trades": 80,
+                    "total_return": 0.15,
+                }
+
             return bt
 
         cfg = _make_config(
-            population_size=6, max_generations=2, top_k=2, elite_count=1,
+            population_size=6,
+            max_generations=2,
+            top_k=2,
+            elite_count=1,
             min_trades=9999,  # guarantees 0 strategies pass
             train_test_split=0.5,
-            start_date="2024-01-01", end_date="2024-03-16",
-            holdout_start_date="2024-03-16", holdout_end_date="2024-06-01",
+            start_date="2024-01-01",
+            end_date="2024-03-16",
+            holdout_start_date="2024-03-16",
+            holdout_end_date="2024-06-01",
             wfa_oos_step_days=30,
         )
         pipe = DiscoveryPipeline(
-            cfg, _mock_backtest_few_trades,
+            cfg,
+            _mock_backtest_few_trades,
             holdout_backtest_fn=_mock_backtest_few_trades,
             backtest_fn_factory=_factory,
         )
@@ -929,7 +1042,9 @@ class TestWFARollingValidation:
         assert any(
             "WFA requested" in r.message and "no top strategies" in r.message
             for r in caplog.records
-        ), f"expected WFA skip warning for empty top strategies, got: {[r.message for r in caplog.records]}"
+        ), (
+            f"expected WFA skip warning for empty top strategies, got: {[r.message for r in caplog.records]}"
+        )
 
 
 class TestIndicatorPoolFilter:
@@ -995,7 +1110,9 @@ class TestEvaluationFailure:
         def bt(_: StrategyChromosome) -> dict[str, Any]:
             raise RuntimeError("boom")
 
-        pipe = DiscoveryPipeline(_make_config(population_size=6, max_generations=3, max_workers=1), bt)
+        pipe = DiscoveryPipeline(
+            _make_config(population_size=6, max_generations=3, max_workers=1), bt
+        )
         with pytest.raises(DiscoveryEvaluationError, match="boom"):
             pipe.run()
 

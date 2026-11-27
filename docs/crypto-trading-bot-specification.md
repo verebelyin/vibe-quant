@@ -294,13 +294,16 @@ from enum import Enum
 from typing import Optional
 from decimal import Decimal
 
+
 class Exchange(Enum):
     BINANCE = "binance"
     ETHEREAL = "ethereal"
 
+
 class Side(Enum):
     LONG = "long"
     SHORT = "short"
+
 
 class OrderType(Enum):
     MARKET = "market"
@@ -310,6 +313,7 @@ class OrderType(Enum):
     TAKE_PROFIT = "take_profit"
     TRAILING_STOP = "trailing_stop"
 
+
 class OrderStatus(Enum):
     PENDING = "pending"
     SUBMITTED = "submitted"
@@ -318,9 +322,11 @@ class OrderStatus(Enum):
     CANCELLED = "cancelled"
     REJECTED = "rejected"
 
+
 @dataclass(frozen=True)
 class Bar:
     """Normalized OHLCV bar data."""
+
     symbol: str
     exchange: Exchange
     timestamp: datetime
@@ -333,9 +339,11 @@ class Bar:
     trades: int
     timeframe: str  # "1m", "5m", "1h", etc.
 
+
 @dataclass
 class Position:
     """Current position state."""
+
     symbol: str
     exchange: Exchange
     side: Side
@@ -347,9 +355,11 @@ class Position:
     margin: Decimal
     opened_at: datetime
 
+
 @dataclass
 class Order:
     """Order specification."""
+
     id: str
     symbol: str
     exchange: Exchange
@@ -366,9 +376,11 @@ class Order:
     fill_price: Optional[Decimal]
     fee: Decimal
 
+
 @dataclass
 class Trade:
     """Completed trade record."""
+
     id: str
     symbol: str
     exchange: Exchange
@@ -385,9 +397,11 @@ class Trade:
     net_pnl: Decimal
     return_pct: Decimal
 
+
 @dataclass
 class AccountState:
     """Current account snapshot."""
+
     exchange: Exchange
     balance: Decimal
     equity: Decimal
@@ -422,16 +436,18 @@ data/
 
 **Parquet Schema:**
 ```python
-schema = pa.schema([
-    ('timestamp', pa.timestamp('ms')),
-    ('open', pa.decimal128(18, 8)),
-    ('high', pa.decimal128(18, 8)),
-    ('low', pa.decimal128(18, 8)),
-    ('close', pa.decimal128(18, 8)),
-    ('volume', pa.decimal128(18, 8)),
-    ('quote_volume', pa.decimal128(18, 8)),
-    ('trades', pa.int32()),
-])
+schema = pa.schema(
+    [
+        ("timestamp", pa.timestamp("ms")),
+        ("open", pa.decimal128(18, 8)),
+        ("high", pa.decimal128(18, 8)),
+        ("low", pa.decimal128(18, 8)),
+        ("close", pa.decimal128(18, 8)),
+        ("volume", pa.decimal128(18, 8)),
+        ("quote_volume", pa.decimal128(18, 8)),
+        ("trades", pa.int32()),
+    ]
+)
 ```
 
 ### 3.3 Strategy Layer Specification
@@ -442,39 +458,40 @@ schema = pa.schema([
 from abc import ABC, abstractmethod
 from typing import Protocol
 
+
 class IStrategy(Protocol):
     """Strategy interface for both vectorized and event-driven modes."""
-    
+
     @property
     def name(self) -> str:
         """Unique strategy identifier."""
         ...
-    
+
     @property
     def required_timeframes(self) -> list[str]:
         """List of timeframes needed (e.g., ['1m', '1h'])."""
         ...
-    
+
     @property
     def required_symbols(self) -> list[str]:
         """List of symbols to subscribe to."""
         ...
-    
+
     @abstractmethod
-    def initialize(self, context: 'BacktestContext') -> None:
+    def initialize(self, context: "BacktestContext") -> None:
         """Called once at start. Set up indicators, state."""
         ...
-    
+
     @abstractmethod
-    def on_bar(self, bars: dict[str, Bar]) -> list['Signal']:
+    def on_bar(self, bars: dict[str, Bar]) -> list["Signal"]:
         """Called on each new bar. Return trading signals."""
         ...
-    
+
     @abstractmethod
-    def on_fill(self, fill: 'Fill') -> None:
+    def on_fill(self, fill: "Fill") -> None:
         """Called when order is filled. Update internal state."""
         ...
-    
+
     def on_position_close(self, trade: Trade) -> None:
         """Optional: called when position is closed."""
         pass
@@ -483,6 +500,7 @@ class IStrategy(Protocol):
 @dataclass
 class Signal:
     """Trading signal from strategy."""
+
     symbol: str
     side: Side
     signal_type: str  # "entry", "exit", "adjust"
@@ -498,24 +516,26 @@ class Signal:
 ```python
 class StrategyRegistry:
     """Central registry for strategy discovery and instantiation."""
-    
+
     _strategies: dict[str, type] = {}
-    
+
     @classmethod
     def register(cls, name: str):
         """Decorator to register a strategy class."""
+
         def decorator(strategy_class):
             cls._strategies[name] = strategy_class
             return strategy_class
+
         return decorator
-    
+
     @classmethod
     def create(cls, name: str, config: dict) -> IStrategy:
         """Instantiate strategy by name with config."""
         if name not in cls._strategies:
             raise ValueError(f"Unknown strategy: {name}")
         return cls._strategies[name](**config)
-    
+
     @classmethod
     def list_strategies(cls) -> list[str]:
         """Return all registered strategy names."""
@@ -537,20 +557,20 @@ class SMACrossoverStrategy:
 ```python
 class ExecutionEngine:
     """Handles order routing, fill simulation, and state management."""
-    
+
     def __init__(
         self,
-        fee_model: 'IFeeModel',
-        slippage_model: 'ISlippageModel',
-        latency_model: 'ILatencyModel',
-        risk_manager: 'RiskManager'
+        fee_model: "IFeeModel",
+        slippage_model: "ISlippageModel",
+        latency_model: "ILatencyModel",
+        risk_manager: "RiskManager",
     ):
         self.fee_model = fee_model
         self.slippage_model = slippage_model
         self.latency_model = latency_model
         self.risk_manager = risk_manager
         self.pending_orders: list[Order] = []
-    
+
     def submit_order(self, order: Order, current_bar: Bar) -> Order:
         """Submit order through risk checks and queue for execution."""
         # Risk checks
@@ -559,32 +579,32 @@ class ExecutionEngine:
             order.status = OrderStatus.REJECTED
             order.rejection_reason = risk_result.reason
             return order
-        
+
         # Add latency
         order.execute_after = current_bar.timestamp + self.latency_model.get_delay()
         order.status = OrderStatus.SUBMITTED
         self.pending_orders.append(order)
         return order
-    
+
     def process_bar(self, bar: Bar) -> list[Fill]:
         """Check pending orders against new bar, generate fills."""
         fills = []
         remaining = []
-        
+
         for order in self.pending_orders:
             if bar.timestamp < order.execute_after:
                 remaining.append(order)
                 continue
-            
+
             fill = self._try_fill(order, bar)
             if fill:
                 fills.append(fill)
             elif order.status == OrderStatus.SUBMITTED:
                 remaining.append(order)
-        
+
         self.pending_orders = remaining
         return fills
-    
+
     def _try_fill(self, order: Order, bar: Bar) -> Optional[Fill]:
         """Attempt to fill order against bar data."""
         if order.order_type == OrderType.MARKET:
@@ -593,7 +613,7 @@ class ExecutionEngine:
             fill_price = bar.open * (1 + slippage if order.side == Side.LONG else 1 - slippage)
             fee = self.fee_model.calculate(order.size * fill_price, is_maker=False)
             return Fill(order=order, price=fill_price, size=order.size, fee=fee)
-        
+
         elif order.order_type == OrderType.LIMIT:
             # Limit order fills if price crosses
             if order.side == Side.LONG and bar.low <= order.price:
@@ -602,7 +622,7 @@ class ExecutionEngine:
             elif order.side == Side.SHORT and bar.high >= order.price:
                 fee = self.fee_model.calculate(order.size * order.price, is_maker=True)
                 return Fill(order=order, price=order.price, size=order.size, fee=fee)
-        
+
         # ... handle other order types
         return None
 ```
@@ -615,26 +635,28 @@ class IFeeModel(Protocol):
         """Calculate fee for given notional value."""
         ...
 
+
 class BinanceFeeModel:
     """Binance perpetual futures fee structure."""
-    
-    def __init__(self, maker_rate: Decimal = Decimal("0.0002"), 
-                 taker_rate: Decimal = Decimal("0.0004")):
+
+    def __init__(
+        self, maker_rate: Decimal = Decimal("0.0002"), taker_rate: Decimal = Decimal("0.0004")
+    ):
         self.maker_rate = maker_rate
         self.taker_rate = taker_rate
-    
+
     def calculate(self, notional: Decimal, is_maker: bool) -> Decimal:
         rate = self.maker_rate if is_maker else self.taker_rate
         return notional * rate
 
+
 class EtherealFeeModel:
     """Ethereal DEX fee structure."""
-    
-    def __init__(self, maker_rate: Decimal = Decimal("0"), 
-                 taker_rate: Decimal = Decimal("0.0003")):
+
+    def __init__(self, maker_rate: Decimal = Decimal("0"), taker_rate: Decimal = Decimal("0.0003")):
         self.maker_rate = maker_rate
         self.taker_rate = taker_rate
-    
+
     def calculate(self, notional: Decimal, is_maker: bool) -> Decimal:
         rate = self.maker_rate if is_maker else self.taker_rate
         return notional * rate
@@ -648,28 +670,29 @@ class ISlippageModel(Protocol):
         """Calculate slippage as fraction of price (e.g., 0.001 = 0.1%)."""
         ...
 
+
 class VolumeBasedSlippage:
     """Square-root market impact model."""
-    
+
     def __init__(
         self,
         base_spread_bps: Decimal = Decimal("1"),
         impact_coefficient: Decimal = Decimal("0.1"),
-        random_noise_bps: Decimal = Decimal("2")
+        random_noise_bps: Decimal = Decimal("2"),
     ):
         self.base_spread = base_spread_bps / Decimal("10000")
         self.impact_coeff = impact_coefficient
         self.noise_bps = random_noise_bps / Decimal("10000")
-    
+
     def calculate(self, order: Order, bar: Bar) -> Decimal:
         # Participation rate: how much of bar volume we're taking
         participation = order.size / bar.volume if bar.volume > 0 else Decimal("0.01")
-        
+
         # Base spread + market impact + noise
         volatility = (bar.high - bar.low) / bar.close  # Intrabar volatility proxy
         market_impact = self.impact_coeff * volatility * participation.sqrt()
         noise = Decimal(str(random.gauss(0, float(self.noise_bps))))
-        
+
         return self.base_spread / 2 + market_impact + abs(noise)
 ```
 
@@ -681,27 +704,28 @@ class ILatencyModel(Protocol):
         """Return simulated network delay."""
         ...
 
+
 class RealisticLatencyModel:
     """Network latency with jitter and occasional spikes."""
-    
+
     def __init__(
         self,
         base_ms: int = 50,
         jitter_ms: int = 20,
         spike_probability: float = 0.01,
-        spike_multiplier: int = 10
+        spike_multiplier: int = 10,
     ):
         self.base_ms = base_ms
         self.jitter_ms = jitter_ms
         self.spike_prob = spike_probability
         self.spike_mult = spike_multiplier
-    
+
     def get_delay(self) -> timedelta:
         latency = self.base_ms + random.gauss(0, self.jitter_ms)
-        
+
         if random.random() < self.spike_prob:
             latency *= self.spike_mult
-        
+
         return timedelta(milliseconds=max(1, latency))
 ```
 
@@ -712,84 +736,72 @@ class RealisticLatencyModel:
 ```python
 class IPositionSizer(Protocol):
     def calculate_size(
-        self,
-        signal: Signal,
-        account: AccountState,
-        current_price: Decimal
+        self, signal: Signal, account: AccountState, current_price: Decimal
     ) -> Decimal:
         """Calculate position size for given signal."""
         ...
 
+
 class FixedFractionalSizer:
     """Risk fixed percentage of equity per trade."""
-    
+
     def __init__(self, risk_percent: Decimal = Decimal("0.02")):
         self.risk_percent = risk_percent
-    
+
     def calculate_size(
-        self,
-        signal: Signal,
-        account: AccountState,
-        current_price: Decimal
+        self, signal: Signal, account: AccountState, current_price: Decimal
     ) -> Decimal:
         if not signal.stop_loss:
             raise ValueError("Stop loss required for fixed fractional sizing")
-        
+
         risk_amount = account.equity * self.risk_percent
         stop_distance = abs(current_price - signal.stop_loss)
         stop_percent = stop_distance / current_price
-        
+
         position_size = risk_amount / stop_distance
         return position_size
 
+
 class KellyCriterionSizer:
     """Kelly criterion with fractional Kelly option."""
-    
+
     def __init__(
         self,
         win_rate: Decimal,
         avg_win: Decimal,
         avg_loss: Decimal,
-        kelly_fraction: Decimal = Decimal("0.5")  # Half-Kelly recommended
+        kelly_fraction: Decimal = Decimal("0.5"),  # Half-Kelly recommended
     ):
         self.win_rate = win_rate
         self.avg_win = avg_win
         self.avg_loss = avg_loss
         self.kelly_fraction = kelly_fraction
-    
+
     def calculate_kelly(self) -> Decimal:
         """Calculate optimal Kelly fraction."""
         R = self.avg_win / abs(self.avg_loss)
         kelly = self.win_rate - ((1 - self.win_rate) / R)
         return max(Decimal("0"), kelly * self.kelly_fraction)
-    
+
     def calculate_size(
-        self,
-        signal: Signal,
-        account: AccountState,
-        current_price: Decimal
+        self, signal: Signal, account: AccountState, current_price: Decimal
     ) -> Decimal:
         kelly = self.calculate_kelly()
         position_value = account.equity * kelly
         return position_value / current_price
 
+
 class ATRBasedSizer:
     """Volatility-adjusted position sizing using ATR."""
-    
+
     def __init__(
-        self,
-        risk_percent: Decimal = Decimal("0.02"),
-        atr_multiplier: Decimal = Decimal("2")
+        self, risk_percent: Decimal = Decimal("0.02"), atr_multiplier: Decimal = Decimal("2")
     ):
         self.risk_percent = risk_percent
         self.atr_mult = atr_multiplier
-    
+
     def calculate_size(
-        self,
-        signal: Signal,
-        account: AccountState,
-        current_price: Decimal,
-        atr: Decimal
+        self, signal: Signal, account: AccountState, current_price: Decimal, atr: Decimal
     ) -> Decimal:
         risk_amount = account.equity * self.risk_percent
         stop_distance = atr * self.atr_mult
@@ -805,55 +817,61 @@ class RiskCheckResult:
     reason: Optional[str] = None
     adjusted_size: Optional[Decimal] = None
 
+
 class RiskManager:
     """Pre-trade risk checks and limits enforcement."""
-    
-    def __init__(self, config: 'RiskConfig'):
+
+    def __init__(self, config: "RiskConfig"):
         self.config = config
         self.daily_pnl = Decimal("0")
         self.daily_start_equity = None
-    
+
     def check_order(self, order: Order, account: AccountState) -> RiskCheckResult:
         """Run all risk checks on proposed order."""
-        
+
         # Check 1: Daily loss limit
         if self.daily_start_equity:
             daily_drawdown = (self.daily_start_equity - account.equity) / self.daily_start_equity
             if daily_drawdown >= self.config.max_daily_loss:
                 return RiskCheckResult(False, "Daily loss limit reached")
-        
+
         # Check 2: Maximum position size
         notional = order.size * order.price * order.leverage
         if notional > self.config.max_position_notional:
             adjusted = self.config.max_position_notional / (order.price * order.leverage)
             return RiskCheckResult(True, "Size reduced to max", adjusted)
-        
+
         # Check 3: Maximum leverage
         if order.leverage > self.config.max_leverage:
-            return RiskCheckResult(False, f"Leverage {order.leverage}x exceeds max {self.config.max_leverage}x")
-        
+            return RiskCheckResult(
+                False, f"Leverage {order.leverage}x exceeds max {self.config.max_leverage}x"
+            )
+
         # Check 4: Available margin
         required_margin = notional / order.leverage
         if required_margin > account.margin_available:
             return RiskCheckResult(False, "Insufficient margin")
-        
+
         # Check 5: Maximum drawdown position reduction
-        if account.equity < self.daily_start_equity * (1 - self.config.drawdown_reduction_threshold):
+        if account.equity < self.daily_start_equity * (
+            1 - self.config.drawdown_reduction_threshold
+        ):
             reduction_factor = self._calculate_drawdown_reduction(account)
             adjusted = order.size * reduction_factor
             return RiskCheckResult(True, "Size reduced due to drawdown", adjusted)
-        
+
         return RiskCheckResult(True)
-    
+
     def _calculate_drawdown_reduction(self, account: AccountState) -> Decimal:
         """Reduce position size proportionally as drawdown increases."""
         current_dd = (self.daily_start_equity - account.equity) / self.daily_start_equity
         max_dd = self.config.max_drawdown
-        
+
         if current_dd >= max_dd:
             return Decimal("0")  # Stop trading
-        
+
         return Decimal("1") - (current_dd / max_dd)
+
 
 @dataclass
 class RiskConfig:
@@ -871,7 +889,7 @@ class RiskConfig:
 ```python
 class MarginCalculator:
     """Calculate margin requirements and liquidation prices."""
-    
+
     # Binance maintenance margin rate tiers
     MAINTENANCE_MARGIN_TIERS = [
         (Decimal("50000"), Decimal("0.004"), Decimal("0")),
@@ -880,58 +898,40 @@ class MarginCalculator:
         (Decimal("5000000"), Decimal("0.025"), Decimal("16300")),
         (Decimal("20000000"), Decimal("0.05"), Decimal("79300")),
     ]
-    
-    def calculate_initial_margin(
-        self,
-        notional: Decimal,
-        leverage: int
-    ) -> Decimal:
+
+    def calculate_initial_margin(self, notional: Decimal, leverage: int) -> Decimal:
         """Initial margin = notional / leverage."""
         return notional / Decimal(leverage)
-    
-    def calculate_maintenance_margin(
-        self,
-        notional: Decimal
-    ) -> Decimal:
+
+    def calculate_maintenance_margin(self, notional: Decimal) -> Decimal:
         """Calculate maintenance margin based on position size tiers."""
         for max_notional, mmr, maintenance_amount in self.MAINTENANCE_MARGIN_TIERS:
             if notional <= max_notional:
                 return notional * mmr + maintenance_amount
         # Above highest tier
         return notional * Decimal("0.05") + Decimal("79300")
-    
+
     def calculate_liquidation_price(
-        self,
-        entry_price: Decimal,
-        leverage: int,
-        side: Side,
-        mmr: Decimal = Decimal("0.004")
+        self, entry_price: Decimal, leverage: int, side: Side, mmr: Decimal = Decimal("0.004")
     ) -> Decimal:
         """Simplified liquidation price for isolated margin."""
         if side == Side.LONG:
-            return entry_price * (1 - Decimal("1")/Decimal(leverage) + mmr)
+            return entry_price * (1 - Decimal("1") / Decimal(leverage) + mmr)
         else:  # SHORT
-            return entry_price * (1 + Decimal("1")/Decimal(leverage) - mmr)
-    
-    def check_liquidation(
-        self,
-        position: Position,
-        mark_price: Decimal
-    ) -> bool:
+            return entry_price * (1 + Decimal("1") / Decimal(leverage) - mmr)
+
+    def check_liquidation(self, position: Position, mark_price: Decimal) -> bool:
         """Check if position should be liquidated."""
         if position.side == Side.LONG:
             return mark_price <= position.liquidation_price
         else:
             return mark_price >= position.liquidation_price
 
+
 class FundingRateCalculator:
     """Calculate funding payments for perpetual positions."""
-    
-    def calculate_funding_payment(
-        self,
-        position: Position,
-        funding_rate: Decimal
-    ) -> Decimal:
+
+    def calculate_funding_payment(self, position: Position, funding_rate: Decimal) -> Decimal:
         """
         Funding payment = position notional × funding rate
         Positive rate: longs pay shorts
@@ -939,22 +939,22 @@ class FundingRateCalculator:
         """
         notional = position.size * position.entry_price
         payment = notional * funding_rate
-        
+
         if position.side == Side.LONG:
             return -payment if funding_rate > 0 else payment
         else:
             return payment if funding_rate > 0 else -payment
-    
+
     def calculate_accrued_funding(
         self,
         position: Position,
         funding_rates: list[tuple[datetime, Decimal]],
-        interval_hours: int = 8  # Binance: 8h, Ethereal: 1h
+        interval_hours: int = 8,  # Binance: 8h, Ethereal: 1h
     ) -> Decimal:
         """Calculate total funding paid/received over position lifetime."""
         total = Decimal("0")
         notional = position.size * position.entry_price
-        
+
         for timestamp, rate in funding_rates:
             if timestamp >= position.opened_at:
                 payment = notional * rate
@@ -962,7 +962,7 @@ class FundingRateCalculator:
                     total -= payment if rate > 0 else -payment
                 else:
                     total += payment if rate > 0 else -payment
-        
+
         return total
 ```
 
@@ -975,109 +975,106 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+
 class PerformanceAnalyzer:
     """Calculate comprehensive trading performance metrics."""
-    
+
     def __init__(self, trades: list[Trade], equity_curve: pd.Series):
         self.trades = trades
         self.equity_curve = equity_curve
         self.returns = equity_curve.pct_change().dropna()
-    
+
     def calculate_all_metrics(self) -> dict:
         """Calculate all performance metrics."""
         return {
             # Return metrics
-            'total_return': self.total_return(),
-            'cagr': self.cagr(),
-            'annual_return': self.annual_return(),
-            
+            "total_return": self.total_return(),
+            "cagr": self.cagr(),
+            "annual_return": self.annual_return(),
             # Risk metrics
-            'volatility': self.volatility(),
-            'max_drawdown': self.max_drawdown(),
-            'max_drawdown_duration': self.max_drawdown_duration(),
-            'var_95': self.value_at_risk(0.05),
-            'cvar_95': self.conditional_var(0.05),
-            
+            "volatility": self.volatility(),
+            "max_drawdown": self.max_drawdown(),
+            "max_drawdown_duration": self.max_drawdown_duration(),
+            "var_95": self.value_at_risk(0.05),
+            "cvar_95": self.conditional_var(0.05),
             # Risk-adjusted metrics
-            'sharpe_ratio': self.sharpe_ratio(),
-            'sortino_ratio': self.sortino_ratio(),
-            'calmar_ratio': self.calmar_ratio(),
-            'omega_ratio': self.omega_ratio(),
-            
+            "sharpe_ratio": self.sharpe_ratio(),
+            "sortino_ratio": self.sortino_ratio(),
+            "calmar_ratio": self.calmar_ratio(),
+            "omega_ratio": self.omega_ratio(),
             # Trade metrics
-            'total_trades': len(self.trades),
-            'win_rate': self.win_rate(),
-            'profit_factor': self.profit_factor(),
-            'avg_win': self.avg_win(),
-            'avg_loss': self.avg_loss(),
-            'expectancy': self.expectancy(),
-            'avg_holding_period': self.avg_holding_period(),
-            
+            "total_trades": len(self.trades),
+            "win_rate": self.win_rate(),
+            "profit_factor": self.profit_factor(),
+            "avg_win": self.avg_win(),
+            "avg_loss": self.avg_loss(),
+            "expectancy": self.expectancy(),
+            "avg_holding_period": self.avg_holding_period(),
             # Consistency metrics
-            'winning_months': self.winning_months(),
-            'best_month': self.best_month(),
-            'worst_month': self.worst_month(),
+            "winning_months": self.winning_months(),
+            "best_month": self.best_month(),
+            "worst_month": self.worst_month(),
         }
-    
+
     def sharpe_ratio(self, risk_free_rate: float = 0.01, periods: int = 252) -> float:
         """Annualized Sharpe ratio."""
         excess_returns = self.returns.mean() * periods - risk_free_rate
         volatility = self.returns.std() * np.sqrt(periods)
         return excess_returns / volatility if volatility > 0 else 0
-    
+
     def sortino_ratio(self, risk_free_rate: float = 0.01, periods: int = 252) -> float:
         """Sortino ratio using downside deviation."""
         excess_returns = self.returns.mean() * periods - risk_free_rate
         downside_returns = self.returns[self.returns < 0]
         downside_std = downside_returns.std() * np.sqrt(periods)
         return excess_returns / downside_std if downside_std > 0 else 0
-    
+
     def calmar_ratio(self) -> float:
         """CAGR / Max Drawdown."""
         mdd = abs(self.max_drawdown())
         return self.cagr() / mdd if mdd > 0 else 0
-    
+
     def max_drawdown(self) -> float:
         """Maximum peak-to-trough drawdown."""
         peak = self.equity_curve.expanding().max()
         drawdown = (self.equity_curve - peak) / peak
         return drawdown.min()
-    
+
     def max_drawdown_duration(self) -> int:
         """Maximum drawdown duration in days."""
         peak = self.equity_curve.expanding().max()
         drawdown = (self.equity_curve - peak) / peak
-        
+
         # Find underwater periods
         underwater = drawdown < 0
         groups = (~underwater).cumsum()
         durations = underwater.groupby(groups).sum()
-        
+
         return int(durations.max()) if len(durations) > 0 else 0
-    
+
     def profit_factor(self) -> float:
         """Gross profits / Gross losses."""
         gross_profits = sum(t.net_pnl for t in self.trades if t.net_pnl > 0)
         gross_losses = abs(sum(t.net_pnl for t in self.trades if t.net_pnl < 0))
-        return gross_profits / gross_losses if gross_losses > 0 else float('inf')
-    
+        return gross_profits / gross_losses if gross_losses > 0 else float("inf")
+
     def win_rate(self) -> float:
         """Percentage of winning trades."""
         if not self.trades:
             return 0
         winners = sum(1 for t in self.trades if t.net_pnl > 0)
         return winners / len(self.trades)
-    
+
     def expectancy(self) -> float:
         """Expected value per trade."""
         if not self.trades:
             return 0
         return sum(float(t.net_pnl) for t in self.trades) / len(self.trades)
-    
+
     def value_at_risk(self, confidence: float = 0.05) -> float:
         """Value at Risk at given confidence level."""
         return np.percentile(self.returns, confidence * 100)
-    
+
     def conditional_var(self, confidence: float = 0.05) -> float:
         """Expected shortfall (CVaR) at given confidence level."""
         var = self.value_at_risk(confidence)
@@ -1089,64 +1086,62 @@ class PerformanceAnalyzer:
 ```python
 class OverfittingDetector:
     """Detect and quantify overfitting risk."""
-    
+
     def deflated_sharpe_ratio(
         self,
         observed_sharpe: float,
         num_trials: int,
         variance_sharpe: float,
         skewness: float = 0,
-        kurtosis: float = 3
+        kurtosis: float = 3,
     ) -> float:
         """
         Deflated Sharpe Ratio accounts for multiple testing.
         Returns probability that observed Sharpe is due to luck.
         """
         # Expected maximum Sharpe under null hypothesis
-        expected_max = (1 - np.euler_gamma) * stats.norm.ppf(1 - 1/num_trials) + \
-                       np.euler_gamma * stats.norm.ppf(1 - 1/(num_trials * np.e))
-        
+        expected_max = (1 - np.euler_gamma) * stats.norm.ppf(
+            1 - 1 / num_trials
+        ) + np.euler_gamma * stats.norm.ppf(1 - 1 / (num_trials * np.e))
+
         # Adjustment for non-normality
-        sr_adj = observed_sharpe * (1 + (skewness/6) * observed_sharpe - \
-                 ((kurtosis - 3)/24) * observed_sharpe**2)
-        
+        sr_adj = observed_sharpe * (
+            1 + (skewness / 6) * observed_sharpe - ((kurtosis - 3) / 24) * observed_sharpe**2
+        )
+
         # Probability of false discovery
         prob_false = stats.norm.cdf((expected_max - sr_adj) / np.sqrt(variance_sharpe))
-        
+
         return prob_false
-    
+
     def walk_forward_efficiency(
-        self,
-        in_sample_sharpe: list[float],
-        out_sample_sharpe: list[float]
+        self, in_sample_sharpe: list[float], out_sample_sharpe: list[float]
     ) -> dict:
         """
         Walk-forward analysis efficiency metrics.
         High IS/OOS correlation suggests robust strategy.
         """
         correlation = np.corrcoef(in_sample_sharpe, out_sample_sharpe)[0, 1]
-        
+
         avg_is = np.mean(in_sample_sharpe)
         avg_oos = np.mean(out_sample_sharpe)
         degradation = (avg_is - avg_oos) / avg_is if avg_is > 0 else 0
-        
+
         # Count how many OOS periods are profitable
         oos_positive = sum(1 for s in out_sample_sharpe if s > 0)
         consistency = oos_positive / len(out_sample_sharpe)
-        
+
         return {
-            'is_oos_correlation': correlation,
-            'performance_degradation': degradation,
-            'oos_consistency': consistency,
-            'avg_in_sample_sharpe': avg_is,
-            'avg_out_sample_sharpe': avg_oos,
-            'overfitting_probability': max(0, degradation)  # Higher = more overfit
+            "is_oos_correlation": correlation,
+            "performance_degradation": degradation,
+            "oos_consistency": consistency,
+            "avg_in_sample_sharpe": avg_is,
+            "avg_out_sample_sharpe": avg_oos,
+            "overfitting_probability": max(0, degradation),  # Higher = more overfit
         }
-    
+
     def parameter_sensitivity_score(
-        self,
-        param_values: np.ndarray,
-        performance_values: np.ndarray
+        self, param_values: np.ndarray, performance_values: np.ndarray
     ) -> float:
         """
         Measure how sensitive performance is to parameter changes.
@@ -1154,45 +1149,44 @@ class OverfittingDetector:
         """
         # Calculate gradient of performance surface
         gradient = np.gradient(performance_values)
-        
+
         # Coefficient of variation of gradient
-        cv = np.std(gradient) / np.abs(np.mean(gradient)) if np.mean(gradient) != 0 else float('inf')
-        
+        cv = (
+            np.std(gradient) / np.abs(np.mean(gradient)) if np.mean(gradient) != 0 else float("inf")
+        )
+
         # High CV = performance is sensitive to parameter changes = overfit risk
         return cv
-    
-    def calculate_overfitting_score(
-        self,
-        metrics: dict
-    ) -> dict:
+
+    def calculate_overfitting_score(self, metrics: dict) -> dict:
         """
         Aggregate overfitting indicators into single score.
         """
         # Warning thresholds
         warnings = []
-        
-        if metrics.get('sharpe_ratio', 0) > 2.0:
+
+        if metrics.get("sharpe_ratio", 0) > 2.0:
             warnings.append("Sharpe ratio >2.0 is suspicious for crypto")
-        
-        if metrics.get('win_rate', 0) > 0.75:
+
+        if metrics.get("win_rate", 0) > 0.75:
             warnings.append("Win rate >75% rarely sustainable")
-        
-        if metrics.get('profit_factor', 0) > 3.0:
+
+        if metrics.get("profit_factor", 0) > 3.0:
             warnings.append("Profit factor >3.0 unlikely to persist")
-        
-        if metrics.get('performance_degradation', 0) > 0.5:
+
+        if metrics.get("performance_degradation", 0) > 0.5:
             warnings.append("50%+ degradation from IS to OOS")
-        
-        if metrics.get('oos_consistency', 1) < 0.6:
+
+        if metrics.get("oos_consistency", 1) < 0.6:
             warnings.append("Less than 60% OOS periods profitable")
-        
+
         # Overall score (0-1, higher = more likely overfit)
         score = len(warnings) / 5
-        
+
         return {
-            'overfitting_score': score,
-            'risk_level': 'HIGH' if score > 0.6 else 'MEDIUM' if score > 0.3 else 'LOW',
-            'warnings': warnings
+            "overfitting_score": score,
+            "risk_level": "HIGH" if score > 0.6 else "MEDIUM" if score > 0.3 else "LOW",
+            "warnings": warnings,
         }
 ```
 
@@ -1267,42 +1261,56 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
+
 @dataclass
 class Event(ABC):
     """Base event class."""
+
     id: str = field(default_factory=lambda: str(uuid4()))
     timestamp: datetime = field(default_factory=datetime.utcnow)
-    
+
+
 class MarketEvent(Event):
     """New market data available."""
+
     symbol: str
     exchange: Exchange
     bar: Bar
-    
+
+
 class SignalEvent(Event):
     """Strategy generated trading signal."""
+
     strategy_name: str
     signal: Signal
-    
+
+
 class OrderEvent(Event):
     """Order submitted for execution."""
+
     order: Order
-    
+
+
 class FillEvent(Event):
     """Order was filled."""
+
     order: Order
     fill_price: Decimal
     fill_size: Decimal
     fee: Decimal
-    
+
+
 class RiskEvent(Event):
     """Risk limit triggered."""
+
     event_type: str  # "daily_limit", "max_drawdown", "liquidation"
     message: str
     action: str  # "reduce_position", "close_all", "halt_trading"
 
+
 class FundingEvent(Event):
     """Funding rate payment."""
+
     symbol: str
     exchange: Exchange
     rate: Decimal
@@ -1316,27 +1324,28 @@ from collections import defaultdict
 from typing import Callable, Type
 import asyncio
 
+
 class EventBus:
     """Central event routing and processing."""
-    
+
     def __init__(self):
         self._handlers: dict[Type[Event], list[Callable]] = defaultdict(list)
         self._queue: asyncio.Queue = asyncio.Queue()
-        
+
     def subscribe(self, event_type: Type[Event], handler: Callable) -> None:
         """Register handler for event type."""
         self._handlers[event_type].append(handler)
-        
+
     def publish(self, event: Event) -> None:
         """Add event to processing queue."""
         self._queue.put_nowait(event)
-        
+
     async def process(self) -> None:
         """Process all events in queue."""
         while not self._queue.empty():
             event = await self._queue.get()
             handlers = self._handlers[type(event)]
-            
+
             for handler in handlers:
                 try:
                     result = handler(event)
@@ -1344,7 +1353,7 @@ class EventBus:
                         await result
                 except Exception as e:
                     logging.error(f"Handler error for {type(event)}: {e}")
-                    
+
     async def run_loop(self) -> None:
         """Main event loop for live/paper trading."""
         while True:
@@ -1359,76 +1368,72 @@ class EventBus:
 ```python
 class BacktestOrchestrator:
     """Coordinate vectorized screening and event-driven validation."""
-    
-    def __init__(
-        self,
-        data_provider: 'DataProvider',
-        config: 'BacktestConfig'
-    ):
+
+    def __init__(self, data_provider: "DataProvider", config: "BacktestConfig"):
         self.data_provider = data_provider
         self.config = config
-        
+
     async def run_parameter_sweep(
         self,
         strategy_class: type,
         param_grid: dict[str, list],
         symbols: list[str],
         start_date: datetime,
-        end_date: datetime
+        end_date: datetime,
     ) -> pd.DataFrame:
         """
         Stage 1: Vectorized parameter sweep for rapid screening.
         Uses VectorBT for speed.
         """
         import vectorbt as vbt
-        
+
         # Load data
         data = {}
         for symbol in symbols:
-            data[symbol] = self.data_provider.get_bars(
-                symbol, start_date, end_date
-            )
-        
+            data[symbol] = self.data_provider.get_bars(symbol, start_date, end_date)
+
         # Generate all parameter combinations
         param_combinations = list(itertools.product(*param_grid.values()))
         param_names = list(param_grid.keys())
-        
+
         results = []
         for params in param_combinations:
             param_dict = dict(zip(param_names, params))
-            
+
             # Run vectorized backtest
             strategy = strategy_class(**param_dict)
             signals = strategy.generate_signals_vectorized(data)
-            
+
             # VectorBT portfolio simulation
             portfolio = vbt.Portfolio.from_signals(
-                close=data['close'],
-                entries=signals['entries'],
-                exits=signals['exits'],
+                close=data["close"],
+                entries=signals["entries"],
+                exits=signals["exits"],
                 fees=self.config.fee_rate,
-                sl_stop=param_dict.get('stop_loss'),
-                tp_stop=param_dict.get('take_profit')
+                sl_stop=param_dict.get("stop_loss"),
+                tp_stop=param_dict.get("take_profit"),
             )
-            
-            results.append({
-                **param_dict,
-                'sharpe': portfolio.sharpe_ratio(),
-                'max_dd': portfolio.max_drawdown(),
-                'total_return': portfolio.total_return(),
-                'win_rate': portfolio.win_rate()
-            })
-        
+
+            results.append(
+                {
+                    **param_dict,
+                    "sharpe": portfolio.sharpe_ratio(),
+                    "max_dd": portfolio.max_drawdown(),
+                    "total_return": portfolio.total_return(),
+                    "win_rate": portfolio.win_rate(),
+                }
+            )
+
         return pd.DataFrame(results)
-    
+
     async def validate_strategy(
         self,
         strategy: IStrategy,
         symbols: list[str],
         start_date: datetime,
         end_date: datetime,
-        mode: str = 'event_driven'
-    ) -> 'BacktestResult':
+        mode: str = "event_driven",
+    ) -> "BacktestResult":
         """
         Stage 2: Full event-driven validation with realistic execution.
         Uses NautilusTrader-style engine.
@@ -1440,91 +1445,87 @@ class BacktestOrchestrator:
             fee_model=self.config.fee_model,
             slippage_model=self.config.slippage_model,
             latency_model=self.config.latency_model,
-            risk_manager=RiskManager(self.config.risk_config)
+            risk_manager=RiskManager(self.config.risk_config),
         )
-        
+
         # Wire up event handlers
         event_bus.subscribe(MarketEvent, strategy.on_bar)
         event_bus.subscribe(SignalEvent, portfolio.on_signal)
         event_bus.subscribe(OrderEvent, execution.submit_order)
         event_bus.subscribe(FillEvent, portfolio.on_fill)
         event_bus.subscribe(FillEvent, strategy.on_fill)
-        
+
         # Load and replay data
         data_handler = DataHandler(self.data_provider, symbols, start_date, end_date)
-        
-        strategy.initialize(BacktestContext(
-            symbols=symbols,
-            start_date=start_date,
-            end_date=end_date,
-            initial_capital=self.config.initial_capital
-        ))
-        
+
+        strategy.initialize(
+            BacktestContext(
+                symbols=symbols,
+                start_date=start_date,
+                end_date=end_date,
+                initial_capital=self.config.initial_capital,
+            )
+        )
+
         # Main backtest loop
         while data_handler.has_more_data():
             # Emit market events for all symbols at this timestamp
             bars = data_handler.get_next_bars()
             for symbol, bar in bars.items():
                 event_bus.publish(MarketEvent(symbol=symbol, bar=bar))
-            
+
             # Process all events generated
             await event_bus.process()
-            
+
             # Check for funding rate events
             self._check_funding_events(event_bus, portfolio, bars)
-            
+
             # Check for liquidations
             self._check_liquidations(event_bus, portfolio, bars)
-        
+
         # Calculate results
         return BacktestResult(
             trades=portfolio.closed_trades,
             equity_curve=portfolio.equity_curve,
             metrics=PerformanceAnalyzer(
-                portfolio.closed_trades,
-                portfolio.equity_curve
-            ).calculate_all_metrics()
+                portfolio.closed_trades, portfolio.equity_curve
+            ).calculate_all_metrics(),
         )
-    
+
     def _check_funding_events(
-        self,
-        event_bus: EventBus,
-        portfolio: PortfolioManager,
-        bars: dict[str, Bar]
+        self, event_bus: EventBus, portfolio: PortfolioManager, bars: dict[str, Bar]
     ) -> None:
         """Check if funding payment is due."""
         for position in portfolio.positions.values():
             if self._is_funding_time(bars[position.symbol].timestamp, position.exchange):
                 funding_rate = self.data_provider.get_funding_rate(
-                    position.symbol,
-                    bars[position.symbol].timestamp
+                    position.symbol, bars[position.symbol].timestamp
                 )
-                payment = FundingRateCalculator().calculate_funding_payment(
-                    position, funding_rate
+                payment = FundingRateCalculator().calculate_funding_payment(position, funding_rate)
+                event_bus.publish(
+                    FundingEvent(
+                        symbol=position.symbol,
+                        exchange=position.exchange,
+                        rate=funding_rate,
+                        payment=payment,
+                    )
                 )
-                event_bus.publish(FundingEvent(
-                    symbol=position.symbol,
-                    exchange=position.exchange,
-                    rate=funding_rate,
-                    payment=payment
-                ))
-    
+
     def _check_liquidations(
-        self,
-        event_bus: EventBus,
-        portfolio: PortfolioManager,
-        bars: dict[str, Bar]
+        self, event_bus: EventBus, portfolio: PortfolioManager, bars: dict[str, Bar]
     ) -> None:
         """Check positions for liquidation."""
         calculator = MarginCalculator()
         for position in portfolio.positions.values():
             mark_price = bars[position.symbol].close
             if calculator.check_liquidation(position, mark_price):
-                event_bus.publish(RiskEvent(
-                    event_type="liquidation",
-                    message=f"Position {position.symbol} liquidated",
-                    action="close_position"
-                ))
+                event_bus.publish(
+                    RiskEvent(
+                        event_type="liquidation",
+                        message=f"Position {position.symbol} liquidated",
+                        action="close_position",
+                    )
+                )
 ```
 
 ### 4.4 Data Pipeline Architecture
@@ -1553,63 +1554,48 @@ class BacktestOrchestrator:
 ```python
 class IDataProvider(Protocol):
     """Data access interface for backtesting and live trading."""
-    
+
     def get_bars(
-        self,
-        symbol: str,
-        start: datetime,
-        end: datetime,
-        timeframe: str = "1m"
+        self, symbol: str, start: datetime, end: datetime, timeframe: str = "1m"
     ) -> pd.DataFrame:
         """Get historical OHLCV bars."""
         ...
-    
-    def get_funding_rates(
-        self,
-        symbol: str,
-        start: datetime,
-        end: datetime
-    ) -> pd.DataFrame:
+
+    def get_funding_rates(self, symbol: str, start: datetime, end: datetime) -> pd.DataFrame:
         """Get historical funding rates."""
         ...
-    
+
     async def subscribe_bars(
-        self,
-        symbol: str,
-        timeframe: str,
-        callback: Callable[[Bar], None]
+        self, symbol: str, timeframe: str, callback: Callable[[Bar], None]
     ) -> None:
         """Subscribe to live bar updates."""
         ...
-    
+
     def get_available_symbols(self, exchange: Exchange) -> list[str]:
         """List available trading pairs."""
         ...
 
+
 class ParquetDataProvider(IDataProvider):
     """Data provider using Parquet files with DuckDB queries."""
-    
+
     def __init__(self, data_dir: Path):
         self.data_dir = data_dir
         self.conn = duckdb.connect()
-        
+
     def get_bars(
-        self,
-        symbol: str,
-        start: datetime,
-        end: datetime,
-        timeframe: str = "1m"
+        self, symbol: str, start: datetime, end: datetime, timeframe: str = "1m"
     ) -> pd.DataFrame:
         # Query Parquet files directly with DuckDB
         path = self.data_dir / f"{symbol}/{timeframe}/*.parquet"
-        
+
         query = f"""
             SELECT * FROM read_parquet('{path}')
             WHERE timestamp >= '{start.isoformat()}'
               AND timestamp <= '{end.isoformat()}'
             ORDER BY timestamp
         """
-        
+
         return self.conn.execute(query).df()
 ```
 
@@ -1639,133 +1625,116 @@ import websockets
 import json
 from urllib.parse import urlencode
 
+
 class BinanceAdapter:
     """Binance Perpetual Futures adapter."""
-    
-    def __init__(
-        self,
-        api_key: str,
-        api_secret: str,
-        testnet: bool = False
-    ):
+
+    def __init__(self, api_key: str, api_secret: str, testnet: bool = False):
         self.api_key = api_key
         self.api_secret = api_secret
-        self.base_url = (
-            "https://demo-fapi.binance.com" if testnet 
-            else "https://fapi.binance.com"
-        )
-        self.ws_url = (
-            "wss://fstream.binancefuture.com" if testnet
-            else "wss://fstream.binance.com"
-        )
-        
+        self.base_url = "https://demo-fapi.binance.com" if testnet else "https://fapi.binance.com"
+        self.ws_url = "wss://fstream.binancefuture.com" if testnet else "wss://fstream.binance.com"
+
         # Also initialize CCXT for convenience methods
-        self.ccxt = ccxt.binance({
-            'apiKey': api_key,
-            'secret': api_secret,
-            'options': {'defaultType': 'future'},
-            'sandbox': testnet
-        })
-    
+        self.ccxt = ccxt.binance(
+            {
+                "apiKey": api_key,
+                "secret": api_secret,
+                "options": {"defaultType": "future"},
+                "sandbox": testnet,
+            }
+        )
+
     def _sign_request(self, params: dict) -> dict:
         """Add signature to request parameters."""
-        params['timestamp'] = int(time.time() * 1000)
+        params["timestamp"] = int(time.time() * 1000)
         query_string = urlencode(params)
         signature = hmac.new(
-            self.api_secret.encode(),
-            query_string.encode(),
-            hashlib.sha256
+            self.api_secret.encode(), query_string.encode(), hashlib.sha256
         ).hexdigest()
-        params['signature'] = signature
+        params["signature"] = signature
         return params
-    
+
     async def fetch_klines(
-        self,
-        symbol: str,
-        interval: str,
-        start_time: int,
-        end_time: int,
-        limit: int = 1500
+        self, symbol: str, interval: str, start_time: int, end_time: int, limit: int = 1500
     ) -> list[Bar]:
         """Fetch historical klines."""
         all_bars = []
         current_start = start_time
-        
+
         async with aiohttp.ClientSession() as session:
             while current_start < end_time:
                 params = {
-                    'symbol': symbol,
-                    'interval': interval,
-                    'startTime': current_start,
-                    'endTime': end_time,
-                    'limit': limit
+                    "symbol": symbol,
+                    "interval": interval,
+                    "startTime": current_start,
+                    "endTime": end_time,
+                    "limit": limit,
                 }
-                
+
                 async with session.get(
-                    f"{self.base_url}/fapi/v1/klines",
-                    params=params
+                    f"{self.base_url}/fapi/v1/klines", params=params
                 ) as response:
                     data = await response.json()
-                    
+
                     if not data:
                         break
-                    
+
                     for k in data:
-                        all_bars.append(Bar(
-                            symbol=symbol,
-                            exchange=Exchange.BINANCE,
-                            timestamp=datetime.fromtimestamp(k[0] / 1000),
-                            open=Decimal(k[1]),
-                            high=Decimal(k[2]),
-                            low=Decimal(k[3]),
-                            close=Decimal(k[4]),
-                            volume=Decimal(k[5]),
-                            quote_volume=Decimal(k[7]),
-                            trades=int(k[8]),
-                            timeframe=interval
-                        ))
-                    
+                        all_bars.append(
+                            Bar(
+                                symbol=symbol,
+                                exchange=Exchange.BINANCE,
+                                timestamp=datetime.fromtimestamp(k[0] / 1000),
+                                open=Decimal(k[1]),
+                                high=Decimal(k[2]),
+                                low=Decimal(k[3]),
+                                close=Decimal(k[4]),
+                                volume=Decimal(k[5]),
+                                quote_volume=Decimal(k[7]),
+                                trades=int(k[8]),
+                                timeframe=interval,
+                            )
+                        )
+
                     # Move to next batch
                     current_start = data[-1][6] + 1  # close_time + 1
-                    
+
                     # Rate limit
                     await asyncio.sleep(0.1)
-        
+
         return all_bars
-    
+
     async def subscribe_klines(
-        self,
-        symbol: str,
-        interval: str,
-        callback: Callable[[Bar], None]
+        self, symbol: str, interval: str, callback: Callable[[Bar], None]
     ) -> None:
         """Subscribe to live kline updates via WebSocket."""
         stream = f"{symbol.lower()}@kline_{interval}"
         uri = f"{self.ws_url}/ws/{stream}"
-        
+
         async with websockets.connect(uri) as ws:
             while True:
                 message = await ws.recv()
                 data = json.loads(message)
-                
-                if data['e'] == 'kline':
-                    k = data['k']
-                    if k['x']:  # Kline closed
+
+                if data["e"] == "kline":
+                    k = data["k"]
+                    if k["x"]:  # Kline closed
                         bar = Bar(
                             symbol=symbol,
                             exchange=Exchange.BINANCE,
-                            timestamp=datetime.fromtimestamp(k['t'] / 1000),
-                            open=Decimal(k['o']),
-                            high=Decimal(k['h']),
-                            low=Decimal(k['l']),
-                            close=Decimal(k['c']),
-                            volume=Decimal(k['v']),
-                            quote_volume=Decimal(k['q']),
-                            trades=int(k['n']),
-                            timeframe=interval
+                            timestamp=datetime.fromtimestamp(k["t"] / 1000),
+                            open=Decimal(k["o"]),
+                            high=Decimal(k["h"]),
+                            low=Decimal(k["l"]),
+                            close=Decimal(k["c"]),
+                            volume=Decimal(k["v"]),
+                            quote_volume=Decimal(k["q"]),
+                            trades=int(k["n"]),
+                            timeframe=interval,
                         )
                         callback(bar)
-    
+
     async def place_order(
         self,
         symbol: str,
@@ -1774,31 +1743,31 @@ class BinanceAdapter:
         quantity: Decimal,
         price: Optional[Decimal] = None,
         stop_price: Optional[Decimal] = None,
-        leverage: int = 1
+        leverage: int = 1,
     ) -> dict:
         """Place order on Binance Futures."""
         # Set leverage first
         await self._set_leverage(symbol, leverage)
-        
+
         params = {
-            'symbol': symbol,
-            'side': side.upper(),
-            'type': order_type.upper(),
-            'quantity': str(quantity)
+            "symbol": symbol,
+            "side": side.upper(),
+            "type": order_type.upper(),
+            "quantity": str(quantity),
         }
-        
+
         if price:
-            params['price'] = str(price)
+            params["price"] = str(price)
         if stop_price:
-            params['stopPrice'] = str(stop_price)
-        
+            params["stopPrice"] = str(stop_price)
+
         params = self._sign_request(params)
-        
+
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{self.base_url}/fapi/v1/order",
                 params=params,
-                headers={'X-MBX-APIKEY': self.api_key}
+                headers={"X-MBX-APIKEY": self.api_key},
             ) as response:
                 return await response.json()
 ```
@@ -1822,39 +1791,35 @@ from eth_account import Account
 from eth_account.messages import encode_typed_data
 import time
 
+
 class EtherealSigner:
     """EIP-712 message signing for Ethereal authentication."""
-    
+
     DOMAIN = {
         "name": "Ethereal",
         "version": "1",
         "chainId": 5064014,
-        "verifyingContract": "0xB3cDC82035C495c484C9fF11eD5f3Ff6d342e3cc"
+        "verifyingContract": "0xB3cDC82035C495c484C9fF11eD5f3Ff6d342e3cc",
     }
-    
+
     def __init__(self, private_key: str):
         self.account = Account.from_key(private_key)
         self.address = self.account.address
-    
+
     def sign_order(
-        self,
-        symbol: str,
-        side: str,
-        size: Decimal,
-        price: Decimal,
-        order_type: str
+        self, symbol: str, side: str, size: Decimal, price: Decimal, order_type: str
     ) -> dict:
         """Sign order with EIP-712."""
         # Nonce is nanosecond timestamp
         nonce = int(time.time() * 1e9)
-        
+
         message = {
             "types": {
                 "EIP712Domain": [
                     {"name": "name", "type": "string"},
                     {"name": "version", "type": "string"},
                     {"name": "chainId", "type": "uint256"},
-                    {"name": "verifyingContract", "type": "address"}
+                    {"name": "verifyingContract", "type": "address"},
                 ],
                 "Order": [
                     {"name": "symbol", "type": "string"},
@@ -1863,8 +1828,8 @@ class EtherealSigner:
                     {"name": "price", "type": "uint256"},
                     {"name": "orderType", "type": "string"},
                     {"name": "nonce", "type": "uint256"},
-                    {"name": "account", "type": "address"}
-                ]
+                    {"name": "account", "type": "address"},
+                ],
             },
             "primaryType": "Order",
             "domain": self.DOMAIN,
@@ -1875,75 +1840,56 @@ class EtherealSigner:
                 "price": int(price * 10**18),
                 "orderType": order_type,
                 "nonce": nonce,
-                "account": self.address
-            }
+                "account": self.address,
+            },
         }
-        
+
         encoded = encode_typed_data(full_message=message)
         signed = self.account.sign_message(encoded)
-        
-        return {
-            "order": message["message"],
-            "signature": signed.signature.hex()
-        }
+
+        return {"order": message["message"], "signature": signed.signature.hex()}
+
 
 class EtherealAdapter:
     """Ethereal DEX adapter with EIP-712 authentication."""
-    
-    def __init__(
-        self,
-        private_key: str,
-        testnet: bool = False
-    ):
+
+    def __init__(self, private_key: str, testnet: bool = False):
         self.signer = EtherealSigner(private_key)
-        self.base_url = (
-            "https://api.etherealtest.net" if testnet
-            else "https://api.ethereal.trade"
-        )
-        self.ws_url = (
-            "wss://ws.etherealtest.net" if testnet
-            else "wss://ws.ethereal.trade"
-        )
-    
+        self.base_url = "https://api.etherealtest.net" if testnet else "https://api.ethereal.trade"
+        self.ws_url = "wss://ws.etherealtest.net" if testnet else "wss://ws.ethereal.trade"
+
     async def fetch_klines(
-        self,
-        symbol: str,
-        interval: str,
-        start_time: int,
-        end_time: int
+        self, symbol: str, interval: str, start_time: int, end_time: int
     ) -> list[Bar]:
         """Fetch historical klines from Ethereal."""
         async with aiohttp.ClientSession() as session:
             params = {
-                'symbol': symbol,
-                'interval': interval,
-                'startTime': start_time,
-                'endTime': end_time
+                "symbol": symbol,
+                "interval": interval,
+                "startTime": start_time,
+                "endTime": end_time,
             }
-            
-            async with session.get(
-                f"{self.base_url}/v1/klines",
-                params=params
-            ) as response:
+
+            async with session.get(f"{self.base_url}/v1/klines", params=params) as response:
                 data = await response.json()
-                
+
                 return [
                     Bar(
                         symbol=symbol,
                         exchange=Exchange.ETHEREAL,
-                        timestamp=datetime.fromtimestamp(k['timestamp'] / 1000),
-                        open=Decimal(str(k['open'])),
-                        high=Decimal(str(k['high'])),
-                        low=Decimal(str(k['low'])),
-                        close=Decimal(str(k['close'])),
-                        volume=Decimal(str(k['volume'])),
-                        quote_volume=Decimal(str(k.get('quoteVolume', 0))),
-                        trades=k.get('trades', 0),
-                        timeframe=interval
+                        timestamp=datetime.fromtimestamp(k["timestamp"] / 1000),
+                        open=Decimal(str(k["open"])),
+                        high=Decimal(str(k["high"])),
+                        low=Decimal(str(k["low"])),
+                        close=Decimal(str(k["close"])),
+                        volume=Decimal(str(k["volume"])),
+                        quote_volume=Decimal(str(k.get("quoteVolume", 0))),
+                        trades=k.get("trades", 0),
+                        timeframe=interval,
                     )
                     for k in data
                 ]
-    
+
     async def place_order(
         self,
         symbol: str,
@@ -1951,38 +1897,29 @@ class EtherealAdapter:
         order_type: str,
         size: Decimal,
         price: Optional[Decimal] = None,
-        leverage: int = 1
+        leverage: int = 1,
     ) -> dict:
         """Place signed order on Ethereal."""
         # Sign the order
         signed = self.signer.sign_order(
-            symbol=symbol,
-            side=side,
-            size=size,
-            price=price or Decimal("0"),
-            order_type=order_type
+            symbol=symbol, side=side, size=size, price=price or Decimal("0"), order_type=order_type
         )
-        
+
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{self.base_url}/v1/order",
                 json=signed,
-                headers={'Content-Type': 'application/json'}
+                headers={"Content-Type": "application/json"},
             ) as response:
                 return await response.json()
-    
-    async def subscribe_book(
-        self,
-        symbol: str,
-        callback: Callable[[dict], None]
-    ) -> None:
+
+    async def subscribe_book(self, symbol: str, callback: Callable[[dict], None]) -> None:
         """Subscribe to order book updates."""
         async with websockets.connect(self.ws_url) as ws:
-            await ws.send(json.dumps({
-                "method": "subscribe",
-                "params": {"channel": "book", "symbol": symbol}
-            }))
-            
+            await ws.send(
+                json.dumps({"method": "subscribe", "params": {"channel": "book", "symbol": symbol}})
+            )
+
             while True:
                 message = await ws.recv()
                 data = json.loads(message)
@@ -1998,132 +1935,122 @@ class EtherealAdapter:
 ```python
 class WalkForwardAnalyzer:
     """Rolling window walk-forward optimization and validation."""
-    
+
     def __init__(
         self,
         train_window: int,  # Days
-        test_window: int,   # Days
-        step_size: int,     # Days between windows
-        anchored: bool = False  # Expanding or rolling window
+        test_window: int,  # Days
+        step_size: int,  # Days between windows
+        anchored: bool = False,  # Expanding or rolling window
     ):
         self.train_window = train_window
         self.test_window = test_window
         self.step_size = step_size
         self.anchored = anchored
-    
+
     async def run(
         self,
         strategy_class: type,
         param_grid: dict,
         data: pd.DataFrame,
-        orchestrator: BacktestOrchestrator
-    ) -> 'WalkForwardResult':
+        orchestrator: BacktestOrchestrator,
+    ) -> "WalkForwardResult":
         """Run walk-forward analysis."""
         results = []
-        
+
         # Generate windows
         windows = self._generate_windows(data)
-        
+
         for i, (train_start, train_end, test_start, test_end) in enumerate(windows):
             # In-sample optimization
             train_data = data[(data.index >= train_start) & (data.index < train_end)]
-            
+
             # Find best parameters on training set
             sweep_results = await orchestrator.run_parameter_sweep(
-                strategy_class=strategy_class,
-                param_grid=param_grid,
-                data=train_data
+                strategy_class=strategy_class, param_grid=param_grid, data=train_data
             )
-            
-            best_params = sweep_results.loc[sweep_results['sharpe'].idxmax()].to_dict()
-            is_sharpe = best_params['sharpe']
-            
+
+            best_params = sweep_results.loc[sweep_results["sharpe"].idxmax()].to_dict()
+            is_sharpe = best_params["sharpe"]
+
             # Out-of-sample validation
             test_data = data[(data.index >= test_start) & (data.index < test_end)]
-            
-            strategy = strategy_class(**{
-                k: v for k, v in best_params.items() 
-                if k in param_grid
-            })
-            
-            oos_result = await orchestrator.validate_strategy(
-                strategy=strategy,
-                data=test_data
+
+            strategy = strategy_class(**{k: v for k, v in best_params.items() if k in param_grid})
+
+            oos_result = await orchestrator.validate_strategy(strategy=strategy, data=test_data)
+
+            results.append(
+                {
+                    "window": i,
+                    "train_start": train_start,
+                    "train_end": train_end,
+                    "test_start": test_start,
+                    "test_end": test_end,
+                    "best_params": best_params,
+                    "in_sample_sharpe": is_sharpe,
+                    "out_sample_sharpe": oos_result.metrics["sharpe_ratio"],
+                    "out_sample_return": oos_result.metrics["total_return"],
+                    "out_sample_max_dd": oos_result.metrics["max_drawdown"],
+                }
             )
-            
-            results.append({
-                'window': i,
-                'train_start': train_start,
-                'train_end': train_end,
-                'test_start': test_start,
-                'test_end': test_end,
-                'best_params': best_params,
-                'in_sample_sharpe': is_sharpe,
-                'out_sample_sharpe': oos_result.metrics['sharpe_ratio'],
-                'out_sample_return': oos_result.metrics['total_return'],
-                'out_sample_max_dd': oos_result.metrics['max_drawdown']
-            })
-        
+
         return WalkForwardResult(
             windows=results,
             analysis=OverfittingDetector().walk_forward_efficiency(
-                [r['in_sample_sharpe'] for r in results],
-                [r['out_sample_sharpe'] for r in results]
-            )
+                [r["in_sample_sharpe"] for r in results], [r["out_sample_sharpe"] for r in results]
+            ),
         )
-    
+
     def _generate_windows(
-        self,
-        data: pd.DataFrame
+        self, data: pd.DataFrame
     ) -> list[tuple[datetime, datetime, datetime, datetime]]:
         """Generate train/test window pairs."""
         windows = []
         start = data.index.min()
         end = data.index.max()
-        
+
         if self.anchored:
             # Anchored: training window expands
             train_start = start
             current = start + timedelta(days=self.train_window)
-            
+
             while current + timedelta(days=self.test_window) <= end:
-                windows.append((
-                    train_start,
-                    current,
-                    current,
-                    current + timedelta(days=self.test_window)
-                ))
+                windows.append(
+                    (train_start, current, current, current + timedelta(days=self.test_window))
+                )
                 current += timedelta(days=self.step_size)
         else:
             # Rolling: fixed-size windows
             current = start
-            
+
             while current + timedelta(days=self.train_window + self.test_window) <= end:
                 train_end = current + timedelta(days=self.train_window)
                 test_end = train_end + timedelta(days=self.test_window)
-                
+
                 windows.append((current, train_end, train_end, test_end))
                 current += timedelta(days=self.step_size)
-        
+
         return windows
+
 
 @dataclass
 class WalkForwardResult:
     windows: list[dict]
     analysis: dict
-    
+
     def summary(self) -> str:
         """Human-readable summary."""
         return f"""
 Walk-Forward Analysis Summary
 =============================
 Total Windows: {len(self.windows)}
-Avg In-Sample Sharpe: {self.analysis['avg_in_sample_sharpe']:.2f}
-Avg Out-Sample Sharpe: {self.analysis['avg_out_sample_sharpe']:.2f}
-IS/OOS Correlation: {self.analysis['is_oos_correlation']:.2f}
-Performance Degradation: {self.analysis['performance_degradation']:.1%}
-OOS Consistency: {self.analysis['oos_consistency']:.1%}
-Overfitting Probability: {self.analysis['overfitting_probability']:.1%}
+Avg In-Sample Sharpe: {self.analysis["avg_in_sample_sharpe"]:.2f}
+Avg Out-Sample Sharpe: {self.analysis["avg_out_sample_sharpe"]:.2f}
+IS/OOS Correlation: {self.analysis["is_oos_correlation"]:.2f}
+Performance Degradation: {self.analysis["performance_degradation"]:.1%}
+OOS Consistency: {self.analysis["oos_consistency"]:.1%}
+Overfitting Probability: {self.analysis["overfitting_probability"]:.1%}
         """
 ```
 
@@ -2135,35 +2062,32 @@ class PurgedKFold:
     Purged K-Fold cross-validation for time series.
     Includes embargo period to prevent leakage.
     """
-    
+
     def __init__(
         self,
         n_splits: int = 5,
-        embargo_pct: float = 0.01  # 1% embargo between train/test
+        embargo_pct: float = 0.01,  # 1% embargo between train/test
     ):
         self.n_splits = n_splits
         self.embargo_pct = embargo_pct
-    
-    def split(
-        self,
-        data: pd.DataFrame
-    ) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+
+    def split(self, data: pd.DataFrame) -> Iterator[tuple[np.ndarray, np.ndarray]]:
         """Generate purged train/test splits."""
         n_samples = len(data)
         embargo_size = int(n_samples * self.embargo_pct)
         fold_size = n_samples // self.n_splits
-        
+
         for i in range(self.n_splits):
             test_start = i * fold_size
             test_end = (i + 1) * fold_size if i < self.n_splits - 1 else n_samples
-            
+
             # Training indices: before test (with embargo) + after test
             train_before = np.arange(0, max(0, test_start - embargo_size))
             train_after = np.arange(min(n_samples, test_end + embargo_size), n_samples)
             train_idx = np.concatenate([train_before, train_after])
-            
+
             test_idx = np.arange(test_start, test_end)
-            
+
             yield train_idx, test_idx
 
 
@@ -2172,53 +2096,45 @@ class CombinatorialPurgedCV:
     Combinatorial Purged Cross-Validation (CPCV).
     Tests all combinations of N-1 groups as training, 1 as test.
     """
-    
-    def __init__(
-        self,
-        n_splits: int = 6,
-        embargo_pct: float = 0.01
-    ):
+
+    def __init__(self, n_splits: int = 6, embargo_pct: float = 0.01):
         self.n_splits = n_splits
         self.embargo_pct = embargo_pct
-    
-    def split(
-        self,
-        data: pd.DataFrame
-    ) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+
+    def split(self, data: pd.DataFrame) -> Iterator[tuple[np.ndarray, np.ndarray]]:
         """Generate all combinatorial splits."""
         n_samples = len(data)
         embargo_size = int(n_samples * self.embargo_pct)
-        
+
         # Split data into groups
         groups = np.array_split(np.arange(n_samples), self.n_splits)
-        
+
         # Generate all combinations of N-1 training groups
         from itertools import combinations
-        
+
         for test_groups in combinations(range(self.n_splits), 1):
             train_groups = [i for i in range(self.n_splits) if i not in test_groups]
-            
+
             train_idx = []
             test_idx = []
-            
+
             for group_idx in train_groups:
                 group = groups[group_idx]
                 # Apply embargo: remove samples near test boundaries
                 for test_group_idx in test_groups:
                     test_group = groups[test_group_idx]
                     test_min, test_max = test_group.min(), test_group.max()
-                    
+
                     # Remove samples within embargo of test set
                     group = group[
-                        (group < test_min - embargo_size) | 
-                        (group > test_max + embargo_size)
+                        (group < test_min - embargo_size) | (group > test_max + embargo_size)
                     ]
-                
+
                 train_idx.extend(group)
-            
+
             for group_idx in test_groups:
                 test_idx.extend(groups[group_idx])
-            
+
             yield np.array(train_idx), np.array(test_idx)
 ```
 

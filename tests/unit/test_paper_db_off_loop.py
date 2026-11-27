@@ -58,8 +58,6 @@ def _drain(node: PaperTradingNode) -> None:
     node._db_worker.submit(lambda: None).result(10)
 
 
-
-
 class _StallingEventWriter:
     """An event writer whose FIRST write blocks STALL_S (a stuck disk); all are recorded."""
 
@@ -241,8 +239,6 @@ async def test_full_callback_sequence_halts_within_15s(
         await node._shutdown()
 
 
-
-
 def _checkpoint(trader_id: str, tag: str) -> StateCheckpoint:
     return StateCheckpoint(trader_id=trader_id, node_status={"tag": tag})
 
@@ -313,8 +309,6 @@ async def test_checkpoint_fifo_order(
         persistence.close()
 
 
-
-
 class _RecordingPersistence:
     def __init__(self) -> None:
         self.saved: list[StateCheckpoint] = []
@@ -348,8 +342,6 @@ def test_transition_checkpoint_in_finally(
     assert len(persistence.saved) == 1
     assert persistence.saved[0].node_status["state"] == "halted"
     assert persistence.saved[0].node_status["halt_reason"] == "manual"
-
-
 
 
 class _HungPersistence(StatePersistence):

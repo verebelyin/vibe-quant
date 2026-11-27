@@ -89,11 +89,7 @@ def test_returns_none_when_entries_carry_no_chromosome(state: StateManager) -> N
     run_id = _create_run(state)
     state.save_backtest_result(
         run_id,
-        {
-            "notes": json.dumps(
-                {"top_strategies": [{"strategy_id": 1}, {"chromosome": None}]}
-            )
-        },
+        {"notes": json.dumps({"top_strategies": [{"strategy_id": 1}, {"chromosome": None}]})},
     )
     assert load_seed_chromosomes(state, run_id) is None
 
@@ -156,11 +152,7 @@ def _legacy_both_blob(**overrides: object) -> dict[str, object]:
 def _save_chromosomes(state: StateManager, run_id: int, blobs: list[dict[str, object]]) -> None:
     state.save_backtest_result(
         run_id,
-        {
-            "notes": json.dumps(
-                {"top_strategies": [{"chromosome": b} for b in blobs]}
-            )
-        },
+        {"notes": json.dumps({"top_strategies": [{"chromosome": b} for b in blobs]})},
     )
 
 
@@ -251,9 +243,7 @@ def test_malformed_short_gene_seed_returns_none_with_warning(
 ) -> None:
     """short_entry_genes: None (R8) makes the whole load fail closed with a warning."""
     run_id = _create_run(state)
-    _save_chromosomes(
-        state, run_id, [_legacy_both_blob(direction="long", short_entry_genes=None)]
-    )
+    _save_chromosomes(state, run_id, [_legacy_both_blob(direction="long", short_entry_genes=None)])
 
     with caplog.at_level(logging.WARNING):
         loaded = load_seed_chromosomes(state, run_id)

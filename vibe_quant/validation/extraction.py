@@ -87,9 +87,7 @@ def _leg_fees(pos: Any) -> tuple[float, float] | None:
     the even split of the position total, byte-identical to before D3-6.
     Fills on the position's entry side are entry legs; the rest are exits.
     """
-    fills = [
-        e for e in (getattr(pos, "events", None) or []) if type(e).__name__ == "OrderFilled"
-    ]
+    fills = [e for e in (getattr(pos, "events", None) or []) if type(e).__name__ == "OrderFilled"]
     entry_side = getattr(pos, "entry", None)
     entry = 0.0
     exit_fee = 0.0
@@ -411,9 +409,7 @@ def _in_windows(ts: np.ndarray, spans: list[tuple[int, int]]) -> np.ndarray:
     return np.asarray(in_window & (ts <= ends[np.where(in_window, slot, 0)]), dtype=bool)
 
 
-def _overlapping_row_groups(
-    meta: Any, ts_column: int, spans: list[tuple[int, int]]
-) -> list[int]:
+def _overlapping_row_groups(meta: Any, ts_column: int, spans: list[tuple[int, int]]) -> list[int]:
     """Row groups whose ``ts_init`` statistics overlap some window (R17c).
 
     A row group without usable statistics cannot be proven disjoint from the
@@ -1404,9 +1400,7 @@ def extract_trades(
         quantity = float(pos.peak_qty)
         realized_pnl = item.realized_pnl
         exit_ns = item.exit_ns
-        exit_price = (
-            float(pos.avg_px_close) if item.exit_price is None else item.exit_price
-        )
+        exit_price = float(pos.avg_px_close) if item.exit_price is None else item.exit_price
         exit_reason = "signal" if item.exit_reason is None else item.exit_reason
         pos_fees, slippage_cost = item.pos_fees, item.slippage_cost
         if mark is not None and liquidating:
@@ -1486,8 +1480,7 @@ def extract_trades(
     result.funding_fallback_settlements = accounting.funding_fallbacks
     if accounting.funding_fallbacks:
         logger.warning(
-            "Validation funding: %d settlement(s) charged at the fallback rate "
-            "(no archived rate)",
+            "Validation funding: %d settlement(s) charged at the fallback rate (no archived rate)",
             accounting.funding_fallbacks,
         )
     # Trade win rate and PF on net PnL (fees, modeled slippage and funding
@@ -1527,9 +1520,7 @@ def extract_trades(
     # NT's MaxDrawdown stat is a daily realized-balance figure: not used.
     # A liquidation replaces the rebuilt ledger by the overlay's truncated one (it already
     # carries every modeled cash flow) and floors the account at 0 from a cross bust on.
-    probe_paths: list[tuple[np.ndarray, np.ndarray, np.ndarray]] | None = (
-        [] if mtm_probe else None
-    )
+    probe_paths: list[tuple[np.ndarray, np.ndarray, np.ndarray]] | None = [] if mtm_probe else None
     mtm_dd = mark_to_market_drawdown(
         engine,
         result.starting_balance,
@@ -1539,7 +1530,9 @@ def extract_trades(
         end_ns=window_end_ns,
         extra_cash=None if recomputed else accounting.modeled_cash,
         ledgers=ledgers,
-        floor_from_ns=overlay.result.bust_ts if recomputed and liquidation_mode == "cross" else None,
+        floor_from_ns=overlay.result.bust_ts
+        if recomputed and liquidation_mode == "cross"
+        else None,
         paths_out=probe_paths,
     )
     if probe_paths is not None:

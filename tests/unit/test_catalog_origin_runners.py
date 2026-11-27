@@ -159,8 +159,14 @@ def recording() -> Iterator[Rows]:
                     log = rows.setdefault(str(strategy.config.instrument_id), {})
                     feed = strategy._feed_pta_buffer
 
-                    def rec(tf: str, bar: Any, *, _s: Any = strategy, _f: Any = feed,
-                            _log: dict[int, dict[str, float]] = log) -> None:
+                    def rec(
+                        tf: str,
+                        bar: Any,
+                        *,
+                        _s: Any = strategy,
+                        _f: Any = feed,
+                        _log: dict[int, dict[str, float]] = log,
+                    ) -> None:
                         _f(tf, bar)
                         _log[int(bar.ts_init)] = dict(_s._pta_values)
 
@@ -175,12 +181,20 @@ def recording() -> Iterator[Rows]:
 
 
 def screen(
-    catalog: Path, symbols: list[str], start: str, dsl: dict[str, Any] | None = None,
-    params: dict[str, float | int] | None = None, end: str = END,
+    catalog: Path,
+    symbols: list[str],
+    start: str,
+    dsl: dict[str, Any] | None = None,
+    params: dict[str, float | int] | None = None,
+    end: str = END,
 ) -> tuple[NTScreeningRunner, Rows]:
     runner = NTScreeningRunner(
-        dsl or origin_dsl(), symbols, start, end,
-        catalog_path=str(catalog), funding_archive_path=str(ARCHIVE),
+        dsl or origin_dsl(),
+        symbols,
+        start,
+        end,
+        catalog_path=str(catalog),
+        funding_archive_path=str(ARCHIVE),
     )
     with recording() as rows:
         metrics = runner(params or {})
@@ -189,19 +203,29 @@ def screen(
 
 
 def validate(
-    catalog: Path, tmp_path: Path, symbols: list[str], start: str, end: str = END,
+    catalog: Path,
+    tmp_path: Path,
+    symbols: list[str],
+    start: str,
+    end: str = END,
     dsl: dict[str, Any] | None = None,
 ) -> tuple[ValidationRunner, Any, Rows, int, Path]:
     db = tmp_path / f"state-{start}-{len(symbols)}.db"
     state = StateManager(db)
     run_id = state.create_backtest_run(
         strategy_id=state.create_strategy(name="origin_runners", dsl_config=dsl or origin_dsl()),
-        run_mode="validation", symbols=symbols, timeframe="1m",
-        start_date=start, end_date=end, parameters={},
+        run_mode="validation",
+        symbols=symbols,
+        timeframe="1m",
+        start_date=start,
+        end_date=end,
+        parameters={},
     )
     state.close()
     runner = ValidationRunner(
-        db_path=db, logs_path=tmp_path / "logs", catalog_path=catalog,
+        db_path=db,
+        logs_path=tmp_path / "logs",
+        catalog_path=catalog,
         funding_archive_path=ARCHIVE,
     )
     try:
@@ -212,9 +236,13 @@ def validate(
     return runner, result, rows, run_id, db
 
 
-def assert_same_at_shared(a: dict[int, dict[str, float]], b: dict[int, dict[str, float]],
-                          keys: tuple[str, ...] = ("arsi", "vidya", "adx"),
-                          *, ready: bool = True) -> None:
+def assert_same_at_shared(
+    a: dict[int, dict[str, float]],
+    b: dict[int, dict[str, float]],
+    keys: tuple[str, ...] = ("arsi", "vidya", "adx"),
+    *,
+    ready: bool = True,
+) -> None:
     """Bit-equal ``_pta_values`` at every shared bar; ``ready``: every key set at both first bars."""
     shared = sorted(set(a) & set(b))
     assert len(shared) > 500
@@ -260,11 +288,13 @@ def test_tier_parity_across_clamp(catalog: Path, tmp_path: Path) -> None:
 
     assert result.notes["data_window"]["effective_start"] == "2024-01-04"
     assert sorted(requested_runner.last_pta_origin, key=lambda r: str(r["instrument"])) == [
-        row(BTC, BTC_ORIGIN, 1440), row(HYPE, HYPE_ORIGIN, 0),
+        row(BTC, BTC_ORIGIN, 1440),
+        row(HYPE, HYPE_ORIGIN, 0),
     ]
     for origin_rows in (clamped_runner.last_pta_origin, vrunner.last_pta_origin):
         assert sorted(origin_rows, key=lambda r: str(r["instrument"])) == [
-            row(BTC, BTC_ORIGIN, 4320), row(HYPE, HYPE_ORIGIN, 0),
+            row(BTC, BTC_ORIGIN, 4320),
+            row(HYPE, HYPE_ORIGIN, 0),
         ]
     assert result.notes["pta_origin"] == {
         BTC: {"1m": "2024-01-01T00:00:59.999000+00:00"},
@@ -333,7 +363,9 @@ def _break_origin(monkeypatch: pytest.MonkeyPatch, how: str) -> None:
 
 
 _MISMATCH = "catalog-origin history for BTCUSDT-PERP.BINANCE 1m does not end with the run's bars"
-_UNREADABLE = "catalog-origin history for BTCUSDT-PERP.BINANCE 1m cannot be read: OSError: parquet gone"
+_UNREADABLE = (
+    "catalog-origin history for BTCUSDT-PERP.BINANCE 1m cannot be read: OSError: parquet gone"
+)
 
 
 @pytest.mark.parametrize(("how", "message"), [("close", _MISMATCH), ("raise", _UNREADABLE)])
@@ -343,8 +375,12 @@ def test_origin_mismatch_fails_run(
     """Both tiers fail before any metric: screening raises (never a -inf row), validation fails."""
     _break_origin(monkeypatch, how)
     runner = NTScreeningRunner(
-        origin_dsl(), ["BTCUSDT"], "2024-01-05", END,
-        catalog_path=str(catalog), funding_archive_path=str(ARCHIVE),
+        origin_dsl(),
+        ["BTCUSDT"],
+        "2024-01-05",
+        END,
+        catalog_path=str(catalog),
+        funding_archive_path=str(ARCHIVE),
     )
     with pytest.raises(DataUnavailableError, match=message):
         runner({})
@@ -372,8 +408,12 @@ def _fast_tier_values(
     config = {"instrument_id": BTC, **params, "execution_delay_probability": 1.0}
     instrument = fast_signals.load_instrument(str(runner._resolved_catalog_path.resolve()), BTC)
     strategy, indicators, _ = fast_signals.build_strategy(
-        runner._module_path, runner._strategy_cls_name, runner._config_cls_name,
-        config, instrument, any_timeframe=merged,
+        runner._module_path,
+        runner._strategy_cls_name,
+        runner._config_cls_name,
+        config,
+        instrument,
+        any_timeframe=merged,
     )
     seen: list[dict[str, float]] = []
     ready = strategy._indicators_ready
@@ -490,8 +530,12 @@ def test_origin_identity_error_after_the_reads_fails_the_run(
     monkeypatch.setattr(nt_runner, "_pta_bar_arrays", read_then_arm)
     monkeypatch.setattr(nt_runner, "_bar_files_identity", vanishing)
     runner = NTScreeningRunner(
-        origin_dsl(), ["BTCUSDT"], "2024-01-04", "2024-01-05",
-        catalog_path=str(sparse_catalog), funding_archive_path=str(ARCHIVE),
+        origin_dsl(),
+        ["BTCUSDT"],
+        "2024-01-04",
+        "2024-01-05",
+        catalog_path=str(sparse_catalog),
+        funding_archive_path=str(ARCHIVE),
     )
     with pytest.raises(nt_runner.CatalogOriginError, match="cannot be read: FileNotFoundError"):
         runner({})
@@ -556,7 +600,9 @@ def test_origin_history_loads_once_across_backtests(catalog: Path, tmp_path: Pat
     with origin_loads() as loads:
         screen(catalog, ["BTCUSDT"], "2024-01-05")  # end 2024-01-07
         short_runner, short = screen(catalog, ["BTCUSDT"], "2024-01-05", end="2024-01-06")
-        vrunner, _, vrows, _, _ = validate(catalog, tmp_path, ["BTCUSDT"], "2024-01-04", "2024-01-06")
+        vrunner, _, vrows, _, _ = validate(
+            catalog, tmp_path, ["BTCUSDT"], "2024-01-04", "2024-01-06"
+        )
         assert len(loads) == 1
     # the last bar opens 2024-01-05 23:59; the 2024-01-06 00:00 bar (ts_init 00:00:59.999) is past
     assert max(short[BTC]) == DAY0 + 5 * DAY - MIN + INIT
@@ -613,9 +659,7 @@ def test_origin_history_reloads_after_a_catalog_update(tmp_path: Path) -> None:
     assert_bit_equal(after, fresh_query(root, BTC_1M, END))
 
 
-def test_origin_history_memory_is_bounded(
-    catalog: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_origin_history_memory_is_bounded(catalog: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Least-recently-used histories leave once the byte cap is reached; one over the cap
     is served uncached."""
     btc_bytes = 7 * 1440 * 6 * 8
@@ -674,7 +718,9 @@ def test_fast_tier_follows_a_backfill_at_the_same_path_and_dates(tmp_path: Path)
     start, end = "2024-01-02", "2024-01-03"
     runner, _ = screen(root, ["BTCUSDT"], start, end=end)
     catalog = str(root.resolve())
-    before = _fast_tier_values(runner, fast_signals.load_bars(catalog, BTC_1M, start, end), merged=True)
+    before = _fast_tier_values(
+        runner, fast_signals.load_bars(catalog, BTC_1M, start, end), merged=True
+    )
     assert before[0] == {}  # the run is the whole catalog: warms up from its own first bar
 
     ParquetDataCatalog(str(root)).write_data(
@@ -700,7 +746,9 @@ def test_fast_tier_refuses_bars_older_than_the_catalog(tmp_path: Path) -> None:
     ParquetDataCatalog(str(root)).write_data(
         _bars("BTCUSDT", DAY0 - DAY, 144, 42_000.0, 50.0, 9, every=10)
     )
-    with pytest.raises(nt_runner.CatalogOriginError, match="changed since the run's bars were loaded"):
+    with pytest.raises(
+        nt_runner.CatalogOriginError, match="changed since the run's bars were loaded"
+    ):
         _fast_tier_values(runner, bars, merged=False)
     fresh = fast_signals.load_bars(str(root.resolve()), BTC_1M, start, end)
     assert fresh is not bars and [b.ts_init for b in fresh] == [b.ts_init for b in bars]
@@ -720,8 +768,9 @@ def test_fast_tier_origin_frame_and_memo_bytes_after_a_second_start(tmp_path: Pa
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(fast_signals, "_MEMO", OrderedDict())
         mp.setattr(fast_signals, "_memo_bytes", 0)
-        _fast_tier_values(runner, fast_signals.load_bars(catalog, BTC_1M, "2024-01-02", end),
-                          merged=False)
+        _fast_tier_values(
+            runner, fast_signals.load_bars(catalog, BTC_1M, "2024-01-02", end), merged=False
+        )
         (frame_key,) = [k for k in fast_signals._MEMO if k[:2] == ("frame", "origin")]
         frame = fast_signals._MEMO[frame_key][1]
         _fast_tier_values(
@@ -746,11 +795,21 @@ def test_fast_tier_seeds_a_slower_origin_timeframe_before_its_first_bar(tmp_path
     cat.write_data([create_instrument("BTCUSDT")])
     cat.write_data(_bars("BTCUSDT", DAY0, 2880, 42_000.0, 50.0, 7))
     coarse = _bars("BTCUSDT", DAY0, 576, 42_000.0, 100.0, 8, every=5)
-    cat.write_data([
-        Bar(get_bar_type("BTCUSDT", "5m"), b.open, b.high, b.low, b.close, b.volume, b.ts_event,
-            b.ts_init + 4 * MIN)  # a 5m bar closes 5 minutes after it opens
-        for b in coarse
-    ])
+    cat.write_data(
+        [
+            Bar(
+                get_bar_type("BTCUSDT", "5m"),
+                b.open,
+                b.high,
+                b.low,
+                b.close,
+                b.volume,
+                b.ts_event,
+                b.ts_init + 4 * MIN,
+            )  # a 5m bar closes 5 minutes after it opens
+            for b in coarse
+        ]
+    )
     dsl = origin_dsl()
     dsl["additional_timeframes"] = ["5m"]
     dsl["indicators"]["vidya"]["timeframe"] = "5m"
@@ -765,13 +824,16 @@ def test_fast_tier_seeds_a_slower_origin_timeframe_before_its_first_bar(tmp_path
             prepare(node)
             for engine in node.get_engines():
                 for s in engine.trader.strategies():
+
                     def is_ready(*, _s: Any = s, _f: Any = s._indicators_ready) -> bool:
                         out = bool(_f())
                         ts = int(_s._last_bar_ts)
                         ready[ts] = (out, dict(_s._pta_values))
                         return out
 
-                    def feed(tf: str, bar: Any, *, _s: Any = s, _f: Any = s._feed_pta_buffer) -> None:
+                    def feed(
+                        tf: str, bar: Any, *, _s: Any = s, _f: Any = s._feed_pta_buffer
+                    ) -> None:
                         _f(tf, bar)
                         if tf == "1m":
                             _s._last_bar_ts = int(bar.ts_init)
@@ -792,8 +854,9 @@ def test_fast_tier_seeds_a_slower_origin_timeframe_before_its_first_bar(tmp_path
 
         return real(spec, consume, costs=costs, prepare=prep)
 
-    runner = NTScreeningRunner(dsl, ["BTCUSDT"], start, end, catalog_path=str(root),
-                               funding_archive_path=str(ARCHIVE))
+    runner = NTScreeningRunner(
+        dsl, ["BTCUSDT"], start, end, catalog_path=str(root), funding_archive_path=str(ARCHIVE)
+    )
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(nt_runner, "run_engine", run_engine)
         assert runner({}).total_trades > 0
@@ -805,7 +868,10 @@ def test_fast_tier_seeds_a_slower_origin_timeframe_before_its_first_bar(tmp_path
     first = ready[times[0]]
     assert first[0] and sorted(first[1]) == ["adx", "arsi", "vidya"]  # NT: ready at bar 0
     assert run.signals.ready.tolist() == [ready[t][0] for t in times]
-    columns = {"_check_long_entry": run.signals.long_entry, "_check_short_entry": run.signals.short_entry}
+    columns = {
+        "_check_long_entry": run.signals.long_entry,
+        "_check_short_entry": run.signals.short_entry,
+    }
     index = {t: i for i, t in enumerate(times)}
     assert len(checks) > 100
     for (name, ts), value in checks.items():
@@ -813,10 +879,16 @@ def test_fast_tier_seeds_a_slower_origin_timeframe_before_its_first_bar(tmp_path
 
     # the values the checks read: the merged replay's _pta_values at every ready call
     strategy, indicators, _ = fast_signals.build_strategy(
-        runner._module_path, runner._strategy_cls_name, runner._config_cls_name,
-        {"instrument_id": BTC, **resolve_strategy_params({}, runner._config_fields()),
-         "execution_delay_probability": 1.0},
-        run.instrument, any_timeframe=True,
+        runner._module_path,
+        runner._strategy_cls_name,
+        runner._config_cls_name,
+        {
+            "instrument_id": BTC,
+            **resolve_strategy_params({}, runner._config_fields()),
+            "execution_delay_probability": 1.0,
+        },
+        run.instrument,
+        any_timeframe=True,
     )
     seen: list[dict[str, float]] = []
     fast_ready = strategy._indicators_ready
@@ -827,8 +899,12 @@ def test_fast_tier_seeds_a_slower_origin_timeframe_before_its_first_bar(tmp_path
 
     strategy._indicators_ready = record
     fast_signals.compute_signals(
-        strategy, indicators, run.bars["1m"], {"arsi": "ADAPTIVE_RSI", "vidya": "VIDYA", "adx": "ADX"},
-        extra_bars={"5m": run.bars["5m"]}, timeframe="1m",
+        strategy,
+        indicators,
+        run.bars["1m"],
+        {"arsi": "ADAPTIVE_RSI", "vidya": "VIDYA", "adx": "ADX"},
+        extra_bars={"5m": run.bars["5m"]},
+        timeframe="1m",
     )
     assert seen == [ready[t][1] for t in times]
 
@@ -857,8 +933,16 @@ def swapped_after_prepare(new_file: Path, live_file: Path) -> Iterator[None]:
 def _highs_moved(bars: list[Bar]) -> list[Bar]:
     """Same ts_init and close, highs raised: invisible to the precompute's ts/close guard."""
     return [
-        Bar(b.bar_type, b.open, Price(float(b.high) + 100 * (i % 5), b.high.precision),
-            b.low, b.close, b.volume, b.ts_event, b.ts_init)
+        Bar(
+            b.bar_type,
+            b.open,
+            Price(float(b.high) + 100 * (i % 5), b.high.precision),
+            b.low,
+            b.close,
+            b.volume,
+            b.ts_event,
+            b.ts_init,
+        )
         for i, b in enumerate(bars)
     ]
 
@@ -876,13 +960,25 @@ def test_a_bar_file_swapped_after_prepare_fails_both_tiers(tmp_path: Path) -> No
     new_file = _replacement_file(tmp_path / "s", _highs_moved(suffix))
     live_file = root / "data" / "bar" / BTC_1M / new_file.name
     assert live_file.is_file()
-    runner = NTScreeningRunner(origin_dsl(), ["BTCUSDT"], start, end, catalog_path=str(root),
-                               funding_archive_path=str(ARCHIVE))
-    with swapped_after_prepare(new_file, live_file), pytest.raises(DataUnavailableError, match=_CHANGED):
+    runner = NTScreeningRunner(
+        origin_dsl(),
+        ["BTCUSDT"],
+        start,
+        end,
+        catalog_path=str(root),
+        funding_archive_path=str(ARCHIVE),
+    )
+    with (
+        swapped_after_prepare(new_file, live_file),
+        pytest.raises(DataUnavailableError, match=_CHANGED),
+    ):
         runner({})
 
     new_file = _replacement_file(tmp_path / "v", _highs_moved(suffix))
-    with swapped_after_prepare(new_file, live_file), pytest.raises(ValidationRunnerError, match=_CHANGED):
+    with (
+        swapped_after_prepare(new_file, live_file),
+        pytest.raises(ValidationRunnerError, match=_CHANGED),
+    ):
         validate(root, tmp_path, ["BTCUSDT"], start, end)
     (db,) = tmp_path.glob("state-*.db")
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
@@ -945,10 +1041,18 @@ def test_a_bar_file_vanishing_mid_run_fails_both_tiers_cleanly(tmp_path: Path, w
     """A parquet that vanishes between scandir and stat fails screening with the data error and
     validation as a failed run with no result row: never a raw FileNotFoundError or -inf row."""
     root = _sparse(tmp_path / "catalog", (0, 7), (2, 9))
-    ParquetDataCatalog(str(root)).write_data(_bars("BTCUSDT", DAY0 + DAY, 144, 42_000.0, 50.0, 8, every=10))
+    ParquetDataCatalog(str(root)).write_data(
+        _bars("BTCUSDT", DAY0 + DAY, 144, 42_000.0, 50.0, 8, every=10)
+    )
     start, end = "2024-01-02", "2024-01-03"
-    runner = NTScreeningRunner(origin_dsl(), ["BTCUSDT"], start, end, catalog_path=str(root),
-                               funding_archive_path=str(ARCHIVE))
+    runner = NTScreeningRunner(
+        origin_dsl(),
+        ["BTCUSDT"],
+        start,
+        end,
+        catalog_path=str(root),
+        funding_archive_path=str(ARCHIVE),
+    )
     with bar_file_vanishes(when), pytest.raises(DataUnavailableError, match=_CHANGED):
         runner({})
 
@@ -973,11 +1077,20 @@ def test_a_run_without_pta_arrays_ignores_a_bar_file_swap(tmp_path: Path) -> Non
     ParquetDataCatalog(str(root)).write_data(suffix)
     new_file = _replacement_file(tmp_path / "s", _highs_moved(suffix))
     live_file = root / "data" / "bar" / BTC_1M / new_file.name
-    dsl = {**adx_dsl(14), "name": "native_ema",
-           "indicators": {"ema": {"type": "EMA", "period": 5}},
-           "entry_conditions": {"long": ["close > ema"]}}
-    runner = NTScreeningRunner(dsl, ["BTCUSDT"], "2024-01-02", "2024-01-03",
-                               catalog_path=str(root), funding_archive_path=str(ARCHIVE))
+    dsl = {
+        **adx_dsl(14),
+        "name": "native_ema",
+        "indicators": {"ema": {"type": "EMA", "period": 5}},
+        "entry_conditions": {"long": ["close > ema"]},
+    }
+    runner = NTScreeningRunner(
+        dsl,
+        ["BTCUSDT"],
+        "2024-01-02",
+        "2024-01-03",
+        catalog_path=str(root),
+        funding_archive_path=str(ARCHIVE),
+    )
     with swapped_after_prepare(new_file, live_file):
         metrics = runner({})
     assert metrics.total_trades > 0 and runner.last_pta_origin == []

@@ -228,7 +228,10 @@ def test_screening_uses_runner_archive_path(tmp_path: Path) -> None:
     other = _make_archive(tmp_path / "eth_only.db", [(DAY0 // MS, 1e-4)], symbol="ETHUSDT")
     dsl = validate_strategy_dict(_funding_dsl())
     runner = NTScreeningRunner(
-        _dsl_to_dict(dsl), ["BTCUSDT"], "2024-01-01", "2024-06-30",
+        _dsl_to_dict(dsl),
+        ["BTCUSDT"],
+        "2024-01-01",
+        "2024-06-30",
         funding_archive_path=str(other),
     )
     try:
@@ -245,8 +248,13 @@ def _restore_ga_pool() -> Iterator[None]:
     """Rebuild the lazily-cached GA pool from scratch, restore afterwards."""
     from vibe_quant.discovery import operators as ops
 
-    caches = [ops.INDICATOR_POOL, ops._INDICATOR_NAMES, ops.THRESHOLD_RANGES,
-              ops._INT_PARAMS, ops._PARAM_DEFAULTS]
+    caches = [
+        ops.INDICATOR_POOL,
+        ops._INDICATOR_NAMES,
+        ops.THRESHOLD_RANGES,
+        ops._INT_PARAMS,
+        ops._PARAM_DEFAULTS,
+    ]
     saved = [(c, c.copy()) for c in caches]
     for c in caches:
         c.clear()
@@ -286,11 +294,7 @@ def test_default_pool_still_excludes_context(_restore_ga_pool: None) -> None:
 
 
 def _settlements(start_ns: int, n: int, skip: range = range(0)) -> list[tuple[int, float]]:
-    return [
-        ((start_ns + i * 8 * H) // MS, 1e-4)
-        for i in range(n)
-        if i not in skip
-    ]
+    return [((start_ns + i * 8 * H) // MS, 1e-4) for i in range(n) if i not in skip]
 
 
 def _runner_for(archive: Path, start: str, end: str):  # type: ignore[no-untyped-def]
@@ -363,9 +367,16 @@ def test_validation_runner_preflights_context_funding(
     try:
         with pytest.raises(AuxDataUnavailableError):
             runner._run_backtest(
-                1, "funding_z_test", dsl, None, {  # type: ignore[arg-type]
-                    "symbols": ["BTCUSDT"], "start_date": "2024-01-01", "end_date": "2024-12-31"
-                }, None,  # type: ignore[arg-type]
+                1,
+                "funding_z_test",
+                dsl,
+                None,
+                {  # type: ignore[arg-type]
+                    "symbols": ["BTCUSDT"],
+                    "start_date": "2024-01-01",
+                    "end_date": "2024-12-31",
+                },
+                None,  # type: ignore[arg-type]
                 launch=LaunchSettings(),
             )
     finally:
@@ -430,8 +441,11 @@ def test_pipeline_preflight_fails_before_any_evaluation(
         raise AssertionError("evaluation must not start")
 
     cfg = _make_config(
-        indicator_pool=["FUNDING_Z", "RSI"], symbols=["BTCUSDT"], max_workers=1,
-        start_date="2024-01-01", end_date="2024-06-30",
+        indicator_pool=["FUNDING_Z", "RSI"],
+        symbols=["BTCUSDT"],
+        max_workers=1,
+        start_date="2024-01-01",
+        end_date="2024-06-30",
     )
     with pytest.raises(AuxDataUnavailableError, match="refresh funding data"):
         DiscoveryPipeline(cfg, counting).run()
@@ -446,8 +460,11 @@ def test_data_unavailable_in_evaluation_propagates_out_of_run(
     from vibe_quant.discovery.pipeline import DiscoveryPipeline
 
     cfg = _make_config(
-        indicator_pool=["RSI"], symbols=["BTCUSDT"], max_workers=max_workers,
-        population_size=4, max_generations=1,
+        indicator_pool=["RSI"],
+        symbols=["BTCUSDT"],
+        max_workers=max_workers,
+        population_size=4,
+        max_generations=1,
     )
     with pytest.raises(AuxDataUnavailableError, match="simulated"):
         DiscoveryPipeline(cfg, _raising_backtest).run()

@@ -75,9 +75,7 @@ def _rsi(x: np.ndarray, n: int) -> np.ndarray:
     return out
 
 
-def _stoch_raw(
-    high: np.ndarray, low: np.ndarray, close: np.ndarray, n: int
-) -> np.ndarray:
+def _stoch_raw(high: np.ndarray, low: np.ndarray, close: np.ndarray, n: int) -> np.ndarray:
     """Pine ``stoch(close, high, low, n)``: ``100 * (close - lowest(low)) / (highest(high) - lowest(low))``."""
     out = np.full(close.size, math.nan)
     for t in range(n - 1, close.size):

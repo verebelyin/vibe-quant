@@ -80,9 +80,8 @@ def blind_evals(out: Path) -> tuple[dict[str, dict | None], dict[str, dict | Non
 def fmt_blind(n: dict | None) -> str:
     if n and not n.get("error"):
         dd = n.get("dd")
-        return (
-            f"ret={n['ret']:+.4f} trades={n['trades']} sharpe={n['sharpe']}"
-            + ("" if dd is None else f" dd={dd:.4f}")
+        return f"ret={n['ret']:+.4f} trades={n['trades']} sharpe={n['sharpe']}" + (
+            "" if dd is None else f" dd={dd:.4f}"
         )
     return f"no eval ({(n or {}).get('error')})"
 
@@ -117,7 +116,10 @@ def main(argv: list[str] | None = None) -> int:
     bh = {c: _bh(closes, c) for c in coins}
     missing = [r["key"] for r in winners if not nxt.get(r["key"])]
     print(f"cells={len(ledger)} winners={len(winners)} winners_without_blind_eval={len(missing)}")
-    print("blind B&H " + " ".join(f"{c}={bh[c]:+.4f}" if bh[c] is not None else f"{c}=n/a" for c in coins))
+    print(
+        "blind B&H "
+        + " ".join(f"{c}={bh[c]:+.4f}" if bh[c] is not None else f"{c}=n/a" for c in coins)
+    )
     print("\n## PRIMARY: top 2 per coin by Jan-Jul best Sharpe, tested once on Aug-Oct")
     picked = select(winners)
     n_pass = 0
@@ -133,7 +135,9 @@ def main(argv: list[str] | None = None) -> int:
     ref = sum(passes(nxt.get(r["key"]), bh[r["cell"]["symbol"]]) for r in winners)
     pos = sum(1 for r in winners if (nxt.get(r["key"]) or {}).get("ret", 0) > 0)
     print(f"\nPRIMARY pass {n_pass}/{len(picked)}")
-    print(f"REFERENCE all winners: pass {ref}/{len(winners)}, blind return > 0: {pos}/{len(winners)}")
+    print(
+        f"REFERENCE all winners: pass {ref}/{len(winners)}, blind return > 0: {pos}/{len(winners)}"
+    )
     return 0
 
 

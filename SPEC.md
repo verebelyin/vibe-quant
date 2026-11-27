@@ -784,23 +784,28 @@ The screening pipeline uses NautilusTrader in a **simplified execution mode** fo
 from multiprocessing import Pool
 from nautilus_trader.backtest.node import BacktestNode, BacktestRunConfig
 
+
 def screen_strategy(dsl_config: dict, symbols: list, date_range: tuple) -> pd.DataFrame:
     # 1. Compile DSL to Strategy class
     strategy_cls, strategy_config_cls = dsl_compiler.to_nautilus(dsl_config)
 
     # 2. Build parameter grid
-    param_grid = build_param_grid(dsl_config['sweep'])  # Cartesian product
+    param_grid = build_param_grid(dsl_config["sweep"])  # Cartesian product
 
     # 3. Create run configs for each parameter combo
     run_configs = []
     for params in param_grid:
         config = BacktestRunConfig(
             engine=BacktestEngineConfig(
-                strategies=[ImportableStrategyConfig(
-                    strategy_path=strategy_cls.__module__ + ":" + strategy_cls.__name__,
-                    config_path=strategy_config_cls.__module__ + ":" + strategy_config_cls.__name__,
-                    config=params,
-                )],
+                strategies=[
+                    ImportableStrategyConfig(
+                        strategy_path=strategy_cls.__module__ + ":" + strategy_cls.__name__,
+                        config_path=strategy_config_cls.__module__
+                        + ":"
+                        + strategy_config_cls.__name__,
+                        config=params,
+                    )
+                ],
             ),
             data=data_configs,
             venues=[screening_venue_config],  # Simplified execution
@@ -814,6 +819,7 @@ def screen_strategy(dsl_config: dict, symbols: list, date_range: tuple) -> pd.Da
     # 5. Aggregate and rank
     results_df = pd.DataFrame(results)
     return results_df
+
 
 def run_single_backtest(args):
     """Run one parameter combination. Executed in worker process."""
@@ -831,7 +837,9 @@ screening_venue_config = BacktestVenueConfig(
     oms_type="NETTING",
     account_type="MARGIN",
     base_currency=None,
-    starting_balances=[f"{parameters.initial_balance} USDT"],  # parameters.initial_balance, default 1000
+    starting_balances=[
+        f"{parameters.initial_balance} USDT"
+    ],  # parameters.initial_balance, default 1000
     default_leverage=parameters.leverage,  # run setting: whole number in [1, 125], default 10; no per-symbol overrides
     fill_model=ImportableFillModelConfig(
         fill_model_path="vibe_quant.backtesting.fill_models:ScreeningFillModel",
@@ -885,11 +893,13 @@ venue_config = BacktestVenueConfig(
     oms_type="NETTING",
     account_type="MARGIN",
     base_currency=None,
-    starting_balances=[f"{parameters.initial_balance} USDT"],  # parameters.initial_balance, default 1000
+    starting_balances=[
+        f"{parameters.initial_balance} USDT"
+    ],  # parameters.initial_balance, default 1000
     default_leverage=parameters.leverage,  # run setting: whole number in [1, 125], default 10; no per-symbol overrides
-    fill_model=custom_fill_model,          # Custom volume-based slippage
-    fee_model=fee_model,                   # VIP0 maker 0.02% / taker 0.05% (vibe_quant/fees.py); run-level fee tier and BNB discount (x0.9)
-    latency_model=latency_model,           # Network latency simulation (tick data only; bars release via the per-instrument outbox)
+    fill_model=custom_fill_model,  # Custom volume-based slippage
+    fee_model=fee_model,  # VIP0 maker 0.02% / taker 0.05% (vibe_quant/fees.py); run-level fee tier and BNB discount (x0.9)
+    latency_model=latency_model,  # Network latency simulation (tick data only; bars release via the per-instrument outbox)
 )
 ```
 
@@ -901,28 +911,28 @@ NautilusTrader's `LatencyModelConfig` simulates realistic network delays for ord
 # Latency presets
 LATENCY_PRESETS = {
     "co_located": LatencyModelConfig(
-        base_latency_nanos=1_000_000,          # 1ms
-        insert_latency_nanos=500_000,          # 0.5ms
-        update_latency_nanos=500_000,          # 0.5ms
-        cancel_latency_nanos=500_000,          # 0.5ms
+        base_latency_nanos=1_000_000,  # 1ms
+        insert_latency_nanos=500_000,  # 0.5ms
+        update_latency_nanos=500_000,  # 0.5ms
+        cancel_latency_nanos=500_000,  # 0.5ms
     ),
     "domestic": LatencyModelConfig(
-        base_latency_nanos=20_000_000,         # 20ms
-        insert_latency_nanos=10_000_000,       # 10ms
-        update_latency_nanos=10_000_000,       # 10ms
-        cancel_latency_nanos=10_000_000,       # 10ms
+        base_latency_nanos=20_000_000,  # 20ms
+        insert_latency_nanos=10_000_000,  # 10ms
+        update_latency_nanos=10_000_000,  # 10ms
+        cancel_latency_nanos=10_000_000,  # 10ms
     ),
     "international": LatencyModelConfig(
-        base_latency_nanos=100_000_000,        # 100ms
-        insert_latency_nanos=50_000_000,       # 50ms
-        update_latency_nanos=50_000_000,       # 50ms
-        cancel_latency_nanos=50_000_000,       # 50ms
+        base_latency_nanos=100_000_000,  # 100ms
+        insert_latency_nanos=50_000_000,  # 50ms
+        update_latency_nanos=50_000_000,  # 50ms
+        cancel_latency_nanos=50_000_000,  # 50ms
     ),
     "retail": LatencyModelConfig(
-        base_latency_nanos=200_000_000,        # 200ms
-        insert_latency_nanos=100_000_000,      # 100ms
-        update_latency_nanos=100_000_000,      # 100ms
-        cancel_latency_nanos=100_000_000,      # 100ms
+        base_latency_nanos=200_000_000,  # 200ms
+        insert_latency_nanos=100_000_000,  # 100ms
+        update_latency_nanos=100_000_000,  # 100ms
+        cancel_latency_nanos=100_000_000,  # 100ms
     ),
 }
 ```
@@ -1041,20 +1051,14 @@ class RSIMeanReversionMTFStrategy(Strategy):
 
     def on_start(self):
         # Primary timeframe bars
-        self.bar_type_5m = BarType.from_str(
-            f"{self.config.instrument_id}-5-MINUTE-LAST-EXTERNAL"
-        )
+        self.bar_type_5m = BarType.from_str(f"{self.config.instrument_id}-5-MINUTE-LAST-EXTERNAL")
         self.subscribe_bars(self.bar_type_5m)
 
         # Higher timeframe bars
-        self.bar_type_1h = BarType.from_str(
-            f"{self.config.instrument_id}-1-HOUR-LAST-EXTERNAL"
-        )
+        self.bar_type_1h = BarType.from_str(f"{self.config.instrument_id}-1-HOUR-LAST-EXTERNAL")
         self.subscribe_bars(self.bar_type_1h)
 
-        self.bar_type_4h = BarType.from_str(
-            f"{self.config.instrument_id}-4-HOUR-LAST-EXTERNAL"
-        )
+        self.bar_type_4h = BarType.from_str(f"{self.config.instrument_id}-4-HOUR-LAST-EXTERNAL")
         self.subscribe_bars(self.bar_type_4h)
 
         # Register indicators on their respective bar types
@@ -1087,9 +1091,7 @@ class RSIMeanReversionMTFStrategy(Strategy):
             return
 
         # Entry conditions (from DSL, multi-TF)
-        if (self.rsi.value < 30
-            and self.rsi_1h.value > 40
-            and bar.close > self.ema_trend_4h.value):
+        if self.rsi.value < 30 and self.rsi_1h.value > 40 and bar.close > self.ema_trend_4h.value:
             if not self.has_open_position():
                 self._enter_long(bar)
 
@@ -1356,26 +1358,28 @@ Streamlit polls SQLite every 2 seconds for status updates. The subprocess update
 NautilusTrader's `TradingNode` connects to live Binance WebSocket feeds but executes against a simulated matching engine:
 
 ```python
-node = TradingNode(config=TradingNodeConfig(
-    trader_id="PAPER-001",
-    data_clients={
-        "BINANCE": BinanceDataClientConfig(
-            api_key=os.getenv("BINANCE_API_KEY"),
-            api_secret=os.getenv("BINANCE_API_SECRET"),
-            account_type=BinanceAccountType.USDT_FUTURES,
-            testnet=True,  # Use Binance testnet
-        ),
-    },
-    exec_clients={
-        "BINANCE": BinanceExecClientConfig(
-            api_key=os.getenv("BINANCE_API_KEY"),
-            api_secret=os.getenv("BINANCE_API_SECRET"),
-            account_type=BinanceAccountType.USDT_FUTURES,
-            testnet=True,  # Simulated execution via testnet
-        ),
-    },
-    strategies=[strategy_config],
-))
+node = TradingNode(
+    config=TradingNodeConfig(
+        trader_id="PAPER-001",
+        data_clients={
+            "BINANCE": BinanceDataClientConfig(
+                api_key=os.getenv("BINANCE_API_KEY"),
+                api_secret=os.getenv("BINANCE_API_SECRET"),
+                account_type=BinanceAccountType.USDT_FUTURES,
+                testnet=True,  # Use Binance testnet
+            ),
+        },
+        exec_clients={
+            "BINANCE": BinanceExecClientConfig(
+                api_key=os.getenv("BINANCE_API_KEY"),
+                api_secret=os.getenv("BINANCE_API_SECRET"),
+                account_type=BinanceAccountType.USDT_FUTURES,
+                testnet=True,  # Simulated execution via testnet
+            ),
+        },
+        strategies=[strategy_config],
+    )
+)
 ```
 
 **Key differences from backtesting:**

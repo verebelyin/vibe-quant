@@ -23,16 +23,8 @@ def _frame(
     low: np.ndarray | None = None,
 ) -> pd.DataFrame:
     close_s = pd.Series(np.asarray(close, dtype=np.float64))
-    high_s = (
-        pd.Series(np.asarray(high, dtype=np.float64))
-        if high is not None
-        else close_s + 0.5
-    )
-    low_s = (
-        pd.Series(np.asarray(low, dtype=np.float64))
-        if low is not None
-        else close_s - 0.5
-    )
+    high_s = pd.Series(np.asarray(high, dtype=np.float64)) if high is not None else close_s + 0.5
+    low_s = pd.Series(np.asarray(low, dtype=np.float64)) if low is not None else close_s - 0.5
     return pd.DataFrame(
         {
             "open": close_s,
@@ -56,9 +48,7 @@ def _hand_atr(high: pd.Series, low: pd.Series, close: pd.Series, length: int) ->
     return atr.ewm(alpha=1.0 / length, adjust=False).mean()
 
 
-def _hand_squeeze_ratio(
-    df: pd.DataFrame, length: int, bb_mult: float, kc_mult: float
-) -> pd.Series:
+def _hand_squeeze_ratio(df: pd.DataFrame, length: int, bb_mult: float, kc_mult: float) -> pd.Series:
     sd = df["close"].rolling(length).std(ddof=0)  # population std (bbands default)
     bb_width = 2.0 * bb_mult * sd
     kc_width = 2.0 * kc_mult * _hand_atr(df["high"], df["low"], df["close"], length)
@@ -99,9 +89,7 @@ def test_squeeze_mom_matches_hand_computation() -> None:
     lo = low.to_numpy()
     src = np.full(n, np.nan)
     for t in range(_LENGTH - 1, n):
-        donchian_mid = (
-            h[t - _LENGTH + 1 : t + 1].max() + lo[t - _LENGTH + 1 : t + 1].min()
-        ) / 2.0
+        donchian_mid = (h[t - _LENGTH + 1 : t + 1].max() + lo[t - _LENGTH + 1 : t + 1].min()) / 2.0
         sma = c[t - _LENGTH + 1 : t + 1].mean()
         src[t] = c[t] - (donchian_mid + sma) / 2.0
 
@@ -110,9 +98,7 @@ def test_squeeze_mom_matches_hand_computation() -> None:
         k, b = np.polyfit(np.arange(_LENGTH), src[t - _LENGTH + 1 : t + 1], 1)
         ref[t] = (k * (_LENGTH - 1) + b) / c[t] * 100.0
 
-    np.testing.assert_allclose(
-        mom.to_numpy(), ref, rtol=1e-9, atol=1e-12, equal_nan=True
-    )
+    np.testing.assert_allclose(mom.to_numpy(), ref, rtol=1e-9, atol=1e-12, equal_nan=True)
     # The source's leading length-1 NaNs push the first valid bar to 2L-2.
     assert np.isnan(mom.iloc[2 * _LENGTH - 3])
     assert np.isfinite(mom.iloc[2 * _LENGTH - 2])

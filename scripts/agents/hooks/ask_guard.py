@@ -40,7 +40,11 @@ def final_text(transcript: Path) -> str:
             continue
         content = (entry.get("message") or {}).get("content")
         if isinstance(content, list):
-            texts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+            texts = [
+                b.get("text", "")
+                for b in content
+                if isinstance(b, dict) and b.get("type") == "text"
+            ]
             parts.extend(reversed(texts))
     return "\n".join(reversed(parts))
 
@@ -59,7 +63,11 @@ def main() -> int:
     except Exception:  # noqa: BLE001 - a hook must never break the session
         return 0
     if problems:
-        reason = "ask_guard: " + "; ".join(problems) + ". Repeat each question in full above the summary line."
+        reason = (
+            "ask_guard: "
+            + "; ".join(problems)
+            + ". Repeat each question in full above the summary line."
+        )
         print(json.dumps({"decision": "block", "reason": reason}))
     return 0
 

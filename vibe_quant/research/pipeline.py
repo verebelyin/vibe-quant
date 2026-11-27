@@ -123,7 +123,9 @@ def run_scrape(
     prev_handlers: dict[signal.Signals, object] = {}
 
     def _signal_handler(signum: int, _frame: object) -> None:  # noqa: ARG001
-        logger.warning("scrape_run %s received signal %s; finalizing as killed", scrape_run_id, signum)
+        logger.warning(
+            "scrape_run %s received signal %s; finalizing as killed", scrape_run_id, signum
+        )
         kill_flag.set()
 
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -154,9 +156,7 @@ def run_scrape(
                 failed += 1
                 sm.increment_scrape_run_counters(scrape_run_id, fetched=1, failed=1)
                 continue
-            sm.increment_scrape_run_counters(
-                scrape_run_id, fetched=1, new=1 if was_new else 0
-            )
+            sm.increment_scrape_run_counters(scrape_run_id, fetched=1, new=1 if was_new else 0)
             if was_new:
                 new += 1
                 if extract_fn is not None and item_id is not None:
@@ -261,9 +261,7 @@ def persist_extractions(
             notable_parameters_json=result.notable_parameters_json,
         )
         if result.status == "parsed" and result.parsed_dsl_json:
-            _auto_screen.auto_screen_extraction(
-                sm, extraction_id, result.parsed_dsl_json
-            )
+            _auto_screen.auto_screen_extraction(sm, extraction_id, result.parsed_dsl_json)
     item_statuses = [_ITEM_STATUS_MAP.get(r.status, "failed") for r in results]
     rolled = min(item_statuses, key=lambda s: _ITEM_STATUS_PRIORITY.get(s, 99))
     sm.update_research_item_status(item_id, rolled)

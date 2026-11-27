@@ -64,8 +64,7 @@ def test_direct_venue_balance_before_leverage(tmp_path: Path) -> None:
     finally:
         runner.close()
     assert str(excinfo.value) == (
-        "invalid initial_balance: initial_balance must be a whole number in "
-        "[1, 1000000000], got 0"
+        "invalid initial_balance: initial_balance must be a whole number in [1, 1000000000], got 0"
     )
 
 

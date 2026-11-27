@@ -109,8 +109,7 @@ _CASES: list[tuple[str, Callable[[], types.SimpleNamespace], Any, bool, str]] = 
         lambda: _sizer(_Acct({USDT: 50.0})),
         _BAR,
         True,
-        "Sizing: min quantity 0.001 exceeds max_position_pct cap 0.00041667 "
-        "-- entry skipped",
+        "Sizing: min quantity 0.001 exceeds max_position_pct cap 0.00041667 -- entry skipped",
     ),
     (
         "size_increment",
@@ -176,9 +175,7 @@ def test_on_stop_summary_in_both_modes() -> None:
         fake, calls = _controllable(release)
         fake._sizing_skips = {"no_equity": 2, "min_notional": 5}
         fake.on_stop()
-        assert fake.log.warnings == [
-            "Sizing: 7 entries skipped (min_notional=5, no_equity=2)"
-        ]
+        assert fake.log.warnings == ["Sizing: 7 entries skipped (min_notional=5, no_equity=2)"]
         assert calls == expected_calls, release
 
 

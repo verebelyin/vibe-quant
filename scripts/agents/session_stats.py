@@ -54,7 +54,11 @@ def session_stats(path: Path, big: int) -> dict[str, Any]:
             if ts:
                 first, last = first or ts, ts
             content = (entry.get("message") or {}).get("content")
-            if entry.get("type") == "user" and isinstance(content, str) and not content.startswith("<"):
+            if (
+                entry.get("type") == "user"
+                and isinstance(content, str)
+                and not content.startswith("<")
+            ):
                 prompts += 1
             usage = (entry.get("message") or {}).get("usage")
             if isinstance(usage, dict):
@@ -74,7 +78,9 @@ def session_stats(path: Path, big: int) -> dict[str, Any]:
                         no_turn += "no active turn" in text
                     if len(text) > big:
                         use = uses.get(str(block.get("tool_use_id")), {})
-                        what = (use.get("input") or {}).get("command") or json.dumps(use.get("input"))
+                        what = (use.get("input") or {}).get("command") or json.dumps(
+                            use.get("input")
+                        )
                         large.append((len(text), f"{use.get('name')}: {str(what)[:90]}"))
     return {
         "span": f"{first[:16]} -> {last[:16]}", "prompts": prompts, "tools": tools, "errors": errors,
@@ -130,9 +136,13 @@ def report(path: Path, big: int) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--since", type=float, default=3.0, help="days (default 3)")
-    ap.add_argument("--session", nargs="*", default=[], help="session ids (default: all in --since)")
+    ap.add_argument(
+        "--session", nargs="*", default=[], help="session ids (default: all in --since)"
+    )
     ap.add_argument("--big", type=int, default=20_000)
     ap.add_argument("--projects", type=Path, default=PROJECTS)
     ap.add_argument("--t3-db", type=Path, default=T3_DB)
@@ -149,8 +159,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.t3_db.exists():
         try:
             rows = t3_workers(args.t3_db, since_iso)
-            print("== T3 workers since " + since_iso + ": " + ", ".join(f"{p}/{s}={n}" for p, s, n in rows))
-            print(f"  'Command timed out' in worker tool calls: {t3_timeouts(args.t3_db, since_iso)}")
+            print(
+                "== T3 workers since "
+                + since_iso
+                + ": "
+                + ", ".join(f"{p}/{s}={n}" for p, s, n in rows)
+            )
+            print(
+                f"  'Command timed out' in worker tool calls: {t3_timeouts(args.t3_db, since_iso)}"
+            )
         except sqlite3.Error as exc:
             print(f"== T3 db unreadable: {exc}", file=sys.stderr)
     return 0

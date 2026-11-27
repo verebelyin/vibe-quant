@@ -26,7 +26,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from bd_notes_guard import _segments  # noqa: E402
 
 _UNQUOTED_HEREDOC = re.compile(r"(?<!<)<<-?[ \t]*([A-Za-z_][\w.-]*)")
-_HEREDOC_BODY = re.compile(r"<<-?[ \t]*(['\"]?)([A-Za-z_][\w.-]*)\1[^\n]*\n.*?^[ \t]*\2[ \t]*$", re.S | re.M)
+_HEREDOC_BODY = re.compile(
+    r"<<-?[ \t]*(['\"]?)([A-Za-z_][\w.-]*)\1[^\n]*\n.*?^[ \t]*\2[ \t]*$", re.S | re.M
+)
 _SPACED_ASSIGN = re.compile(r"(?:^|[\s;&|(])([A-Za-z_]\w*)=([\"'])[^\"'\n]*\s[^\"'\n]*\2")
 
 

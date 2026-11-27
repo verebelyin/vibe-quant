@@ -635,9 +635,7 @@ async def test_null_plugin_float_is_not_set_in_the_editor_or_canonically(
     """Editor null is "not set" (saved, the executable DSL runs the plugin default); a
     canonical explicit null is omitted too (ruling R4f, b9uet, supersedes d42m5 R16)."""
     client, _mgr = api
-    r = await client.post(
-        "/api/strategies", json={"name": "t_null", "dsl_config": _arsi_ui(None)}
-    )
+    r = await client.post("/api/strategies", json={"name": "t_null", "dsl_config": _arsi_ui(None)})
     assert r.status_code == 201, r.text
     out = translate_dsl_config(_arsi_ui(None), strategy_name="t_null")
     assert "alpha" not in out["indicators"]["adaptive_rsi_14"]
@@ -674,10 +672,13 @@ def _ichimoku_canonical(tenkan: object) -> dict[str, Any]:
 
 @pytest.mark.parametrize("tenkan", [_HUGE, 2**1024], ids=["10**400", "2**1024"])
 def test_plugin_int_param_beyond_float_range_is_rejected(tenkan: int) -> None:
-    with pytest.raises(ValueError, match=r"^ICHIMOKU param 'tenkan' must be a whole number within range$"):
+    with pytest.raises(
+        ValueError, match=r"^ICHIMOKU param 'tenkan' must be a whole number within range$"
+    ):
         translate_dsl_config(_ichimoku_ui(tenkan), strategy_name="t_int_range")
     with pytest.raises(
-        ValueError, match=r"^Indicator 'ICHIMOKU' param 'tenkan' must be a whole number within range$"
+        ValueError,
+        match=r"^Indicator 'ICHIMOKU' param 'tenkan' must be a whole number within range$",
     ):
         check_strategy_indicator_params(_ichimoku_canonical(tenkan))
     with pytest.raises(DSLValidationError) as excinfo:
@@ -689,7 +690,11 @@ def test_plugin_int_param_at_float_range_edge_is_accepted() -> None:
     out = translate_dsl_config(_ichimoku_ui(_FLOAT_MAX_INT), strategy_name="t_int_edge")
     assert out["indicators"]["ichimoku"]["tenkan"] == _FLOAT_MAX_INT
     canonical = validate_strategy_dict(_ichimoku_canonical(_FLOAT_MAX_INT))
-    assert canonical.indicators["ichi"].model_extra == {"tenkan": _FLOAT_MAX_INT, "kijun": 26, "senkou": 52}
+    assert canonical.indicators["ichi"].model_extra == {
+        "tenkan": _FLOAT_MAX_INT,
+        "kijun": 26,
+        "senkou": 52,
+    }
 
 
 @pytest.mark.parametrize("fmt", ["editor", "canonical"])

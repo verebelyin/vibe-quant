@@ -206,7 +206,9 @@ class FundingAccumulator:
         if book is None:
             held = steps_held(fills, symbol, self._last)
             window_fills = [
-                fill for fill in fills if fill.symbol == symbol and self._last <= fill.ts < before_ns
+                fill
+                for fill in fills
+                if fill.symbol == symbol and self._last <= fill.ts < before_ns
             ]
         else:
             held = book.held(symbol, self._last)
@@ -227,8 +229,7 @@ class FundingAccumulator:
         self.funding_fallback_charges += len(accrual.fallback_timestamps)
         fallback_ts = set(accrual.fallback_timestamps)
         return [
-            FundingPayment(symbol, ts, amount, ts in fallback_ts)
-            for ts, amount in accrual.payments
+            FundingPayment(symbol, ts, amount, ts in fallback_ts) for ts, amount in accrual.payments
         ]
 
     def _mark(self, symbol: str, before_ns: int) -> Callable[[int], float]:
@@ -440,7 +441,9 @@ class BookIndex:
             return []
         if not rows.ordered:
             return [
-                fill for fill in self.fills if fill.symbol == symbol and from_ns <= fill.ts < before_ns
+                fill
+                for fill in self.fills
+                if fill.symbol == symbol and from_ns <= fill.ts < before_ns
             ]
         return rows.fills[
             bisect.bisect_left(rows.ts, from_ns) : bisect.bisect_left(rows.ts, before_ns)

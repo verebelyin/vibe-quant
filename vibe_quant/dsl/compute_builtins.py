@@ -752,9 +752,7 @@ def compute_stoch(df: pd.DataFrame, params: dict[str, object]) -> dict[str, pd.S
     if min(k_period, d_period) > 0 and len(df) < k_period + d_period - 1:
         empty = nan_like(df)
         return {"k": empty, "d": empty}
-    result = _ta().stoch(
-        df["high"], df["low"], df["close"], k=k_period, d=d_period, smooth_k=1
-    )
+    result = _ta().stoch(df["high"], df["low"], df["close"], k=k_period, d=d_period, smooth_k=1)
     if result is None:
         empty = nan_like(df)
         return {"k": empty, "d": empty}

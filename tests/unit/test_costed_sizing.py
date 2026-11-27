@@ -68,11 +68,19 @@ def _write_catalog(
         for i in range(n_min):
             px = fn(i)
             klines.append(
-                {"open_time": _DAY0_MS + i * _MIN_MS, "open": px, "high": px, "low": px,
-                 "close": px, "volume": 10.0, "close_time": _DAY0_MS + i * _MIN_MS + 59_999}
+                {
+                    "open_time": _DAY0_MS + i * _MIN_MS,
+                    "open": px,
+                    "high": px,
+                    "low": px,
+                    "close": px,
+                    "volume": 10.0,
+                    "close_time": _DAY0_MS + i * _MIN_MS + 59_999,
+                }
             )
-        bars_1m = klines_to_bars(klines, inst.id, get_bar_type(symbol, "1m"),
-                                 inst.size_precision, inst.price_precision)
+        bars_1m = klines_to_bars(
+            klines, inst.id, get_bar_type(symbol, "1m"), inst.size_precision, inst.price_precision
+        )
         cm.write_bars(bars_1m)
         if marks:  # MARK 1m bars for the liquidation overlay, same prices as LAST
             from nautilus_trader.model.data import Bar
@@ -80,17 +88,32 @@ def _write_catalog(
             from nautilus_trader.model.objects import Price as NtPrice
 
             mark_type = get_bar_type(symbol, "1m", price_type=PriceType.MARK)
-            cm.write_bars([
-                Bar(mark_type, NtPrice(fn(i), inst.price_precision), NtPrice(fn(i), inst.price_precision),
-                    NtPrice(fn(i), inst.price_precision), NtPrice(fn(i), inst.price_precision),
-                    Quantity(1, 0), (_DAY0_MS + i * _MIN_MS) * 1_000_000,
-                    (_DAY0_MS + i * _MIN_MS + 59_999) * 1_000_000)
-                for i in range(n_min)
-            ])
+            cm.write_bars(
+                [
+                    Bar(
+                        mark_type,
+                        NtPrice(fn(i), inst.price_precision),
+                        NtPrice(fn(i), inst.price_precision),
+                        NtPrice(fn(i), inst.price_precision),
+                        NtPrice(fn(i), inst.price_precision),
+                        Quantity(1, 0),
+                        (_DAY0_MS + i * _MIN_MS) * 1_000_000,
+                        (_DAY0_MS + i * _MIN_MS + 59_999) * 1_000_000,
+                    )
+                    for i in range(n_min)
+                ]
+            )
         for tf, minutes in (("15m", 15), ("1h", 60), ("4h", 240), ("1d", 1440)):
             if tf in timeframes:
-                cm.write_bars(aggregate_bars(bars_1m, get_bar_type(symbol, tf), minutes,
-                                             inst.size_precision, inst.price_precision))
+                cm.write_bars(
+                    aggregate_bars(
+                        bars_1m,
+                        get_bar_type(symbol, tf),
+                        minutes,
+                        inst.size_precision,
+                        inst.price_precision,
+                    )
+                )
     return root
 
 
@@ -147,14 +170,22 @@ def run_screening(
     seen = _Run()
     orig = NTScreeningRunner._extract_metrics
 
-    def _spy(self: NTScreeningRunner, params: Any, bt_result: Any, engine: Any,
-             *a: Any, **k: Any) -> Any:
+    def _spy(
+        self: NTScreeningRunner, params: Any, bt_result: Any, engine: Any, *a: Any, **k: Any
+    ) -> Any:
         cache = engine.kernel.cache
         for order in sorted(cache.orders(), key=lambda o: o.ts_init):
             for ev in order.events:
                 if isinstance(ev, OrderFilled):
-                    seen.fills.append((str(order.instrument_id), ev.order_side.name,
-                                       float(ev.last_qty), float(ev.last_px), int(ev.ts_event)))
+                    seen.fills.append(
+                        (
+                            str(order.instrument_id),
+                            ev.order_side.name,
+                            float(ev.last_qty),
+                            float(ev.last_px),
+                            int(ev.ts_event),
+                        )
+                    )
         seen.fills.sort(key=lambda f: f[4])
         seen.positions = sorted(
             [*cache.positions(), *cache.position_snapshots()], key=lambda p: p.ts_opened
@@ -172,8 +203,14 @@ def run_screening(
 
     monkeypatch.setattr(NTScreeningRunner, "_extract_metrics", _spy)
     runner = NTScreeningRunner(
-        dsl, symbols or ["BTCUSDT"], start, end, catalog_path=str(catalog),
-        funding_archive_path=str(archive), launch=launch or _launch(), **kwargs,
+        dsl,
+        symbols or ["BTCUSDT"],
+        start,
+        end,
+        catalog_path=str(catalog),
+        funding_archive_path=str(archive),
+        launch=launch or _launch(),
+        **kwargs,
     )
     seen.metrics = runner({})
     return seen
@@ -269,6 +306,7 @@ def test_other_refinement_error_is_wrapped(tmp_path: Path, monkeypatch: pytest.M
 
 # ------------------------------------------------------------------ Costed <= 0 skips
 
+
 def test_costed_nonpositive_skips_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Funding at 0.5 per settlement (3 x 500 = 1500 on 1000) leaves 98.28 - 1500 < 0:
     every later entry is skipped (counted under ``no_equity``), the open run is untouched
@@ -316,6 +354,7 @@ def test_costed_equity_zero_edge() -> None:
 
 # ---------------------------------------------------------------- Paper has no ledger
 
+
 def test_paper_strategy_has_no_cost_ledger() -> None:
     """No ledger -> equity is the venue balance exactly (the venue already books funding
     and slippage); only ``engine_run`` (every NT backtest engine) and the fast-tier replay
@@ -339,6 +378,7 @@ def test_paper_strategy_has_no_cost_ledger() -> None:
 
 # ------------------------------------------------- Zero costs, R18 overlay, R19 identity
 
+
 def _entries(run: _Run, symbol: str = "BTCUSDT-PERP.BINANCE") -> list[tuple[Any, ...]]:
     return [f for f in run.fills if f[1] == "BUY" and f[0] == symbol]
 
@@ -355,14 +395,21 @@ def test_zero_costs_bit_identical(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     ]
     m = run.metrics
     assert (m.sharpe_ratio, m.total_trades, m.total_return) == (
-        7.739837154601049, 2, 0.09626630239999995
+        7.739837154601049,
+        2,
+        0.09626630239999995,
     )
     assert (m.profit_factor, m.max_drawdown, m.total_funding, m.total_fees) == (
-        48.80099166909108, 0.0018336828798334555, 0.0, 1.8184976
+        48.80099166909108,
+        0.0018336828798334555,
+        0.0,
+        1.8184976,
     )
 
 
-def test_overlay_on_sizes_on_costed_balance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_overlay_on_sizes_on_costed_balance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Liquidation mode on keeps the NT path sized on the costed balance and reconciles on
     pass 1 (a mismatch would raise LiquidationIntegrityError)."""
     catalog = _write_catalog(tmp_path / "cat", _jump(30 * 60), marks=True)
@@ -380,7 +427,9 @@ def _staircase(minute: int) -> float:
     return round(100.0 * 1.2 ** (minute // 360), 1)
 
 
-def test_ledger_identity_flat_single_symbol(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ledger_identity_flat_single_symbol(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Over many cycles every entry is sized on 1000 + sum(prior net PnL), net PnL being
     NT's realized PnL (commissions in) minus the hand-counted funding (settlements x rate x
     entry notional); the closes are what the ledger finalized, and the costed balance equals the
@@ -398,13 +447,17 @@ def test_ledger_identity_flat_single_symbol(tmp_path: Path, monkeypatch: pytest.
             pos = closed[k]
             funding = (
                 _settlements_between(int(pos.ts_opened), int(pos.ts_closed))
-                * RATE * float(pos.peak_qty) * float(pos.avg_px_open)
+                * RATE
+                * float(pos.peak_qty)
+                * float(pos.avg_px_open)
             )
             balance += pos.realized_pnl.as_double() - funding
     assert sum(run.ledgers[0].finalized.values()) == pytest.approx(
         sum(
             _settlements_between(int(p.ts_opened), int(p.ts_closed))
-            * RATE * float(p.peak_qty) * float(p.avg_px_open)
+            * RATE
+            * float(p.peak_qty)
+            * float(p.avg_px_open)
             for p in closed
         ),
         abs=1e-6,
@@ -412,6 +465,7 @@ def test_ledger_identity_flat_single_symbol(tmp_path: Path, monkeypatch: pytest.
 
 
 # ------------------------------------------------------------------ Margin on costed equity
+
 
 def _margin_fake(paid: float) -> Any:
     fake = _fake_self(_compiled()[0], open_orders=[], inflight=[])
@@ -479,13 +533,18 @@ def test_margin_check_costs_are_read_at_release_time(
 
 # ---------------------------------------------------------------------- Fresh ledgers
 
+
 def test_each_window_has_its_own_ledger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A later window (WFA / CV / eval window) is its own engine with its own EMPTY ledger:
     nothing is carried over from the earlier window, and its first entry is sized on 1000."""
     catalog = _write_catalog(tmp_path / "cat", _jump(30 * 60))
     archive = _archive(tmp_path)
-    first = run_screening(monkeypatch, catalog, archive, _dsl(), start="2024-01-01", end="2024-01-04")
-    later = run_screening(monkeypatch, catalog, archive, _dsl(), start="2024-01-03", end="2024-01-06")
+    first = run_screening(
+        monkeypatch, catalog, archive, _dsl(), start="2024-01-01", end="2024-01-04"
+    )
+    later = run_screening(
+        monkeypatch, catalog, archive, _dsl(), start="2024-01-03", end="2024-01-06"
+    )
     assert first.ledgers[0] is not later.ledgers[0]
     assert len(first.ledgers[0].finalized) == 1
     assert later.ledgers[0].finalized == {}  # the price stays at 120: no closed cycle
@@ -493,6 +552,7 @@ def test_each_window_has_its_own_ledger(tmp_path: Path, monkeypatch: pytest.Monk
 
 
 # --------------------------------------------- multi-symbol funding and the equal-ts note (R24)
+
 
 def test_other_symbols_open_funding_counts_while_one_sizes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -506,15 +566,20 @@ def test_other_symbols_open_funding_counts_while_one_sizes(
         symbols={"BTCUSDT": lambda i: 100.0, "ETHUSDT": _jump(42 * 60)},  # ETH jumps Jan-2 18:00
     )
     run = run_screening(
-        monkeypatch, catalog, _archive(tmp_path, symbols=("BTCUSDT", "ETHUSDT")), _dsl(),
+        monkeypatch,
+        catalog,
+        _archive(tmp_path, symbols=("BTCUSDT", "ETHUSDT")),
+        _dsl(),
         symbols=["BTCUSDT", "ETHUSDT"],
     )
     eth = "ETHUSDT-PERP.BINANCE"
     eth_buys = _entries(run, eth)
     (btc_buy,) = _entries(run)
     eth1 = next(p for p in run.positions if "ETHUSDT" in str(p.instrument_id) and p.is_closed)
-    btc_fee = sum(abs(c.as_double()) for c in next(
-        p for p in run.positions if "BTCUSDT" in str(p.instrument_id)).commissions())
+    btc_fee = sum(
+        abs(c.as_double())
+        for c in next(p for p in run.positions if "BTCUSDT" in str(p.instrument_id)).commissions()
+    )
     assert [f[1] for f in run.fills if f[0] == eth][:2] == ["BUY", "SELL"]
     nt_balance = 1000.0 + eth1.realized_pnl.as_double() - btc_fee
     paid = 0.5 + 0.5
@@ -540,8 +605,14 @@ def test_equal_instant_sizing_inherits_same_ts_order_sensitivity(tmp_path: Path)
     exit_ = (_DAY0_MS + 12 * _H_MS + 59_999) * ns  # 12:00:59.999: 08:00 settled
     now = (_DAY0_MS + 24 * _H_MS - 1) * ns  # 23:59:59.999: 16:00 settled too
     pos = FakePosition.closed(
-        "X", "BTCUSDT-PERP.BINANCE", entry_ns=entry, exit_ns=exit_, entry_price=100.0,
-        exit_price=100.0, qty=10.0, entry_side=OrderSide.BUY,
+        "X",
+        "BTCUSDT-PERP.BINANCE",
+        entry_ns=entry,
+        exit_ns=exit_,
+        entry_price=100.0,
+        exit_price=100.0,
+        qty=10.0,
+        entry_side=OrderSide.BUY,
     )
     model = CostModel(FundingCalculator(str(archive)), frozenset(), "1h", 3_600_000_000_000, None)
     unprocessed = CostLedger(model, None)
@@ -559,8 +630,12 @@ def test_stop_closes_are_allowed_only_after_stopped(
     ``stopped`` ran first -- before the outbox early return, which 4h/1d runs take."""
     catalog = _write_catalog(tmp_path / "cat", lambda i: 100.0, timeframes=("1m",), n_min=2 * _DAY)
     run = run_screening(
-        monkeypatch, catalog, _archive(tmp_path), _dsl("1m", tp_pct=90.0),
-        start="2024-01-01", end="2024-01-03",
+        monkeypatch,
+        catalog,
+        _archive(tmp_path),
+        _dsl("1m", tp_pct=90.0),
+        start="2024-01-01",
+        end="2024-01-03",
     )
     (ledger,) = run.ledgers
     assert ledger.stopped_ns is not None

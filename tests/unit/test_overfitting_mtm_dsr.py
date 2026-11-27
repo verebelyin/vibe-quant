@@ -73,8 +73,10 @@ def _discovery_db(
     if record is not None:
         champion["dsr"] = record
     notes: dict[str, Any] = {
-        "type": "discovery", "evaluated": evaluated,
-        "symbols": syms, "symbol_agg": symbol_agg,
+        "type": "discovery",
+        "evaluated": evaluated,
+        "symbols": syms,
+        "symbol_agg": symbol_agg,
         "train_dates": ["2022-01-01", "2026-03-17"],
         "top_strategies": [champion],
     }
@@ -136,9 +138,7 @@ def test_promoted_champion_dsr_rechecked_on_mtm_not_realized(tmp_path: Path) -> 
 
 
 def test_promotion_copies_mtm_stats_from_dsr_record(tmp_path: Path) -> None:
-    db, rid = _discovery_db(
-        tmp_path, evaluated=10, record=_record(skewness=-0.4, kurtosis=5.5)
-    )
+    db, rid = _discovery_db(tmp_path, evaluated=10, record=_record(skewness=-0.4, kurtosis=5.5))
     p = OverfittingPipeline(db)
     try:
         (cand,) = p._load_candidates(rid)
@@ -181,9 +181,7 @@ def test_promoted_champion_without_trusted_mtm_record_fails_closed(
 
 def test_moments_clamped_like_discovery(tmp_path: Path) -> None:
     """Positive skew / thin tails are not trusted (skew <= 0, kurtosis >= 3)."""
-    db, rid = _discovery_db(
-        tmp_path, evaluated=79, record=_record(skewness=1.5, kurtosis=1.2)
-    )
+    db, rid = _discovery_db(tmp_path, evaluated=79, record=_record(skewness=1.5, kurtosis=1.2))
     cand, _ = _run_dsr(db, rid)
     ref = DeflatedSharpeRatio().calculate(deannualize_sharpe(MTM_SR_ANN), 79, T_DAYS, 0.0, 3.0)
     assert cand.dsr_result is not None
@@ -273,11 +271,7 @@ def test_import_order_has_no_cycle(first: str) -> None:
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2]
-    code = (
-        f"{first}\n"
-        "import vibe_quant.discovery.neff\n"
-        "import vibe_quant.overfitting.pipeline\n"
-    )
+    code = f"{first}\nimport vibe_quant.discovery.neff\nimport vibe_quant.overfitting.pipeline\n"
     proc = subprocess.run(
         [sys.executable, "-c", code],
         cwd=root,
@@ -302,16 +296,25 @@ def _discovery_sweep_db(
         None, "discovery", ["BTCUSDT"], "4h", "2022-01-01", "2026-03-17", {}
     )
     notes = {
-        "type": "discovery", "evaluated": 40, "symbols": ["BTCUSDT"],
-        "symbol_agg": "portfolio", "train_dates": ["2022-01-01", "2026-03-17"],
+        "type": "discovery",
+        "evaluated": 40,
+        "symbols": ["BTCUSDT"],
+        "symbol_agg": "portfolio",
+        "train_dates": ["2022-01-01", "2026-03-17"],
         "top_strategies": [{"sharpe": REALIZED_SR_ANN, "dsr": _record()}],
         "dsr_trials": dsr_trials,
     }
     row = {
-        "parameters": notes, "sharpe_ratio": REALIZED_SR_ANN, "total_return": 0.4,
-        "max_drawdown": 0.1, "profit_factor": 1.5, "total_trades": 120,
-        "mtm_sharpe_daily": deannualize_sharpe(MTM_SR_ANN), "mtm_skewness": 0.0,
-        "mtm_kurtosis": 3.0, "mtm_days": T_DAYS,
+        "parameters": notes,
+        "sharpe_ratio": REALIZED_SR_ANN,
+        "total_return": 0.4,
+        "max_drawdown": 0.1,
+        "profit_factor": 1.5,
+        "total_trades": 120,
+        "mtm_sharpe_daily": deannualize_sharpe(MTM_SR_ANN),
+        "mtm_skewness": 0.0,
+        "mtm_kurtosis": 3.0,
+        "mtm_days": T_DAYS,
     }
     sm.save_sweep_results_batch(rid, [dict(row) for _ in range(count)])
     sm.close()
@@ -319,13 +322,13 @@ def _discovery_sweep_db(
 
 
 @pytest.mark.parametrize(("gate_n", "expected"), [(27, 27), (1, 1)])
-def test_effective_rule_recheck_uses_gate_n(
-    tmp_path: Path, gate_n: int, expected: int
-) -> None:
+def test_effective_rule_recheck_uses_gate_n(tmp_path: Path, gate_n: int, expected: int) -> None:
     """A champion discovery judged at its effective gate N is re-checked at
     the SAME N, not at the raw ``evaluated`` 40 (which is stricter and can drop it)."""
     db, rid = _discovery_db(
-        tmp_path, evaluated=40, record=_record(),
+        tmp_path,
+        evaluated=40,
+        record=_record(),
         dsr_trials={"n_rule": DISC_N_RULE, "gate_n": gate_n},
     )
     cand, _ = _run_dsr(db, rid)
@@ -355,19 +358,17 @@ def test_effective_rule_keeps_candidate_floor(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "dsr_trials",
     [
-        {"n_rule": DISC_N_RULE},                   # gate_n absent
+        {"n_rule": DISC_N_RULE},  # gate_n absent
         {"n_rule": DISC_N_RULE, "gate_n": None},
-        {"n_rule": DISC_N_RULE, "gate_n": True},   # a bool is not a trial count
+        {"n_rule": DISC_N_RULE, "gate_n": True},  # a bool is not a trial count
         {"n_rule": DISC_N_RULE, "gate_n": "27"},
-        {"n_rule": DISC_N_RULE, "gate_n": 0},      # below the floor
-        {"n_rule": DISC_N_RULE, "gate_n": 27.0},   # not an int
-        {"n_rule": LEGACY_N_RULE, "gate_n": 27},   # older n_rule
-        None,                                      # legacy payload, no dsr_trials
+        {"n_rule": DISC_N_RULE, "gate_n": 0},  # below the floor
+        {"n_rule": DISC_N_RULE, "gate_n": 27.0},  # not an int
+        {"n_rule": LEGACY_N_RULE, "gate_n": 27},  # older n_rule
+        None,  # legacy payload, no dsr_trials
     ],
 )
-def test_recheck_falls_back_to_evaluated(
-    tmp_path: Path, dsr_trials: dict[str, Any] | None
-) -> None:
+def test_recheck_falls_back_to_evaluated(tmp_path: Path, dsr_trials: dict[str, Any] | None) -> None:
     """No usable ``gate_n`` under the new rule (or a legacy payload) keeps
     today's N = max(evaluated 40, num_candidates 1) = 40, byte-identical."""
     db, rid = _discovery_db(tmp_path, evaluated=40, record=_record(), dsr_trials=dsr_trials)
@@ -426,7 +427,9 @@ def _screening_db(tmp_path: Path, rows: list[dict[str, Any]]) -> tuple[Path, int
     db = tmp_path / "scr.db"
     sm = StateManager(db)
     sid = sm.create_strategy("s", {"timeframe": "4h"})
-    rid = sm.create_backtest_run(sid, "screening", ["BTCUSDT"], "4h", "2022-01-01", "2022-12-31", {})
+    rid = sm.create_backtest_run(
+        sid, "screening", ["BTCUSDT"], "4h", "2022-01-01", "2022-12-31", {}
+    )
     sm.save_sweep_results_batch(rid, rows)
     sm.close()
     return db, rid
@@ -647,7 +650,9 @@ def test_screening_save_results_round_trips_mtm_stats_into_recheck(tmp_path: Pat
     db = tmp_path / "rt.db"
     sm = StateManager(db)
     sid = sm.create_strategy("s", {"timeframe": "4h"})
-    rid = sm.create_backtest_run(sid, "screening", ["BTCUSDT"], "4h", "2022-01-01", "2022-12-31", {})
+    rid = sm.create_backtest_run(
+        sid, "screening", ["BTCUSDT"], "4h", "2022-01-01", "2022-12-31", {}
+    )
     m = BacktestMetrics(
         parameters={"p": 1}, sharpe_ratio=9.0, profit_factor=1.5, max_drawdown=0.1,
         total_trades=50, total_return=0.1,

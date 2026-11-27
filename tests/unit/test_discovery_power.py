@@ -135,8 +135,7 @@ def test_preflight_unknown_prior_uses_run_only_n_and_no_holdout() -> None:
     assert pre["holdout_t_sharpe_1"] == 0.0
     assert pre["warning"] is None
     assert pre["line"] == (
-        "Power: DSR bar 1.16 at N=1 (prior trials unknown), 3.22 at N=300 "
-        "(ann √365); no holdout"
+        "Power: DSR bar 1.16 at N=1 (prior trials unknown), 3.22 at N=300 (ann √365); no holdout"
     )
 
 
@@ -230,5 +229,8 @@ def test_full_history_start_names_a_symbol_without_bars(
 
 def test_unavailable_bar_reason_states_its_unit() -> None:
     """No bar up to the limit: the reason names the limit in display units (1e4 stored = 12035)."""
-    with pytest.raises(ValueError, match=r"^no annual Sharpe up to 12035 \(ann √365\) passes DSR at N=1 over 2 days$"):
+    with pytest.raises(
+        ValueError,
+        match=r"^no annual Sharpe up to 12035 \(ann √365\) passes DSR at N=1 over 2 days$",
+    ):
         power.dsr_sharpe_bar(1, 2)

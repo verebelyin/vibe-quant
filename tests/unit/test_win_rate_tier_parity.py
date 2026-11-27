@@ -111,9 +111,7 @@ def _venue_config() -> SimpleNamespace:
     )
 
 
-def _screening_runner(
-    tmp_path: Path, *, archive: object | None = None
-) -> NTScreeningRunner:
+def _screening_runner(tmp_path: Path, *, archive: object | None = None) -> NTScreeningRunner:
     return NTScreeningRunner(
         dsl_dict={},
         symbols=["BTCUSDT"],

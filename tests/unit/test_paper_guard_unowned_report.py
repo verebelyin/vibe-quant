@@ -111,8 +111,6 @@ def _restored_error() -> RestoredHalt:
     )
 
 
-
-
 def test_prestart_halt_reports_reconciled_unowned_position() -> None:
     """Halted before the run, the position reconciled after the halt is
     reported once by ``on_start`` (base: no warning at all) and stays open."""
@@ -127,8 +125,6 @@ def test_prestart_halt_reports_reconciled_unowned_position() -> None:
     assert [str(p.id) for p in h.engine.cache.positions_open()] == ["P-EXT-1"]
     assert h.guard.guard_state == GuardState.HALTED
     assert h.guard.halt_reason == HaltReason.SIGNAL
-
-
 
 
 def test_unowned_reported_once_when_seen_before_start() -> None:
@@ -157,8 +153,6 @@ def test_changed_unowned_list_is_reported_with_every_position() -> None:
     assert h.listener.warnings == [_EXT_WARNING, _EXT_2_WARNING]
 
 
-
-
 def test_replay_over_restored_error_reports_unowned() -> None:
     """A SIGNAL halt replayed over a restored ERROR halt flattens once
     (R8a) and still reports the position reconciled after it, once."""
@@ -172,8 +166,6 @@ def test_replay_over_restored_error_reports_unowned() -> None:
     assert len(calls) == 1, "the replay flattened; on_start must not flatten again"
     assert h.guard.halt_reason == HaltReason.SIGNAL
     assert h.listener.warnings == [_EXT_WARNING]
-
-
 
 
 def test_restored_halt_first_tick_warns_once() -> None:
@@ -190,8 +182,6 @@ def test_restored_halt_first_tick_warns_once() -> None:
 
     assert h.guard.halt_reason == HaltReason.ERROR
     assert h.listener.warnings == [_EXT_WARNING]
-
-
 
 
 def test_escalation_in_on_start_warns_once() -> None:
@@ -219,8 +209,6 @@ def test_escalation_in_on_start_warns_once() -> None:
     assert h.listener.warnings == [_EXT_WARNING], "the escalation flatten's own warning only"
 
 
-
-
 def test_resume_before_start_reports_nothing() -> None:
     """Resuming the pre-start halt before the run leaves nothing to report."""
     h = harness.build(symbols=(_SYMBOL,))
@@ -233,8 +221,6 @@ def test_resume_before_start_reports_nothing() -> None:
 
     assert h.guard.guard_state == GuardState.RUNNING
     assert h.listener.warnings == []
-
-
 
 
 @pytest.mark.parametrize(

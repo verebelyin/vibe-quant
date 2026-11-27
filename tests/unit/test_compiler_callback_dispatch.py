@@ -144,9 +144,7 @@ class _MockNtInd:
     __module__ = "vibe_quant.dsl.tests.mock"
 
 
-def _compute_dummy_multi(
-    df: pd.DataFrame, params: dict[str, Any]
-) -> dict[str, pd.Series]:
+def _compute_dummy_multi(df: pd.DataFrame, params: dict[str, Any]) -> dict[str, pd.Series]:
     """Return three identical series keyed as ("main", "aux", "extra")."""
     base = df["close"].rolling(int(params.get("period", 5))).mean()
     return {"main": base, "aux": base, "extra": base}
@@ -223,9 +221,7 @@ take_profit:
     # The spec's compute_fn must be imported + called. The generated
     # import line uses the compute_fn's real ``__module__``, which for a
     # function defined inside this test file is this test file itself.
-    expected_import = (
-        f"from {_compute_dummy_multi.__module__} import _compute_dummy_multi"
-    )
+    expected_import = f"from {_compute_dummy_multi.__module__} import _compute_dummy_multi"
     assert expected_import in source
     assert "_compute_dummy_multi(" in source
     # The readiness check should use _pta_values (compute_fn path), not

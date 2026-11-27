@@ -122,15 +122,18 @@ def _screening(
     ) -> BacktestMetrics:
         seen.append(_fills_from_engine(engine))
         return orig(
-            self, params, bt_result, engine, start_time,
-            starting_balance=starting_balance, cost_ledger=cost_ledger,
+            self,
+            params,
+            bt_result,
+            engine,
+            start_time,
+            starting_balance=starting_balance,
+            cost_ledger=cost_ledger,
         )
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(NTScreeningRunner, "_extract_metrics", spy)
-        metrics = NTScreeningRunner(
-            dsl, list(symbols), _START, end, catalog_path=str(catalog)
-        )({})
+        metrics = NTScreeningRunner(dsl, list(symbols), _START, end, catalog_path=str(catalog))({})
     return seen[0], metrics
 
 
@@ -386,9 +389,7 @@ def test_validation_missing_detail_release_waits_for_the_next_own_bar(
         symbols=("BTCUSDT", "ETHUSDT"),
     )
     dsl = _dsl("4h", name="parity_r10b", n=12)
-    val, result = _validation(
-        tmp_path / "run", catalog, dsl, symbols=("BTCUSDT", "ETHUSDT")
-    )
+    val, result = _validation(tmp_path / "run", catalog, dsl, symbols=("BTCUSDT", "ETHUSDT"))
 
     btc = [p for p in val.positions if p.symbol == "BTCUSDT"]
     eth = [p for p in val.positions if p.symbol == "ETHUSDT"]

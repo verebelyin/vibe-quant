@@ -213,7 +213,9 @@ def is_funding_settlement(instrument_id: str, hour_ns: int) -> bool:
                     interval = hours[i]
         return hour_ns % (interval * _HOUR_NS) == 0
     except Exception as e:
-        _log_grid_fallback_once(path, symbol, f"funding interval lookup failed ({type(e).__name__})")
+        _log_grid_fallback_once(
+            path, symbol, f"funding interval lookup failed ({type(e).__name__})"
+        )
         return hour_ns % (_DEFAULT_INTERVAL_H * _HOUR_NS) == 0
 
 
@@ -308,9 +310,7 @@ def _iso(ns: int) -> str:
     return datetime.fromtimestamp(ns / 1e9, tz=UTC).strftime("%Y-%m-%d %H:%M")
 
 
-def _asof(
-    snapped: np.ndarray, series: np.ndarray, bar_close_ns: np.ndarray
-) -> np.ndarray:
+def _asof(snapped: np.ndarray, series: np.ndarray, bar_close_ns: np.ndarray) -> np.ndarray:
     """As-of lookup; NaN before the first settlement or when it is > 2 periods stale."""
     from vibe_quant.validation.funding import _FUNDING_PERIOD_NS
 
@@ -575,9 +575,7 @@ def taker_imbalance_at(symbol: str, close_ns: int, period: int) -> float:
     return float(taker_cum[hi + 1] - taker_cum[safe_lo]) / float(vol_sum) - 0.5
 
 
-def taker_imbalance_asof(
-    symbol: str, bar_close_ns: np.ndarray, period: int
-) -> np.ndarray:
+def taker_imbalance_asof(symbol: str, bar_close_ns: np.ndarray, period: int) -> np.ndarray:
     """Taker-buy share of volume minus 0.5 over the last ``period`` MINUTES.
 
     The window is ``(t - period*60s, t]`` of archived 1m klines; a kline is
@@ -593,12 +591,7 @@ def taker_imbalance_asof(
     safe_hi = np.clip(hi, 0, close_ns.size - 1)
     safe_lo = np.clip(lo, 0, close_ns.size - 1)
     span = (period - 1) * _TAKER_KLINE_NS
-    ok = (
-        (hi >= 0)
-        & (close_ns[safe_hi] == t)
-        & (lo >= 0)
-        & (close_ns[safe_lo] == t - span)
-    )
+    ok = (hi >= 0) & (close_ns[safe_hi] == t) & (lo >= 0) & (close_ns[safe_lo] == t - span)
     vol_sum = vol_cum[safe_hi + 1] - vol_cum[safe_lo]
     taker_sum = taker_cum[safe_hi + 1] - taker_cum[safe_lo]
     ok &= present_cum[safe_hi + 1] - present_cum[safe_lo] == period
@@ -715,9 +708,7 @@ def _ref_derived(symbol: str, tf: str, kind: str, period: int) -> tuple[np.ndarr
     return ts, out
 
 
-def _ref_lookup(
-    ts: np.ndarray, series: np.ndarray, close_ns: np.ndarray
-) -> np.ndarray:
+def _ref_lookup(ts: np.ndarray, series: np.ndarray, close_ns: np.ndarray) -> np.ndarray:
     """As-of: latest ref bar whose close <= t; NaN if none or > 2 days stale."""
     t = np.asarray(close_ns, dtype=np.int64)
     idx = np.searchsorted(ts, t, side="right") - 1
@@ -796,4 +787,3 @@ def context_of(df: pd.DataFrame) -> tuple[str, np.ndarray]:
         msg = f"bar_close_ns has {ns.size} entries for {len(df.index)} rows"
         raise ValueError(msg)
     return FundingCalculator.symbol_from_instrument_id(instrument), ns
-

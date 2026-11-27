@@ -82,12 +82,8 @@ def events(bar_data: dict[str, np.ndarray]) -> list[tuple[int, str, str]]:
     hist = macd - signal
     close_back = np.concatenate([[math.nan] * SLOW, close[:-SLOW]])
 
-    long_entry = (
-        _cross_up(hist, 0.0) & (macd > 0.0) & (fast > slow) & (close_back > veryslow)
-    )
-    short_entry = (
-        _cross_dn(hist, 0.0) & (macd < 0.0) & (fast < slow) & (close_back < veryslow)
-    )
+    long_entry = _cross_up(hist, 0.0) & (macd > 0.0) & (fast > slow) & (close_back > veryslow)
+    short_entry = _cross_dn(hist, 0.0) & (macd < 0.0) & (fast < slow) & (close_back < veryslow)
     out: list[tuple[int, str, str]] = []
     for t in range(close.size):
         if long_entry[t]:

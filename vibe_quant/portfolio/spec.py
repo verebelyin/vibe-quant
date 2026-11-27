@@ -152,9 +152,7 @@ def family_num_trials(n_prior: int, n_arms: int) -> int:
     try:  # statistics.StatisticsError (inv_cdf(1.0)) is a ValueError
         DeflatedSharpeRatio._expected_max_sharpe(total)
     except (OverflowError, ValueError) as error:
-        raise ValueError(
-            f"family N={total} is outside the finite DSR quantile domain"
-        ) from error
+        raise ValueError(f"family N={total} is outside the finite DSR quantile domain") from error
     return total
 
 
@@ -217,7 +215,11 @@ class CarrySpec:
             raise ValueError(f"weighting must be one of {WEIGHTINGS}, got {self.weighting!r}")
         lookback = self.vol_lookback_days
         low, high = TREND_VOL_LOOKBACK_RANGE if trend else VOL_LOOKBACK_RANGE
-        if isinstance(lookback, bool) or not isinstance(lookback, int) or not low <= lookback <= high:
+        if (
+            isinstance(lookback, bool)
+            or not isinstance(lookback, int)
+            or not low <= lookback <= high
+        ):
             suffix = " for signal='trend'" if trend else ""
             raise ValueError(
                 f"vol_lookback_days must be an int in [{low}, {high}]{suffix}, got {lookback!r}"
@@ -238,7 +240,9 @@ class CarrySpec:
         if not 0.0 < gross <= 2.0:
             raise ValueError(f"gross must be in (0, 2.0], got {self.gross!r}")
         if gross > 1.0 and not self.allow_gross_above_one:
-            raise ValueError("gross > 1.0 needs allow_gross_above_one (liquidation is not modelled)")
+            raise ValueError(
+                "gross > 1.0 needs allow_gross_above_one (liquidation is not modelled)"
+            )
         if not 0.0 <= band < 1.0:
             raise ValueError(f"band must be in [0.0, 1.0), got {self.band!r}")
         if initial_balance <= 0.0:

@@ -246,9 +246,7 @@ def _bankroll_stale_reasons(
     conn: sqlite3.Connection, inputs: Mapping[str, Any], dsl_hash: DslHash
 ) -> list[str]:
     """Why the parent no longer matches the admission snapshot (empty = fresh)."""
-    run = conn.execute(
-        "SELECT * FROM backtest_runs WHERE id = ?", (inputs["run_id"],)
-    ).fetchone()
+    run = conn.execute("SELECT * FROM backtest_runs WHERE id = ?", (inputs["run_id"],)).fetchone()
     if run is None:
         return ["parent_missing"]
     reasons: list[str] = []
@@ -290,9 +288,7 @@ def _sqlite_int(value: int) -> bool:
     return _SQLITE_INT_MIN <= value <= _SQLITE_INT_MAX
 
 
-def _bankroll_admit_inputs(
-    conn: sqlite3.Connection, run_id: int, dsl_hash: DslHash
-) -> JsonDict:
+def _bankroll_admit_inputs(conn: sqlite3.Connection, run_id: int, dsl_hash: DslHash) -> JsonDict:
     """Read run, current result, strategy and recorded identity; the admission snapshot."""
     run = (
         conn.execute("SELECT * FROM backtest_runs WHERE id = ?", (run_id,)).fetchone()
@@ -340,9 +336,7 @@ def _bankroll_admit_inputs(
     }
 
 
-def _bankroll_job_dead_reason(
-    job: sqlite3.Row, job_alive: JobAlive
-) -> tuple[str, bool] | None:
+def _bankroll_job_dead_reason(job: sqlite3.Row, job_alive: JobAlive) -> tuple[str, bool] | None:
     """Why an open bankroll job row is dead, and whether its process still lives.
 
     None = alive or still registering.
@@ -419,18 +413,13 @@ def _bankroll_reserve(
 ) -> BankrollAdmission:
     """Snapshot the parent and insert the running report with its job id (in a txn)."""
     inputs = _bankroll_admit_inputs(conn, run_id, dsl_hash)
-    if conn.execute(
-        "SELECT 1 FROM bankroll_reports WHERE status = 'running'"
-    ).fetchone():
+    if conn.execute("SELECT 1 FROM bankroll_reports WHERE status = 'running'").fetchone():
         raise BankrollAdmissionError("report_running", "A bankroll report is running")
     if conn.execute(
-        "SELECT 1 FROM background_jobs WHERE job_type = ? "
-        "AND status IN ('pending', 'running')",
+        "SELECT 1 FROM background_jobs WHERE job_type = ? AND status IN ('pending', 'running')",
         (BANKROLL_JOB_TYPE,),
     ).fetchone():
-        raise BankrollAdmissionError(
-            "job_open", "A bankroll report job is still open"
-        )
+        raise BankrollAdmissionError("job_open", "A bankroll report job is still open")
     # job_id 0 is a placeholder replaced in this same transaction.
     cursor = conn.execute(
         f"""INSERT INTO bankroll_reports
@@ -441,21 +430,15 @@ def _bankroll_reserve(
     )
     report_id = int(cursor.lastrowid or 0)
     job_id = BANKROLL_JOB_ID_BASE - report_id
-    if conn.execute(
-        "SELECT 1 FROM background_jobs WHERE run_id = ?", (job_id,)
-    ).fetchone():
+    if conn.execute("SELECT 1 FROM background_jobs WHERE run_id = ?", (job_id,)).fetchone():
         raise BankrollAdmissionError(
             "job_id_taken", f"Job id {job_id} is already held by another job"
         )
-    conn.execute(
-        "UPDATE bankroll_reports SET job_id = ? WHERE id = ?", (job_id, report_id)
-    )
+    conn.execute("UPDATE bankroll_reports SET job_id = ? WHERE id = ?", (job_id, report_id))
     return BankrollAdmission(report_id, job_id)
 
 
-def _bankroll_ownership_refusal(
-    conn: sqlite3.Connection, report_id: int, pid: int
-) -> str | None:
+def _bankroll_ownership_refusal(conn: sqlite3.Connection, report_id: int, pid: int) -> str | None:
     """None while ``pid`` owns a running report whose job attempt is still open."""
     row = conn.execute(
         """SELECT r.status, r.owner_pid, j.status AS job_status, j.pid AS job_pid
@@ -715,9 +698,7 @@ class StateManager:
             Strategy dict or None if not found.
         """
         with self._write_lock:
-            row = self.conn.execute(
-                "SELECT * FROM strategies WHERE name = ?", (name,)
-            ).fetchone()
+            row = self.conn.execute("SELECT * FROM strategies WHERE name = ?", (name,)).fetchone()
         if row is None:
             return None
         result = dict(row)
@@ -825,9 +806,7 @@ class StateManager:
     def list_sizing_configs(self) -> list[JsonDict]:
         """List all sizing configs."""
         with self._write_lock:
-            rows = self.conn.execute(
-                "SELECT * FROM sizing_configs ORDER BY name"
-            ).fetchall()
+            rows = self.conn.execute("SELECT * FROM sizing_configs ORDER BY name").fetchall()
         results = []
         for row in rows:
             result = dict(row)
@@ -1064,9 +1043,7 @@ class StateManager:
     def clear_research_subreddits(self, source: str) -> None:
         """Drop the saved row for ``source`` so callers fall back to env defaults."""
         with self._write_lock:
-            self.conn.execute(
-                "DELETE FROM research_settings WHERE source = ?", (source,)
-            )
+            self.conn.execute("DELETE FROM research_settings WHERE source = ?", (source,))
             self.conn.commit()
 
     # --- Backtest Run CRUD ---
@@ -1362,9 +1339,7 @@ class StateManager:
             ).fetchall()
             return [(r[0], r[1], r[2], r[3], r[4]) for r in rows]
 
-    def list_sweep_reference_rows(
-        self, run_id: int
-    ) -> list[tuple[str, float | None, int | None]]:
+    def list_sweep_reference_rows(self, run_id: int) -> list[tuple[str, float | None, int | None]]:
         """``(parameters, sharpe_ratio, total_trades)`` of a run's sweep rows, by id."""
         with self._write_lock:
             rows = self.conn.execute(
@@ -1577,9 +1552,7 @@ class StateManager:
         placeholders = ", ".join(["?"] * len(columns))
 
         with self._write_lock:
-            self.conn.execute(
-                "DELETE FROM sweep_results WHERE run_id = ?", (run_id,)
-            )
+            self.conn.execute("DELETE FROM sweep_results WHERE run_id = ?", (run_id,))
             self.conn.executemany(
                 f"INSERT INTO sweep_results ({', '.join(columns)}) VALUES ({placeholders})",
                 [list(r.values()) for r in processed],
@@ -1972,9 +1945,7 @@ class StateManager:
             self.conn.commit()
             return cursor.rowcount > 0
 
-    def get_indicator_scaffold(
-        self, extraction_id: int, idx: int
-    ) -> JsonDict | None:
+    def get_indicator_scaffold(self, extraction_id: int, idx: int) -> JsonDict | None:
         """Return the cached scaffold outcome for (extraction_id, idx) or None."""
         with self._write_lock:
             row = self.conn.execute(
@@ -2038,9 +2009,7 @@ class StateManager:
         assert row is not None
         return row
 
-    def find_scaffold_provenance_by_plugin_path(
-        self, plugin_path_suffix: str
-    ) -> JsonDict | None:
+    def find_scaffold_provenance_by_plugin_path(self, plugin_path_suffix: str) -> JsonDict | None:
         """Return provenance (extraction_id, item_id, item_url) for a plugin file.
 
         Used by the promote-indicator endpoint to attach the originating
@@ -2383,16 +2352,12 @@ class StateManager:
             if status == "cancelled":
                 return job  # idempotent
             if status != "queued":
-                raise ValueError(
-                    f"job {job_id} cannot be cancelled from status={status!r}"
-                )
+                raise ValueError(f"job {job_id} cannot be cancelled from status={status!r}")
             if not self._mark_cancelled_locked(
                 job_id, int(job["research_item_id"]), error_message=None
             ):
                 # Cross-process race: the job left 'queued' under us.
-                raise ValueError(
-                    f"job {job_id} cannot be cancelled from status != 'queued'"
-                )
+                raise ValueError(f"job {job_id} cannot be cancelled from status != 'queued'")
             self.conn.commit()
             job["status"] = "cancelled"
             return job
@@ -2425,9 +2390,7 @@ class StateManager:
                 if status == "cancelled":
                     return job  # idempotent
                 if status in ("done", "failed"):
-                    raise ValueError(
-                        f"job {job_id} cannot be cancelled from status={status!r}"
-                    )
+                    raise ValueError(f"job {job_id} cannot be cancelled from status={status!r}")
                 if status == "queued":
                     if self._mark_cancelled_locked(
                         job_id, int(job["research_item_id"]), error_message=None
@@ -2477,15 +2440,11 @@ class StateManager:
             if status == "cancelled":
                 return job  # idempotent
             if status in ("done", "failed"):
-                raise ValueError(
-                    f"job {job_id} cannot be cancelled from status={status!r}"
-                )
+                raise ValueError(f"job {job_id} cannot be cancelled from status={status!r}")
             if not self._mark_cancelled_locked(
                 job_id, int(job["research_item_id"]), error_message=error_message
             ):
-                raise ValueError(
-                    f"job {job_id} changed state before the cancel could be applied"
-                )
+                raise ValueError(f"job {job_id} changed state before the cancel could be applied")
             self.conn.commit()
             job["status"] = "cancelled"
             job["error_message"] = error_message
@@ -2785,17 +2744,13 @@ class StateManager:
     def strategy_name_exists(self, name: str) -> bool:
         """True if any strategy row (active or not) already uses ``name``."""
         with self._write_lock:
-            row = self.conn.execute(
-                "SELECT 1 FROM strategies WHERE name = ?", (name,)
-            ).fetchone()
+            row = self.conn.execute("SELECT 1 FROM strategies WHERE name = ?", (name,)).fetchone()
             return row is not None
 
     def get_strategy_id_by_name(self, name: str) -> int | None:
         """Id of the strategy named ``name``, else None."""
         with self._write_lock:
-            row = self.conn.execute(
-                "SELECT id FROM strategies WHERE name = ?", (name,)
-            ).fetchone()
+            row = self.conn.execute("SELECT id FROM strategies WHERE name = ?", (name,)).fetchone()
             return None if row is None else int(row[0])
 
     def get_latest_extraction_job_for_item(self, item_id: int) -> JsonDict | None:
@@ -2941,9 +2896,7 @@ class StateManager:
                 return f"job {job_id} is recorded for pid {job['pid']}, not {pid}"
             if identity is None:
                 return f"cannot read the start time of pid {pid}; kill could not verify it"
-            conn.execute(
-                "UPDATE bankroll_reports SET owner_pid = ? WHERE id = ?", (pid, report_id)
-            )
+            conn.execute("UPDATE bankroll_reports SET owner_pid = ? WHERE id = ?", (pid, report_id))
             run_lifecycle.claim_job_row(conn, job_id, pid, identity)
         return None
 
@@ -2999,9 +2952,7 @@ class StateManager:
             raise ValueError(f"end_bankroll_report: status {status!r}, not failed/stale_parent")
         with self._write_lock, _transaction(self.conn, "IMMEDIATE"):
             conn = self.conn
-            if owner_pid is not None and _bankroll_ownership_refusal(
-                conn, report_id, owner_pid
-            ):
+            if owner_pid is not None and _bankroll_ownership_refusal(conn, report_id, owner_pid):
                 return False
             cursor = conn.execute(
                 """UPDATE bankroll_reports SET status = ?, error_message = ?,
