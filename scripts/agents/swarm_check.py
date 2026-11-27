@@ -873,6 +873,33 @@ def parse_scope(raw: str) -> tuple[str, ...]:
     return tuple(g for g in (s.strip().lstrip("+") for s in raw.split(",")) if g)
 
 
+APPROVED_SCOPE_DIR = "scope"
+"""``<job>/scope/<agent>.txt``: globs the chief approved mid-task (``SCOPE += <glob>``), one per
+line, appended by ``scope_add.py``; the agent's gate adds them to its brief's ``--scope``."""
+
+
+def effective_scope(raw: str, bus: str, agent: str) -> tuple[tuple[str, ...], str]:
+    """``--scope`` plus the chief-approved additions of ``agent`` (vibe-quant-81mv9).
+
+    Returns ``(globs, note)``; ``note`` names the approval file when it added globs.
+    """
+    globs = parse_scope(raw)
+    if not bus or not agent:
+        return globs, ""
+    path = Path(bus).resolve().parent / APPROVED_SCOPE_DIR / f"{agent}.txt"
+    try:
+        lines = path.read_text().splitlines()
+    except FileNotFoundError:
+        return globs, ""
+    except OSError as e:  # unreadable approvals never widen the scope: the brief's alone
+        return globs, f"scope += ignored: cannot read {path} ({e})"
+    added = [g for line in lines for g in parse_scope(line) if g not in globs]
+    added = list(dict.fromkeys(added))
+    if not added:
+        return globs, ""
+    return (*globs, *added), f"scope += {','.join(added)} (approved in {path})"
+
+
 def scope_offenders(paths: Sequence[str], globs: Sequence[str]) -> list[str]:
     """Paths matching no glob. NB fnmatch: '*' also crosses '/', so 'vibe_quant/*' covers
     vibe_quant/a/b.py."""
@@ -4949,11 +4976,16 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
         print(base_info)
 
     main_root = _derive_main_root(wt)
+    bus = args.bus or os.environ.get("SWARM_BUS") or ""
+    bus_agent = args.bus_agent or os.environ.get("SWARM_AGENT") or ""
+    scope, scope_note = effective_scope(args.scope, bus, bus_agent)
+    if scope_note:
+        print(scope_note)
     cfg = Config(
         worktree=wt,
         main_root=main_root,
         base=base,
-        scope=parse_scope(args.scope),
+        scope=scope,
         exactness=args.exactness,
         frontend=args.frontend,
         full=args.full,
@@ -4964,8 +4996,8 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
             if run is None and not args.no_cache and not args.full
             else None
         ),
-        bus=args.bus or os.environ.get("SWARM_BUS") or "",
-        bus_agent=args.bus_agent or os.environ.get("SWARM_AGENT") or "",
+        bus=bus,
+        bus_agent=bus_agent,
         expect_pins=str(Path(pins).resolve())
         if (pins := args.expect_pins or os.environ.get("SWARM_EXPECT_PINS"))
         else "",

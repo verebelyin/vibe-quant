@@ -630,6 +630,58 @@ class TestRunChecks:
         assert scope.status == "FAIL"
         assert "docs/x.md" in scope.detail
 
+    def test_approved_scope_add_admits_only_its_globs(self, tmp_path: Path) -> None:
+        """A chief-approved SCOPE += reaches the gate without editing the brief's command."""
+        repo = _init_repo(tmp_path)
+        runner = DeclaredGit(repo)
+        (repo / "docs").mkdir()
+        (repo / "docs" / "x.md").write_text("x\n")
+        (repo / "docs" / "y.md").write_text("y\n")
+        job = tmp_path / "job"
+        (job / "bus").mkdir(parents=True)
+        (job / "scope").mkdir()
+        (job / "scope" / "cc-t-1.txt").write_text("docs/x.md\n")
+        bus = str(job / "bus")
+
+        def scope_check(agent: str) -> swarm_check.Check:
+            globs, _note = swarm_check.effective_scope("vibe_quant/*", bus, agent)
+            cfg = _cfg(tmp_path, repo, scope=globs, exactness="never", frontend="never")
+            return {c.name: c for c in swarm_check.run_checks(cfg, runner)}["scope"]
+
+        mine = scope_check("cc-t-1")
+        assert mine.status == "FAIL"
+        assert "docs/y.md" in mine.detail
+        assert "docs/x.md" not in mine.detail
+        other = scope_check("cc-other-1")  # approvals are per agent
+        assert "docs/x.md" in other.detail
+
+    def test_gate_main_applies_the_approved_scope(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """main() hands the approved globs to the checks; an unreadable file adds nothing."""
+        repo = _init_repo(tmp_path)
+        job = tmp_path / "job"
+        (job / "bus").mkdir(parents=True)
+        (job / "scope").mkdir()
+        approvals = job / "scope" / "cc-t-1.txt"
+        approvals.write_text("docs/x.md\n")
+        seen: list[tuple[str, ...]] = []
+
+        def capture(cfg: Any, run: object = None, facts: object = None) -> list[Any]:
+            seen.append(tuple(cfg.scope))
+            return [swarm_check.Check("scope", "PASS", "ok")]
+
+        monkeypatch.setattr(swarm_check, "run_checks", capture)
+        monkeypatch.setattr(
+            swarm_check, "bus_inbox_check", lambda cfg: swarm_check.Check("bus-inbox", "PASS", "")
+        )
+        argv = [str(repo), "--scope", "vibe_quant/*", "--bus", str(job / "bus")]
+        swarm_check.main([*argv, "--bus-agent", "cc-t-1", "--no-cache"])
+        approvals.unlink()
+        approvals.mkdir()  # unreadable as a file
+        swarm_check.main([*argv, "--bus-agent", "cc-t-1", "--no-cache"])
+        assert seen == [("vibe_quant/*", "docs/x.md"), ("vibe_quant/*",)]
+
     def test_ruff_failure_marks_check(self, tmp_path: Path) -> None:
         repo = _init_repo(tmp_path)
         runner = DeclaredGit(repo)
