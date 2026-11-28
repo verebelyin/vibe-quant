@@ -1,6 +1,7 @@
 """Row eligibility, Kelly actionability and the tested-row-only recommendation.
 
-Contract rows C3 (recommendation side), C10, C11, C12, C13 and C14 of design 2gyk1.3.
+Contract rows C3 (recommendation side), C10, C11, C12, C13 and C14 of design 2gyk1.3, and
+the safest setting (R14-R17 of design arch-bankroll-1).
 """
 
 from __future__ import annotations
@@ -13,11 +14,13 @@ from typing import Any
 import pytest
 
 from vibe_quant.bankroll.kelly import KellyStats, kelly_stats
+from vibe_quant.bankroll.liq_move import Move
 from vibe_quant.bankroll.recommend import (
     BINDING_TEXT,
     kelly_actionable,
     recommend,
     row_eligibility,
+    safest_setting,
 )
 from vibe_quant.bankroll.stress import RowOutcome
 
@@ -266,3 +269,132 @@ def test_recommendation_fields_carry_no_loss_bound() -> None:
 
     names = {f.name for f in dataclasses.fields(Recommendation)}
     assert not [n for n in names if "loss" in n]
+
+
+# --- Safest setting (design arch-bankroll-1 §2.3, contract rows R14-R17) ---
+
+
+@dataclasses.dataclass(frozen=True)
+class _Setting:
+    """Stand-in for ``stress.MarginCellPlan`` (only the fields the ranking reads)."""
+
+    mode: str
+    leverage: float
+    max_margin_pct: float
+
+
+def _move(status: str = "ok", value: float | None = 0.3, **over: object) -> Move:
+    fields: dict[str, object] = {
+        "status": status,
+        "value": value,
+        "side": None if status in ("never", "unavailable") else "short",
+        "legs": (("BTCUSDT", 500.0),),
+        "reason": None,
+        "path_dependent": False,
+    }
+    fields.update(over)
+    return Move(**fields)  # type: ignore[arg-type]
+
+
+def _cell(
+    mode: str, leverage: float, pct: float, move: Move, **row: Any
+) -> tuple[_Setting, RowOutcome, Move]:
+    return (_Setting(mode, leverage, pct), _row(**row), move)
+
+
+def test_safest() -> None:
+    """R14: the largest move wins among qualifying cells; a losing cell is refused."""
+    cells = [
+        _cell("isolated", 3, 0.5, _move(value=0.33065595716198115)),
+        _cell("isolated", 10, 0.5, _move(value=0.09638554216867468)),
+        _cell("cross", 3, 0.5, _move("never", None), total_return=-0.01),
+    ]
+    assert safest_setting(cells, dd_limit=0.3) == (0, None, (None, None, "non_positive_return"))
+    # Over two unrelated inputs: the winner moves with the values, not the position.
+    other = [cells[1], _cell("cross", 5, 1.0, _move(value=0.4977398292315419))]
+    assert safest_setting(other, dd_limit=0.3) == (1, None, (None, None))
+    # dd_limit reaches row eligibility: DD 0.35 is refused at 0.3, kept at 0.35.
+    deep = [cells[1], _cell("cross", 5, 1.0, _move("never", None), mtm_dd=0.35)]
+    assert safest_setting(deep, dd_limit=0.3) == (0, None, (None, "dd_over_limit"))
+    assert safest_setting(deep, dd_limit=0.35) == (1, None, (None, None))
+
+
+def test_safest_ties() -> None:
+    """R15: equal moves -> lower DD -> lower leverage -> isolated -> lower margin limit."""
+    never = _move("never", None)
+    by_leverage = [_cell("cross", 5, 1.0, never), _cell("cross", 3, 0.5, never)]
+    assert safest_setting(by_leverage, dd_limit=0.3)[0] == 1
+    by_limit = [_cell("cross", 3, 1.0, never), _cell("cross", 3, 0.5, never)]
+    assert safest_setting(by_limit, dd_limit=0.3)[0] == 1
+    by_mode = [
+        _cell("cross", 3, 0.5, _move(value=0.3)),
+        _cell("isolated", 3, 0.5, _move(value=0.3)),
+    ]
+    assert safest_setting(by_mode, dd_limit=0.3)[0] == 1
+    # Each key differs alone, and leverage > mode > margin limit in priority.
+    leverage_only = [_cell("cross", 5, 0.5, never), _cell("cross", 3, 0.5, never)]
+    assert safest_setting(leverage_only, dd_limit=0.3)[0] == 1
+    leverage_over_mode = [_cell("isolated", 5, 0.5, never), _cell("cross", 3, 0.5, never)]
+    assert safest_setting(leverage_over_mode, dd_limit=0.3)[0] == 1
+    mode_over_limit = [_cell("cross", 3, 0.5, never), _cell("isolated", 3, 1.0, never)]
+    assert safest_setting(mode_over_limit, dd_limit=0.3)[0] == 1
+    # DD decides before leverage; the move decides before DD (one ulp is enough).
+    by_dd = [_cell("isolated", 3, 0.5, never, mtm_dd=0.21), _cell("cross", 10, 1.0, never)]
+    assert safest_setting(by_dd, dd_limit=0.3)[0] == 1
+    by_ulp = [
+        _cell("isolated", 3, 0.5, _move(value=0.3), mtm_dd=0.0),
+        _cell("cross", 10, 1.0, _move(value=math.nextafter(0.3, 1.0)), mtm_dd=0.3),
+    ]
+    assert safest_setting(by_ulp, dd_limit=0.3)[0] == 1
+    # never beats any finite move; at_entry (0.0) ranks below every positive move.
+    assert (
+        safest_setting(
+            [_cell("isolated", 3, 0.5, _move(value=0.99)), by_leverage[0]], dd_limit=0.3
+        )[0]
+        == 1
+    )
+    at_entry = [
+        _cell("isolated", 3, 0.5, _move("at_entry", 0.0)),
+        _cell("cross", 10, 1.0, _move(value=5e-324)),
+    ]
+    assert safest_setting(at_entry, dd_limit=0.3)[0] == 1
+    # A full tie keeps the first cell.
+    same = [_cell("cross", 3, 0.5, never), _cell("cross", 3, 0.5, never)]
+    assert safest_setting(same, dd_limit=0.3)[0] == 0
+
+
+def test_safest_fail_closed() -> None:
+    """R16: the largest move never wins when its row or move does not qualify."""
+    fallback = _cell("isolated", 10, 1.0, _move(value=0.09))
+    never = _move("never", None)
+    refused = [
+        (_cell("cross", 3, 0.5, never, liquidation=_liq(count=1)), "liquidated"),
+        (_cell("cross", 3, 0.5, never, status="not_runnable"), "not_runnable"),
+        (_cell("cross", 3, 0.5, never, status="failed", error="RuntimeError: boom"), "failed"),
+        (_cell("cross", 3, 0.5, never, engine_force_stopped=True), "engine_force_stopped"),
+        (
+            _cell("isolated", 3, 0.5, _move("unavailable", None, reason="tier_overflow")),
+            "move_unavailable",
+        ),
+        (_cell("cross", 3, 0.5, _move("never", None, path_dependent=True)), "cross_path_dependent"),
+        (
+            _cell("cross", 3, 0.5, _move(value=0.9, path_dependent=True)),
+            "cross_path_dependent",
+        ),
+    ]
+    for cell, reason in refused:
+        assert safest_setting([cell, fallback], dd_limit=0.3) == (1, None, (reason, None)), reason
+
+
+def test_no_safe_setting() -> None:
+    """R17: no qualifying cell -> (None, "no_safe_setting", reasons); no cells likewise."""
+    cells = [
+        _cell("isolated", 3, 0.5, _move(value=0.33), trades=0),
+        _cell("cross", 3, 0.5, _move("unavailable", None, reason="no_starting_balance")),
+    ]
+    assert safest_setting(cells, dd_limit=0.3) == (
+        None,
+        "no_safe_setting",
+        ("no_trades", "move_unavailable"),
+    )
+    assert safest_setting([], dd_limit=0.3) == (None, "no_safe_setting", ())

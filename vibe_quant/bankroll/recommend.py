@@ -5,6 +5,7 @@ The recommendation is the largest requested ``k`` of an ELIGIBLE tested row with
 null when the baseline cannot make Kelly actionable, when the mean is not positive
 (``C = 0``), or when no eligible row lies at or under ``C``. Every function returns a
 reason string (``None`` = passes) so the report can show why a row or Kelly was refused.
+:func:`safest_setting` ranks the margin-sweep cells run at that size.
 
 Imports no engine, validation or DB module (import isolation).
 """
@@ -21,7 +22,11 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from vibe_quant.bankroll.kelly import KellyStats
-    from vibe_quant.bankroll.stress import RowOutcome
+    from vibe_quant.bankroll.liq_move import Move
+    from vibe_quant.bankroll.stress import (  # type: ignore[attr-defined]  # T2 adds it
+        MarginCellPlan,
+        RowOutcome,
+    )
 
 BINDING_TEXT: dict[str, str] = {
     "dd_limit": "Kelly overstates: drawdown limit binds",
@@ -165,3 +170,41 @@ def recommend(
     else:
         binding = "half_kelly"
     return Recommendation(best, ceiling, None, binding, BINDING_TEXT[binding], row_reasons)
+
+
+def _cell_reason(row: RowOutcome, move: Move, *, dd_limit: float) -> str | None:
+    reason = row_eligibility(row, dd_limit=dd_limit)
+    if reason is not None:
+        return reason
+    if move.status == "unavailable":
+        return "move_unavailable"
+    if move.path_dependent:
+        return "cross_path_dependent"
+    return None
+
+
+def _safety_key(
+    cell: tuple[MarginCellPlan, RowOutcome, Move],
+) -> tuple[float, float, float, bool, float]:
+    plan, row, move = cell
+    reach = math.inf if move.value is None else move.value  # a qualified None is "never"
+    assert row.mtm_dd is not None  # an eligible row has a finite MTM DD
+    return (-reach, row.mtm_dd, plan.leverage, plan.mode != "isolated", plan.max_margin_pct)
+
+
+def safest_setting(
+    cells: Sequence[tuple[MarginCellPlan, RowOutcome, Move]], *, dd_limit: float
+) -> tuple[int | None, str | None, tuple[str | None, ...]]:
+    """The index of the safest qualifying margin cell, or ``None`` with ``no_safe_setting``.
+
+    A cell qualifies when its row is eligible (:func:`row_eligibility`), its liquidating
+    move is available and it is not ``path_dependent`` (a multi-coin cross cell holds
+    only for a simultaneous entry, so it is never safest). Best first: largest move
+    (``never`` above every value, ``at_entry`` 0.0 below), lower MTM DD, lower leverage,
+    isolated before cross, lower margin limit; a full tie keeps the first cell.
+    """
+    reasons = tuple(_cell_reason(row, move, dd_limit=dd_limit) for _, row, move in cells)
+    qualified = [i for i, reason in enumerate(reasons) if reason is None]
+    if not qualified:
+        return None, "no_safe_setting", reasons
+    return min(qualified, key=lambda i: _safety_key(cells[i])), None, reasons

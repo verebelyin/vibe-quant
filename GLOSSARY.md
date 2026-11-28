@@ -149,6 +149,12 @@ _Avoid_: position cap, exposure cap
 A ceiling on margin in use as a fraction of equity; an entry that would cross it is refused, never shrunk.
 _Avoid_: cushion, total exposure cap
 
+**Liquidating move**:
+The adverse price move, as a fraction of entry, that liquidates the largest book a margin setting admits at the starting balance, every position opened in one simultaneous entry and moving against you at once; funding and fees ignored.
+
+**Safest setting**:
+The margin setting, tested at the recommended size, whose eligible run has the largest liquidating move (then lower MTM drawdown, lower leverage, isolated before cross, lower margin limit); a multi-coin cross is never safest, since its move holds only for a simultaneous entry.
+
 **Balance**:
 The account's wallet balance without unrealised PnL; sizing reads it.
 
