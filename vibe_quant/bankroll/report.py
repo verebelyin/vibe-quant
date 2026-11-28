@@ -247,16 +247,30 @@ def _validated_dsl(inputs: Mapping[str, Any]) -> StrategyDSL:
     )
 
 
-def _taker_symbols(inputs: Mapping[str, Any], symbols: Sequence[str]) -> tuple[str, ...]:
-    """The run symbols whose 1m klines a taker-flow indicator reads (else none).
+def _dsl_types(inputs: Mapping[str, Any]) -> set[str]:
+    """The indicator types of the validated DSL (the schema upper-cases a stored
+    ``taker_imbalance``)."""
+    return {ind.type for ind in _validated_dsl(inputs).indicators.values()}
 
-    The types come from the validated DSL: the schema upper-cases a stored
-    ``taker_imbalance``.
-    """
+
+def _taker_symbols(inputs: Mapping[str, Any], symbols: Sequence[str]) -> tuple[str, ...]:
+    """The run symbols whose 1m klines a taker-flow indicator reads (else none)."""
     from vibe_quant.dsl.aux_data import TAKER_TYPES
 
-    types = {ind.type for ind in _validated_dsl(inputs).indicators.values()}
-    return tuple(symbols) if TAKER_TYPES & types else ()
+    return tuple(symbols) if TAKER_TYPES & _dsl_types(inputs) else ()
+
+
+def _refuse_positioning(inputs: Mapping[str, Any]) -> None:
+    """The market snapshot copies no metrics or DVOL rows: refuse before copying anything."""
+    from vibe_quant.dsl.aux_data import positioning_types
+
+    bad = positioning_types(_dsl_types(inputs))
+    if bad:
+        raise ReportStop(
+            "failed",
+            f"bankroll report does not support positioning indicators ({', '.join(bad)}): "
+            "its market snapshot has no metrics or DVOL rows",
+        )
 
 
 def _entry_sides(inputs: Mapping[str, Any]) -> tuple[int, ...]:
@@ -743,6 +757,7 @@ def _coordinate(
     if row is None:
         raise Fenced(f"report {report_id} vanished")
     inputs: Mapping[str, Any] = row["inputs"]
+    _refuse_positioning(inputs)
     request = ReportRequest.from_json(row["request"] or {})
     inp = variant_input_of(inputs)
     run_config = run_config_of(inputs)

@@ -206,6 +206,29 @@ def _check_duplicate(state: StateManager, req: EnrolRequest) -> None:
         raise EnrolRefused(refusal)
 
 
+def _refuse_positioning(req: EnrolRequest) -> None:
+    """The daily update has no metrics or DVOL feed: refuse before any engine work.
+
+    A DSL that does not parse skips to ``resolve_frozen``, which refuses it.
+    """
+    from vibe_quant.dsl.aux_data import positioning_types
+    from vibe_quant.dsl.parser import validate_strategy_dict
+    from vibe_quant.dsl.translator import translate_dsl_config
+
+    try:
+        dsl = validate_strategy_dict(
+            translate_dsl_config(json.loads(req.dsl_json), strategy_name=req.name)
+        )
+    except Exception:  # noqa: BLE001 -- any unreadable DSL is resolve_frozen's refusal
+        return
+    bad = positioning_types(ind.type for ind in dsl.indicators.values())
+    if bad:
+        raise EnrolRefused(
+            f"Shadow tracking does not support positioning indicators ({', '.join(bad)}): "
+            "the daily update has no metrics or DVOL feed"
+        )
+
+
 def _insert_row(state: StateManager, row: Mapping[str, object]) -> int:
     """Insert the row; a twin enrolled since the pre-check is refused like it."""
     try:
@@ -317,6 +340,7 @@ def enrol(
         raise ValueError(f"now must be timezone-aware, got {now.isoformat()}")
     _check_request(req)
     _check_duplicate(state, req)
+    _refuse_positioning(req)
     catalog = Path(catalog or catalog_mod.DEFAULT_CATALOG_PATH)
     archive = Path(archive or DEFAULT_ARCHIVE_PATH)
     if not archive.exists():

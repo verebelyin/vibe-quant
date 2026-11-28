@@ -457,6 +457,46 @@ def test_enrol_refuses_duplicate_before_resolving(
     assert [r["id"] for r in env.sm.list_shadow_strategies()] == [first]
 
 
+def _with_indicator(kind: str, period: int) -> str:
+    """``DSL`` with one context indicator (native shape, stored lowercase like the API)."""
+    return json.dumps({
+        **DSL,
+        "indicators": {"rsi": {"type": "RSI", "period": 14}, "ctx": {"type": kind, "period": period}},
+        "entry_conditions": {"long": ["rsi < 45", "ctx > 1"], "short": ["rsi > 60"]},
+    })  # fmt: skip
+
+
+@pytest.mark.parametrize("archived", [False, True])
+def test_enrol_refuses_positioning_indicators(
+    env: Env, monkeypatch: pytest.MonkeyPatch, archived: bool
+) -> None:
+    """R37: the daily update has no metrics/DVOL feed; refused before ``resolve_frozen``,
+    whether or not the archive holds DVOL rows. FUNDING/TAKER enrol as before."""
+    if archived:
+        arch = RawDataArchive(env.arch)
+        try:
+            hourly = [(t, 50.0, 51.0, 49.0, 50.0) for t in range(0, 30 * 86_400_000, 3_600_000)]
+            assert arch.insert_dvol("BTC", 3600, hourly, "t") == 720
+        finally:
+            arch.close()
+    resolved: list[object] = []
+    real_resolve = env.world.resolve_frozen
+    monkeypatch.setattr(tracker, "resolve_frozen", lambda **kw: resolved.append(kw))
+    with pytest.raises(EnrolRefused) as exc:
+        env.enrol(dsl_json=_with_indicator("dvol_z", 168))
+    assert str(exc.value) == (
+        "Shadow tracking does not support positioning indicators (DVOL_Z): "
+        "the daily update has no metrics or DVOL feed"
+    )
+    with pytest.raises(EnrolRefused, match=re.escape("indicators (OI_CHANGE): the daily")):
+        env.enrol(dsl_json=_with_indicator("OI_CHANGE", 12))
+    assert resolved == [] and env.sm.list_shadow_strategies() == []
+    monkeypatch.setattr(tracker, "resolve_frozen", real_resolve)
+    funding = env.enrol(name="funding-btc", dsl_json=_with_indicator("FUNDING", 3))
+    taker = env.enrol(name="taker-btc", dsl_json=_with_indicator("taker_imbalance", 10))
+    assert [env.row(s)["state"] for s in (funding, taker)] == ["tracking", "tracking"]
+
+
 def test_unreadable_dsl_warns_as_shadow_not_bankroll(
     env: Env, caplog: pytest.LogCaptureFixture
 ) -> None:

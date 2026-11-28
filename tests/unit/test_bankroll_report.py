@@ -672,6 +672,44 @@ def test_taker_symbols(
     assert rep._taker_symbols(inputs, symbols) == expected
 
 
+OI_NATIVE: dict[str, object] = {
+    **RSI_DSL,
+    "indicators": {"oi": {"type": "oi_change", "period": 12}},
+    "entry_conditions": {"long": ["oi < -0.002"]},
+    "exit_conditions": {"long": ["oi > 0"]},
+}
+POSITIONING_FRONTEND: dict[str, object] = {
+    "general": {"timeframe": "4h"},
+    "indicators": [{"type": "dvol_z", "params": {"period": 168}},
+                   {"type": "ls_ratio_z", "params": {"period": 288}},
+                   {"type": "rsi", "params": {"period": 14}}],
+    "conditions": {"long_entry": ["dvol_z_168 > 1", "ls_ratio_z_288 < -1"],
+                   "long_exit": ["rsi_14 > 60"]},
+}  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("dsl", "names"),
+    [(OI_NATIVE, "OI_CHANGE"), (POSITIONING_FRONTEND, "DVOL_Z, LS_RATIO_Z")],
+)
+def test_positioning_strategy_refused_before_snapshot(
+    world: World, monkeypatch: pytest.MonkeyPatch, dsl: Mapping[str, object], names: str
+) -> None:
+    """R36: the snapshot has no metrics/DVOL rows, so the report refuses before copying
+    anything or running a cell (the RSI parent is covered by ``test_completed_report``)."""
+    captured: list[object] = []
+    monkeypatch.setattr(rep, "capture_market", lambda *a, **k: captured.append(a))
+    _run_id, report_id, job_id, code = world.launch(SWEEP, dsl=dsl)
+    row = world.report(report_id)
+    assert (code, row["status"]) == (1, "failed")
+    assert row["error_message"] == (
+        f"bankroll report does not support positioning indicators ({names}): "
+        "its market snapshot has no metrics or DVOL rows"
+    )
+    assert captured == [] and world.engine.calls == []
+    assert world.job(job_id)["status"] == "failed"
+
+
 # --- C22: freshness at publish ---------------------------------------------------------
 
 
