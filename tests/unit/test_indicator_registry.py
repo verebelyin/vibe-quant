@@ -75,7 +75,16 @@ class TestIndicatorSpec:
 
     def test_registered_asof_context_specs(self) -> None:
         """Every needs_context compute_fn spec opts into the whole-frame replay."""
-        flagged = ("TAKER_IMBALANCE", "FUNDING", "FUNDING_Z", "BTC_TREND", "OWN_TREND", "BTC_ROC")
+        flagged = (
+            "TAKER_IMBALANCE",
+            "FUNDING",
+            "FUNDING_Z",
+            "BTC_TREND",
+            "OWN_TREND",
+            "BTC_ROC",
+            "OI_CHANGE",
+            "LS_RATIO_Z",
+        )
         for name in flagged:
             spec = indicator_registry.get(name)
             assert spec is not None, name

@@ -237,8 +237,9 @@ def test_seed_clamped_default_range(caplog: pytest.LogCaptureFixture) -> None:
         with_impossible = initialize_population(6, seed_chromosomes=seeds)
     # Captured from the pre-cap operators (86ec7125) with the same seed and seeds: the skipped
     # seed still consumed its uid draw, so the five random fills follow this exact stream.
+    # Re-pinned when the context pool gained OI_CHANGE / LS_RATIO_Z (the fills draw from it).
     assert [c.stop_loss_pct for c in with_impossible] == [
-        10.0, 1.4383, 1.3861, 2.4304, 1.3533, 7.2007,
+        10.0, 1.4383, 1.3861, 5.7007, 1.1563, 2.8088,
     ]  # fmt: skip
     assert "skipped 1 seed(s)" in caplog.text
     assert "clamped the stop of" not in caplog.text

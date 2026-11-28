@@ -177,6 +177,14 @@
       "atr_multiplier": "float"
     }
   },
+  "LS_RATIO_Z": {
+    "default_params": {
+      "period": 288
+    },
+    "param_schema": {
+      "period": "int"
+    }
+  },
   "MA": {
     "default_params": {
       "period": 14,
@@ -240,6 +248,14 @@
   "OBV": {
     "default_params": {},
     "param_schema": {}
+  },
+  "OI_CHANGE": {
+    "default_params": {
+      "period": 12
+    },
+    "param_schema": {
+      "period": "int"
+    }
   },
   "OWN_TREND": {
     "default_params": {

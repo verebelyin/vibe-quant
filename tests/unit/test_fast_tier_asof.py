@@ -13,6 +13,7 @@ end-to-end test additionally proves the genome never silently falls back to NT.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -382,14 +383,26 @@ _ASOF = _asof_specs()
 
 def test_registry_has_an_asof_context_spec() -> None:
     """Guard: the registry-wide parametrisation must not silently shrink to nothing."""
-    assert _ASOF == ["BTC_ROC", "BTC_TREND", "FUNDING", "FUNDING_Z", "OWN_TREND", "TAKER_IMBALANCE"]
+    assert _ASOF == [
+        "BTC_ROC",
+        "BTC_TREND",
+        "FUNDING",
+        "FUNDING_Z",
+        "LS_RATIO_Z",
+        "OI_CHANGE",
+        "OWN_TREND",
+        "TAKER_IMBALANCE",
+    ]
 
 
 @needs_catalog
 @needs_archive
-@pytest.mark.parametrize("name", _ASOF)
+@pytest.mark.parametrize("name", [n for n in _ASOF if n not in aux_data.METRICS_TYPES])
 def test_every_asof_spec_equals_generated_stream(name: str, _aux_data: None) -> None:
-    """Registry-wide: an asof spec's whole-frame column == its generated per-bar stream."""
+    """Registry-wide: an asof spec's whole-frame column == its generated per-bar stream.
+
+    Positioning specs run in the synthetic test below (the repo archive has no metrics).
+    """
     spec = indicator_registry.get(name)
     assert spec is not None and spec.compute_fn is not None
     params = dict(spec.default_params)
@@ -415,6 +428,97 @@ def test_every_asof_spec_equals_generated_stream(name: str, _aux_data: None) -> 
     fed = np.array([values["ind"] for values in stream], dtype=np.float64)
     assert np.array_equal(_bits(fed), _bits(column)), f"{name} diverged from NT's feed"
     assert int(np.isnan(column).sum()) == 0
+
+
+def _synthetic_zec_bars(day: datetime, n: int) -> list[Bar]:
+    """``n`` 1m ZECUSDT bars from ``day``; ts_init = open + 59.999 s like the catalog's."""
+    from nautilus_trader.model.data import Bar, BarType
+    from nautilus_trader.model.objects import Price, Quantity
+
+    bar_type = BarType.from_str(BAR_TYPE)
+    rng = np.random.default_rng(11)
+    closes = 300.0 + np.cumsum(rng.normal(0.0, 0.5, n))
+    open_ns = int(day.timestamp()) * 1_000_000_000
+    bars = []
+    for i, close in enumerate(closes):
+        px = Price.from_str(f"{close:.2f}")
+        ts = open_ns + i * MIN + MIN - 1_000_000
+        bars.append(Bar(bar_type, px, px, px, px, Quantity.from_str("10.000"), ts, ts))
+    return bars
+
+
+def _metrics_archive(path: Path, symbol: str, first: datetime, last: datetime) -> Path:
+    """Contiguous 5-minute metrics rows of ``symbol`` in ``[first, last]`` (rng(5) values)."""
+    from vibe_quant.data.archive import MetricsFileMeta, RawDataArchive
+
+    step = timedelta(minutes=5)
+    n = int((last - first) / step) + 1
+    rng = np.random.default_rng(5)
+    oi = 50_000.0 + rng.random(n) * 1_000.0
+    ratio = 0.8 + rng.random(n)
+    by_day: dict[Any, list[Any]] = {}
+    for i in range(n):
+        t = first + i * step
+        row = (int(t.timestamp()) * 1000, float(oi[i]), None, None, float(ratio[i]), None, None)
+        by_day.setdefault(t.date(), []).append(row)
+    archive = RawDataArchive(path)
+    try:
+        for day, rows in sorted(by_day.items()):
+            meta = MetricsFileMeta(
+                f"{day}.zip", f"md5-{day}", "0" * 64, 1, None, len(rows), "ok", None
+            )
+            archive.insert_metrics_file(symbol, day, meta, rows)
+    finally:
+        archive.close()
+    return path
+
+
+@pytest.mark.parametrize("name", sorted(aux_data.METRICS_TYPES))
+def test_positioning_spec_equals_generated_stream_synthetic(name: str, tmp_path: Path) -> None:
+    """R12: 1440 synthetic 1m ZEC bars of 2026-03-02 over a tmp metrics archive (from
+    2026-02-28 00:00, ruling R-pos-2): the generated per-bar scalar stream == the
+    whole-frame as-of column, bit for bit, with no NaN and no catalog."""
+    archive = _metrics_archive(
+        tmp_path / "raw_data.db",
+        "ZECUSDT",
+        datetime(2026, 2, 28, tzinfo=UTC),
+        datetime(2026, 3, 3, tzinfo=UTC),
+    )
+    aux_data.configure(archive, None)
+    try:
+        spec = indicator_registry.get(name)
+        assert spec is not None and spec.compute_fn is not None
+        params = dict(spec.default_params)
+        lookback = pta_lookback(spec, params)
+        cap = pta_buffer_cap([lookback], full_history=spec.requires_full_history)
+        bars = _synthetic_zec_bars(datetime(2026, 3, 2, tzinfo=UTC), 1440)
+        assert len(bars) >= 1.25 * cap + 1, "the run must include a buffer trim"
+
+        strategy = _strategy({"ind": {"type": name, **params}}, "ind > 0", "ind < 0", cap=cap)
+        stream = _drive_generated(strategy, bars)
+        [(key, column, first)] = asof_context_columns(
+            {"ind": params},
+            {"ind": (name, "1m")},
+            "1m",
+            _frame(bars),
+            bar_close_ns(_ts_init(bars), MIN),
+            INSTRUMENT_ID,
+        )
+
+        assert key == "ind"
+        assert first == lookback - 1
+        assert all("ind" in values for values in stream), "the generated feed skipped a bar"
+        fed = np.array([values["ind"] for values in stream], dtype=np.float64)
+        assert np.array_equal(_bits(fed), _bits(column)), f"{name} diverged from NT's feed"
+        assert int(np.isnan(column).sum()) == 0
+        if name == "LS_RATIO_Z":
+            # strictness stays live: the first close whose as-of row has < 288 rows behind it
+            # (03-01 00:04 reads row 23:50 = index 286) is NaN, the next close is not.
+            short = int(datetime(2026, 3, 1, 0, 4, tzinfo=UTC).timestamp()) * 10**9
+            assert np.isnan(aux_data.ls_ratio_z_at("ZECUSDT", short, 288))
+            assert np.isfinite(aux_data.ls_ratio_z_at("ZECUSDT", short + MIN, 288))
+    finally:
+        aux_data.configure(None, None)
 
 
 # ---------------------------------------------------------------------------

@@ -100,9 +100,9 @@ def test_legacy_genome_draws_nothing_new() -> None:
     distances = [chromosome_distance(p, q) for p, q in zip(pop, kids, strict=True)]
     penalties = [chromosome_sl_tp_penalty(p) for p in pop]
 
-    assert random.getrandbits(64) == 11284078870858183469
-    assert sum(distances) == 0.7090200888720918
-    assert sum(penalties) == 0.12387998056365401
+    assert random.getrandbits(64) == 5565187322455711699
+    assert sum(distances) == 1.1119341762576203
+    assert sum(penalties) == 0.15
     assert all(c.exit_rules is None for c in pop + kids)
 
 

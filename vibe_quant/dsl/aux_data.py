@@ -16,6 +16,11 @@ symbol) and keeps integer running sums (volumes scaled by 10^p, p <= 4 chosen
 per symbol), so a window value is a difference of two int64s and one float
 division -- independent of where the query series starts.
 
+Positioning metrics (OI_CHANGE, LS_RATIO_Z) read the archived Binance Vision
+5-minute ``raw_metrics`` rows once per (absolute archive path, symbol, column),
+derive one value per ROW on the full series (row i reads rows <= i only) and
+look it up as-of each bar close with a publication lag (``METRICS_LAG_NS``).
+
 Causality: archived settlement times carry ms jitter (``...08:00:00.004``), so
 each is snapped to the 8h boundary when it lies within +-60s
 (``_SETTLEMENT_TOLERANCE_NS``); settlements further off a boundary (symbols on
@@ -79,8 +84,9 @@ _DEFAULT_INTERVAL_H = 8
 
 def configure(archive_path: Path | str | None, catalog_path: Path | str | None = None) -> None:
     """Point aux-data lookups at the run's archive / catalog (None = default)."""
-    global _archive_path, _catalog_path, _TAKER_HOT
+    global _archive_path, _catalog_path, _TAKER_HOT, _METRICS_HOT
     _TAKER_HOT = None
+    _METRICS_HOT = None
     _archive_path = Path(archive_path) if archive_path else None
     _catalog_path = Path(catalog_path) if catalog_path else None
     # Reference bars are resolved once per run (preflight / first use), not per bar.
@@ -236,6 +242,11 @@ def preflight(
     Taker flow: raises when the 1m klines do not cover
     ``[start_date - 1 day, end_date]`` or a kline in that range has a NULL
     ``taker_buy_volume``.
+
+    Positioning metrics (OI_CHANGE / LS_RATIO_Z): raises when the archive has no
+    metrics table or no non-NULL rows of the column for a symbol, its first row is
+    more than ``PREFLIGHT_START_MARGIN_NS`` after ``start_date``, or its last row is
+    before ``end_date - 1 day``. Interior holes are NaN at lookup time.
     """
     from vibe_quant.dsl.indicators import indicator_registry
     from vibe_quant.validation.funding import _FUNDING_PERIOD_NS
@@ -243,11 +254,13 @@ def preflight(
     start_ns, end_ns = _date_ns(start_date), _date_ns(end_date)
     _preflight_regime(indicator_types, symbols, start_ns, end_ns, start_date, end_date)
     _preflight_taker(indicator_types, symbols, start_ns, end_ns, start_date, end_date)
+    _preflight_metrics(indicator_types, symbols, start_ns, end_ns, start_date, end_date)
     if not any(
         (spec := indicator_registry.get(t)) is not None
         and spec.needs_context
         and t not in REGIME_TYPES
         and t not in TAKER_TYPES
+        and t not in METRICS_TYPES
         for t in indicator_types
     ):
         return
@@ -599,6 +612,244 @@ def taker_imbalance_asof(symbol: str, bar_close_ns: np.ndarray, period: int) -> 
     with np.errstate(invalid="ignore", divide="ignore"):
         value = taker_sum / vol_sum - 0.5  # one float division per window
     return np.where(ok, value, np.nan)
+
+
+# -- Binance Vision positioning metrics (OI_CHANGE / LS_RATIO_Z) -----------------------
+
+METRICS_TYPES = frozenset({"LS_RATIO_Z", "OI_CHANGE"})
+METRICS_STEP_NS = 300 * 10**9
+# A row stamped ``s`` is published 7-174 s after ``s`` (MEASURED 2026-11-27); a bar may use
+# it from close ``s + METRICS_LAG_NS`` and while the close is less than
+# ``METRICS_MAX_STALE_NS`` past that (one missing newest row is bridged, two are not).
+METRICS_LAG_NS = 600 * 10**9
+METRICS_MAX_STALE_NS = 600 * 10**9
+_METRICS_END_MARGIN_NS = 86_400 * 10**9
+_OI_COLUMN = "sum_open_interest"
+_LS_COLUMN = "sum_toptrader_long_short_ratio"
+_METRICS_COLUMNS = {"OI_CHANGE": _OI_COLUMN, "LS_RATIO_Z": _LS_COLUMN}
+
+# (absolute archive path, symbol, column) -> (source stamp, (create_time ns, values));
+# NULL fields are left out of the column's series (holes).
+_MetricsEntry = tuple[np.ndarray, np.ndarray]
+_METRICS: dict[tuple[str, str, str], tuple[tuple[object, object], _MetricsEntry]] = {}
+# (symbol, column, kind, period) -> (source entry identity, derived value per row)
+_METRICS_DERIVED: dict[tuple[str, str, str, int], tuple[object, np.ndarray]] = {}
+# Per-run resolved archive path, like ``_TAKER_HOT`` (configure() and preflight drop it).
+_METRICS_HOT: tuple[Path | None, Path, str] | None = None
+
+
+def _no_metrics(symbol: str, path: Path) -> AuxDataUnavailableError:
+    return AuxDataUnavailableError(
+        f"No Binance metrics archived for {symbol} in {path} — "
+        f"python -m vibe_quant.data download-metrics --symbols {symbol}"
+    )
+
+
+def metrics_series(
+    symbol: str, column: str, *, revalidate: bool = False
+) -> tuple[np.ndarray, np.ndarray]:
+    """(create_time ns int64, value float64) of ``symbol``'s non-NULL ``column`` rows, ascending.
+
+    Read-only; cached per (absolute archive path, symbol, column). ``revalidate``
+    (preflight) re-stats the archive and its ``-wal`` and reloads when they changed;
+    per-bar lookups reuse the entry loaded for this process (see ``_taker_klines``).
+
+    Raises:
+        AuxDataUnavailableError: archive file or metrics table missing, or no rows.
+    """
+    global _METRICS_HOT
+    if column not in _METRICS_COLUMNS.values():
+        msg = f"Unknown metrics column {column!r}"
+        raise ValueError(msg)
+    path = _taker_archive_path()
+    key = (str(path), symbol, column)
+    if revalidate:
+        _METRICS_HOT = None
+    else:
+        cached = _METRICS.get(key)
+        if cached is not None:
+            return cached[1]
+    stamp = _taker_source_stamp(path)
+    if stamp[0] is None or not path.is_file():
+        raise _no_metrics(symbol, path)
+    hit = _METRICS.get(key)
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
+
+    import sqlite3
+
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        rows = conn.execute(
+            f"SELECT create_time, {column} FROM raw_metrics "  # noqa: S608  (whitelisted column)
+            f"WHERE symbol = ? AND {column} IS NOT NULL ORDER BY create_time",
+            (symbol,),
+        ).fetchall()
+    except sqlite3.OperationalError as e:
+        if "no such table" in str(e):
+            raise _no_metrics(symbol, path) from None
+        raise
+    finally:
+        conn.close()
+    if not rows:
+        raise _no_metrics(symbol, path)
+    entry = (
+        np.fromiter((r[0] for r in rows), dtype=np.int64, count=len(rows)) * 1_000_000,
+        np.fromiter((r[1] for r in rows), dtype=np.float64, count=len(rows)),
+    )
+    _METRICS[key] = (stamp, entry)
+    return entry
+
+
+def _metrics_entry_hot(symbol: str, column: str) -> _MetricsEntry:
+    """Per-bar form of ``metrics_series(symbol, column)``: no ``getcwd``/``abspath`` per bar."""
+    global _METRICS_HOT
+    from vibe_quant.data.archive import DEFAULT_ARCHIVE_PATH
+
+    hot = _METRICS_HOT
+    if hot is not None and hot[0] is _archive_path and hot[1] is DEFAULT_ARCHIVE_PATH:
+        cached = _METRICS.get((hot[2], symbol, column))
+        if cached is not None:
+            return cached[1]
+    entry = metrics_series(symbol, column)
+    _METRICS_HOT = (_archive_path, DEFAULT_ARCHIVE_PATH, str(_taker_archive_path()))
+    return entry
+
+
+def _asof_index(
+    stamp_ns: np.ndarray, close_ns: np.ndarray, lag_ns: int, max_stale_ns: int
+) -> np.ndarray:
+    """Row usable at each close (-1 = none): the last ``stamp <= close - lag``, kept only
+    while ``close - (stamp + lag) < max_stale`` (integer ns)."""
+    close = np.asarray(close_ns, dtype=np.int64)
+    idx = np.searchsorted(stamp_ns, close - lag_ns, side="right") - 1
+    safe = np.clip(idx, 0, None)
+    ok = (idx >= 0) & (close - (stamp_ns[safe] + lag_ns) < max_stale_ns)
+    return np.where(ok, idx, -1)
+
+
+def _asof_index_at(stamp_ns: np.ndarray, close_ns: int, lag_ns: int, max_stale_ns: int) -> int:
+    """:func:`_asof_index` for ONE close."""
+    i = int(stamp_ns.searchsorted(close_ns - lag_ns, side="right")) - 1
+    if i >= 0 and close_ns - (int(stamp_ns[i]) + lag_ns) < max_stale_ns:
+        return i
+    return -1
+
+
+def _oi_change_rows(ts: np.ndarray, x: np.ndarray, period: int) -> np.ndarray:
+    """``x[i] / x[j] - 1`` where row j is stamped exactly ``ts[i] - period*STEP`` (endpoint
+    rule: holes between the endpoints do not matter); NaN if j is absent or ``x[j] <= 0``."""
+    out = np.full(ts.size, np.nan)
+    if period < 1:
+        return out  # a non-positive period would read the current or a future row
+    target = ts - period * METRICS_STEP_NS
+    j = np.searchsorted(ts, target, side="left")
+    safe = np.clip(j, 0, ts.size - 1)
+    ok = (ts[safe] == target) & (x[safe] > 0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(ok, x / x[safe] - 1.0, out)
+
+
+def _z_rows(ts: np.ndarray, y: np.ndarray, period: int) -> np.ndarray:
+    """``(w[-1] - mean(w)) / std(w, ddof=1)`` over the ``period`` rows ending at each row,
+    defined only when they are contiguous (``ts[i] - ts[i-p+1] == (p-1)*STEP``, no holes)
+    and ``std > 1e-15``."""
+    out = np.full(ts.size, np.nan)
+    if period < 2 or ts.size < period:
+        return out
+    from numpy.lib.stride_tricks import sliding_window_view
+
+    win = sliding_window_view(y, period)
+    mean = win.mean(axis=1)
+    std = win.std(axis=1, ddof=1)
+    contiguous = ts[period - 1 :] - ts[: ts.size - period + 1] == (period - 1) * METRICS_STEP_NS
+    with np.errstate(invalid="ignore", divide="ignore"):
+        out[period - 1 :] = np.where(
+            contiguous & (std > 1e-15), (y[period - 1 :] - mean) / std, np.nan
+        )
+    return out
+
+
+_METRICS_KINDS = {"oi_change": (_OI_COLUMN, _oi_change_rows), "ls_z": (_LS_COLUMN, _z_rows)}
+
+
+def _metrics_derived(entry: _MetricsEntry, symbol: str, kind: str, period: int) -> np.ndarray:
+    """Per-row value of ``kind`` on the FULL archived series (row i reads rows <= i only)."""
+    column, fn = _METRICS_KINDS[kind]
+    key = (symbol, column, kind, period)
+    hit = _METRICS_DERIVED.get(key)
+    if hit is not None and hit[0] is entry:
+        return hit[1]
+    derived = fn(entry[0], entry[1], period)
+    _METRICS_DERIVED[key] = (entry, derived)
+    return derived
+
+
+def _metrics_asof(symbol: str, kind: str, bar_close_ns: np.ndarray, period: int) -> np.ndarray:
+    entry = metrics_series(symbol, _METRICS_KINDS[kind][0])
+    derived = _metrics_derived(entry, symbol, kind, period)
+    idx = _asof_index(entry[0], bar_close_ns, METRICS_LAG_NS, METRICS_MAX_STALE_NS)
+    return np.where(idx >= 0, derived[np.clip(idx, 0, None)], np.nan)
+
+
+def _metrics_at(symbol: str, kind: str, close_ns: int, period: int) -> float:
+    entry = _metrics_entry_hot(symbol, _METRICS_KINDS[kind][0])
+    i = _asof_index_at(entry[0], close_ns, METRICS_LAG_NS, METRICS_MAX_STALE_NS)
+    if i < 0:
+        return float("nan")
+    return float(_metrics_derived(entry, symbol, kind, period)[i])
+
+
+def oi_change_asof(symbol: str, bar_close_ns: np.ndarray, period: int) -> np.ndarray:
+    """Open-interest change (contracts) over ``period`` 5-minute ROWS, as of each bar close.
+
+    The as-of row i is the last one usable at the close (see ``METRICS_LAG_NS``); the
+    value is ``x[i] / x[j] - 1`` with j the row stamped ``ts[i] - period * 5m``. NaN
+    when no row is usable, j is absent or ``x[j] <= 0``.
+    """
+    return _metrics_asof(symbol, "oi_change", bar_close_ns, period)
+
+
+def oi_change_at(symbol: str, close_ns: int, period: int) -> float:
+    """:func:`oi_change_asof` for ONE bar close (bit-equal, no array allocation)."""
+    return _metrics_at(symbol, "oi_change", close_ns, period)
+
+
+def ls_ratio_z_asof(symbol: str, bar_close_ns: np.ndarray, period: int) -> np.ndarray:
+    """Z-score of the top-trader long/short position ratio over ``period`` contiguous
+    5-minute ROWS ending at the as-of row (strict: a hole in the window is NaN)."""
+    return _metrics_asof(symbol, "ls_z", bar_close_ns, period)
+
+
+def ls_ratio_z_at(symbol: str, close_ns: int, period: int) -> float:
+    """:func:`ls_ratio_z_asof` for ONE bar close (bit-equal, no array allocation)."""
+    return _metrics_at(symbol, "ls_z", close_ns, period)
+
+
+def _preflight_metrics(
+    indicator_types: list[str],
+    symbols: list[str],
+    start_ns: int,
+    end_ns: int,
+    start_date: str,
+    end_date: str,
+) -> None:
+    columns = sorted({_METRICS_COLUMNS[t] for t in METRICS_TYPES.intersection(indicator_types)})
+    for symbol in symbols:
+        for column in columns:
+            ts, _ = metrics_series(symbol, column, revalidate=True)
+            if int(ts[0]) > start_ns + PREFLIGHT_START_MARGIN_NS:
+                msg = (
+                    f"Binance metrics for {symbol} start after the requested window "
+                    f"(first row {_iso(int(ts[0]))}, window start {start_date}) — download-metrics"
+                )
+                raise AuxDataUnavailableError(msg)
+            if int(ts[-1]) < end_ns - _METRICS_END_MARGIN_NS:
+                msg = (
+                    f"Binance metrics for {symbol} end before the requested window "
+                    f"(last row {_iso(int(ts[-1]))}, window end {end_date}) — download-metrics"
+                )
+                raise AuxDataUnavailableError(msg)
 
 
 # -- cross-asset regime references (BTC_TREND / BTC_ROC / OWN_TREND) -------------------

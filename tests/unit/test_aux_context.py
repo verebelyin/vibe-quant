@@ -164,9 +164,10 @@ def test_invoke_requires_context() -> None:
         invoke_compute_fn(spec, df, {})
 
 
-@pytest.mark.parametrize("ind_type", ["FUNDING_Z", "TAKER_IMBALANCE"])
+@pytest.mark.parametrize("ind_type", ["FUNDING_Z", "TAKER_IMBALANCE", "OI_CHANGE", "LS_RATIO_Z"])
 def test_paper_rejects_context_indicator(ind_type: str) -> None:
     import vibe_quant.dsl.plugins.funding  # noqa: F401
+    import vibe_quant.dsl.plugins.positioning  # noqa: F401
     import vibe_quant.dsl.plugins.taker  # noqa: F401
     from vibe_quant.paper.config import ConfigurationError
     from vibe_quant.paper.node import reject_context_indicators
@@ -175,8 +176,12 @@ def test_paper_rejects_context_indicator(ind_type: str) -> None:
     dsl["indicators"] = {"x": {"type": ind_type, "period": 30}}
     dsl["entry_conditions"] = {"long": ["x > 0"]}
     dsl["exit_conditions"] = {"long": ["x < 0"]}
-    with pytest.raises(ConfigurationError, match=ind_type):
+    with pytest.raises(ConfigurationError) as err:
         reject_context_indicators(validate_strategy_dict(dsl))
+    assert str(err.value) == (
+        f"Paper trading does not support context indicators ({ind_type}): "
+        "they read archived data with no live feed"
+    )
     plain = _funding_dsl()
     plain["indicators"] = {"rsi": {"type": "RSI", "period": 14}}
     plain["entry_conditions"] = {"long": ["rsi < 30"]}

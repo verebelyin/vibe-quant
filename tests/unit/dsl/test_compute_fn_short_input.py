@@ -66,7 +66,18 @@ def synthetic_aux(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(aux_data, "_source", lambda symbol: (Path("synthetic.db"), funding_source))
     monkeypatch.setattr(aux_data, "_ref_bars", lambda symbol, tf, refresh=False: ref_entry)
     monkeypatch.setattr(aux_data, "_taker_klines", lambda symbol: kline_entry)
-    for cache in ("_SNAPPED", "_DERIVED", "_REF", "_REF_DERIVED"):
+    # OI_CHANGE / LS_RATIO_Z read 5-minute metrics rows: days 298-301, no holes.
+    n_rows = 4 * 288
+    metrics_ts = 298 * _DAY_NS + np.arange(n_rows, dtype=np.int64) * aux_data.METRICS_STEP_NS
+    metrics = {
+        "sum_open_interest": (metrics_ts, 1000.0 + rng.rand(n_rows) * 50.0),
+        "sum_toptrader_long_short_ratio": (metrics_ts, 1.0 + rng.rand(n_rows)),
+    }
+    monkeypatch.setattr(
+        aux_data, "metrics_series", lambda symbol, column, revalidate=False: metrics[column]
+    )
+    monkeypatch.setattr(aux_data, "_METRICS_HOT", None)
+    for cache in ("_SNAPPED", "_DERIVED", "_REF", "_REF_DERIVED", "_METRICS", "_METRICS_DERIVED"):
         monkeypatch.setattr(aux_data, cache, {})
 
 
@@ -177,6 +188,8 @@ def test_context_fns_produce_values_on_synthetic_data() -> None:
         "OWN_TREND",
         "FUNDING",
         "FUNDING_Z",
+        "OI_CHANGE",
+        "LS_RATIO_Z",
     }
     for spec in context_specs:
         assert spec.compute_fn is not None
