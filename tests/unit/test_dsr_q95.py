@@ -501,7 +501,7 @@ def test_q95_neff_null_forwards_per_rep_spread(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(neff_null, "effective_trials", lambda rows, raw, **kw: queue.pop(0))
     flat = DailyReturns(_FIRST_DAY, array("d", np.zeros(10).tobytes()))
     monkeypatch.setattr(
-        layer1, "_null_fitness", lambda sched, chrom, tf: _fitness(mtm_daily_returns=flat)
+        layer1, "_null_fitness", lambda sched, chrom, tf, *_: _fitness(mtm_daily_returns=flat)
     )
     monkeypatch.setattr(layer1, "select_picks", lambda scored, **kw: list(scored))
     seen: list[float | None] = []
@@ -538,7 +538,7 @@ def test_q95_layer1_selection_null_forwards_spread(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(layer1, "select_picks", lambda scored, **kw: list(scored))
     flat = DailyReturns(_FIRST_DAY, array("d", np.zeros(10).tobytes()))
     monkeypatch.setattr(
-        layer1, "_null_fitness", lambda sched, chrom, tf: _fitness(mtm_daily_returns=flat)
+        layer1, "_null_fitness", lambda sched, chrom, tf, *_: _fitness(mtm_daily_returns=flat)
     )
     seen: list[float | None] = []
 

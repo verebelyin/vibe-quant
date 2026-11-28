@@ -89,7 +89,10 @@ def _seed_runs(out: Path, recs: list[dict[str, Any]]) -> None:
     def mutate(s: dict[str, Any]) -> None:
         runs = s.setdefault("runs", {})
         for r in recs:
-            runs[budget.run_key(r["variant"], r["rung"], r["seed"], bool(r.get("probe")))] = r
+            key = budget.run_key(
+                r["variant"], r["rung"], r["seed"], bool(r.get("probe")), r.get("fitness", "v1")
+            )
+            runs[key] = r
 
     budget.update_state(out, mutate)
 
@@ -1740,3 +1743,222 @@ budget.main({[*_cli(tmp_path), "build", "--variant", "4h-s4"]!r})
     assert not root.exists()
     leaked = _catalogs(tmp_path)
     assert len(leaked) == 1 and root not in leaked[0].parents  # an unpublished stage only
+
+
+# --- fitness v2 (clmmc.3 T5b, R32) ------------------------------------------------------------
+
+
+def test_fitness_v2_argv_key_run_dir_and_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R32: ``discover --fitness v2`` ends the argv with ``--fitness v2`` (the discovery CLI
+    parses it), keys the run ``variant|rung|seed|fv2`` in its own run dir and records
+    ``fitness``; the v1 twin of the same cell keeps its legacy key, argv and record.
+    Two unrelated inputs: 4h-s0 B2 seed 1 (emax pin) and 1d-s0 B4 seed 3 (q95)."""
+    from vibe_quant.discovery.run_spec import build_parser
+
+    out = _out(tmp_path)
+    for variant in ("4h-s0", "1d-s0"):
+        _accept(out, variant, tmp_path)
+    launches: list[tuple[list[str], Path]] = []
+
+    def fake_discovery(
+        root: Path, run_dir: Path, seed: int, *, command_fn: Any, profile: layer2.Profile, **kw: Any
+    ) -> dict[str, Any]:
+        launches.append((command_fn(7, run_dir / "s.db", seed), run_dir))
+        return {"status": "completed", "run_id": 7, "db": str(run_dir / "s.db"), "wall_s": 0.1}
+
+    monkeypatch.setattr(layer2, "run_discovery", fake_discovery)
+
+    def discover(variant: str, rung: str, seed: int, *extra: str) -> tuple[list[str], Path]:
+        args = ["discover", "--variant", variant, "--rung", rung, "--seed", str(seed), *extra]
+        assert budget.main([*_cli(tmp_path), *args]) == 0
+        return launches[-1]
+
+    cases = [
+        ("4h-s0", "B2", 1, [], "4h-s0|B2|1"),
+        ("1d-s0", "B4", 3, ["--dsr-rule", "q95"], "1d-s0|B4|3"),
+    ]
+    for variant, rung, seed, extra, key in cases:
+        v2_argv, v2_dir = discover(variant, rung, seed, *extra, "--fitness", "v2")
+        v1_argv, v1_dir = discover(variant, rung, seed, *extra)  # its own cell, not "recorded"
+        assert v2_argv[-2:] == ["--fitness", "v2"] and v2_argv.count("--fitness") == 1
+        # identical but for the run's own --db, which lives in its own -fv2 run dir
+        assert str(v2_dir / "s.db") in v2_argv and str(v1_dir / "s.db") in v1_argv
+        same_db = [str(v1_dir / "s.db") if a == str(v2_dir / "s.db") else a for a in v2_argv]
+        assert same_db[:-2] == v1_argv and "--fitness" not in v1_argv
+        parsed = build_parser().parse_args(v2_argv[v2_argv.index("discovery") + 1 :])
+        assert parsed.fitness == "v2"
+        assert v2_dir.name.endswith("-fv2") and v2_dir != v1_dir and v2_dir.exists()
+        runs = budget.load_state(out)["runs"]
+        rec2, rec1 = runs[f"{key}|fv2"], runs[key]
+        assert rec2["fitness"] == "v2" and "fitness" not in rec1
+        assert set(rec2) - set(rec1) == {"fitness"}
+    # --fitness v1 is the legacy argv byte for byte
+    db = Path("/x/s.db")
+    assert budget.discovery_argv(layer2.P4H, 5, db, 2, "B1", fitness="v1") == (
+        budget.discovery_argv(layer2.P4H, 5, db, 2, "B1")
+    )
+
+
+def _fit_rec(
+    variant: str, rung: str, seed: int, fitness: str, corrs: list[float], **kw: Any
+) -> dict[str, Any]:
+    rec = _run_rec(variant, rung, seed, **kw)
+    if fitness == "v2":
+        rec["fitness"] = "v2"
+    rec["harvest"] = {"champions": 0, "candidates": [{"corr": c} for c in corrs]}
+    return rec
+
+
+def test_c_k_of_a_v2_run_reads_v2_s0_runs_at_the_same_budget_only() -> None:
+    """R32: C_K's s0 max corr for a v2 run comes from v2 s0 runs at the same (pop, gens);
+    v1 keeps reading v1 s0 runs only."""
+    recs = [
+        _fit_rec("4h-s0", "B1", 1, "v1", [0.30]),
+        _fit_rec("4h-s0", "B1", 1, "v2", [0.42]),
+        _fit_rec("4h-s0", "B2", 1, "v2", [0.90]),  # other budget
+        _fit_rec("1d-s0", "B1", 1, "v2", [0.80]),  # other tf
+    ]
+    state: dict[str, Any] = {
+        "runs": {
+            budget.run_key(r["variant"], r["rung"], r["seed"], fitness=r.get("fitness", "v1")): r
+            for r in recs
+        }
+    }
+    assert budget.s0_max_signed_corr(state, "4h", 16, 6) == 0.30
+    assert budget.s0_max_signed_corr(state, "4h", 16, 6, fitness="v2") == 0.42
+    assert budget.s0_max_signed_corr(state, "4h", 24, 10, fitness="v2") == 0.90
+    with pytest.raises(layer2.Layer2Error):
+        budget.s0_max_signed_corr(state, "4h", 24, 10)  # only a v2 s0 at that budget
+
+
+def test_harvest_scores_each_fitness_under_its_own_c_k(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R32 through ``harvest``: v1 and v2 runs of the same cell get C_K from their own
+    fitness's s0 (0.80 vs 0.72), so the same 0.75 champion is M2 only under v2; the
+    harvest forwards the run's fitness to the config check."""
+    out = _out(tmp_path)
+    for variant in ("4h-s0", "4h-s4"):
+        _accept(out, variant, tmp_path)
+    pool = _null_pool(tmp_path, "4h", [0.70, 0.10])  # C95(K=2) = 0.70
+    recs = []
+    for fitness, s0_corr in (("v1", 0.80), ("v2", 0.72)):
+        for variant in ("4h-s0", "4h-s4"):
+            rec = _fit_rec(variant, "B1", 1, fitness, [])
+            rec.update(db=f"{fitness}-{variant}.db", run_id=1, s0_corr=s0_corr)
+            recs.append(rec)
+    _seed_runs(out, recs)
+    budget.update_state(
+        out,
+        lambda s: s.__setitem__(
+            "null", {"4h": {"status": "completed", "m": 2, "reps": 5, "pool_path": str(pool)}}
+        ),
+    )
+    trials = {"n_rule": layer2.N_RULE_EFFECTIVE, "gate_n": 4, "dsr_rule": "emax"}
+
+    def fake_run(db: Path, rid: int) -> dict[str, Any]:
+        h: dict[str, Any] = {"r31": {"ok": True}, "dsr_trials": trials, "candidates": []}
+        if str(db).startswith("v2"):
+            h["fitness"] = "v2"
+        return h
+
+    forwarded: dict[str, str] = {}
+
+    def fake_one(ctx: Any, root: Path, run: dict[str, Any], profile: Any, **kw: Any) -> bool:
+        forwarded[run["db"]] = kw["fitness"]
+        s0 = run["variant"] == "4h-s0"
+        cand = {"corr": run["s0_corr"] if s0 else 0.75, "train_S": 3.0, "source": "champion"}
+        run["harvest"] = {
+            "evaluated": 2,
+            "champions": 0 if s0 else 1,
+            "candidates": [cand],
+            "found": {"planted_train_S": 4.0},
+        }
+        return True
+
+    monkeypatch.setattr(layer2, "harvest_run", fake_run)
+    monkeypatch.setattr(layer2, "_harvest_one", fake_one)
+    assert budget.main([*_cli(tmp_path), "harvest", "--tf", "4h"]) == 0
+    runs = budget.load_state(out)["runs"]
+    assert forwarded == {
+        "v1-4h-s0.db": "v1",
+        "v1-4h-s4.db": "v1",
+        "v2-4h-s0.db": "v2",
+        "v2-4h-s4.db": "v2",
+    }
+    v1, v2 = runs["4h-s4|B1|1"]["score"], runs["4h-s4|B1|1|fv2"]["score"]
+    assert (v1["C_K"], v1["s0_max"], v1["M2"]) == (0.80, 0.80, False)
+    assert (v2["C_K"], v2["s0_max"], v2["M2"]) == (0.72, 0.72, True)
+
+
+@pytest.mark.parametrize(
+    ("fitness", "stored", "message"),
+    [
+        ("v2", None, "notes fitness None != requested 'v2'"),
+        ("v1", "v2", "notes fitness 'v2' != requested 'v1'"),
+    ],
+)
+def test_harvest_exit_3_when_a_run_used_another_fitness(
+    fitness: str,
+    stored: str | None,
+    message: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """R-fv-2: a |fv2 run whose notes do not say v2 (or a v1 key carrying v2) fails closed."""
+    out = _out(tmp_path)
+    _accept(out, "4h-s0", tmp_path)
+    rec = _fit_rec("4h-s0", "B1", 1, fitness, [])
+    rec.update(db=str(tmp_path / "r.db"), run_id=1)
+    _seed_runs(out, [rec])
+    h: dict[str, Any] = {"r31": {"ok": True}, "candidates": [], "champions": 0}
+    h["dsr_trials"] = {"n_rule": layer2.N_RULE_EFFECTIVE, "gate_n": 4, "dsr_rule": "emax"}
+    if stored is not None:
+        h["fitness"] = stored
+    monkeypatch.setattr(layer2, "harvest_run", lambda db, rid: h)
+    monkeypatch.setattr(layer2, "_harvest_one", lambda *a, **k: True)
+    assert budget.main([*_cli(tmp_path), "harvest", "--tf", "4h"]) == 3
+    assert message in capsys.readouterr().out
+
+
+def test_report_prints_each_fitness_and_its_own_gate_leak(tmp_path: Path) -> None:
+    """R32: the v1 report lines are unchanged by v2 runs; v2 gets its own block (M1/M2 per
+    rung, s0 champion count, gate leak, s0 corr lines); a v2 s0 champion does not stop the
+    v1 wave."""
+    v1_recs = [_run_rec("4h-s4", "B1", s, m1=s == 1, m2=s == 1) for s in (1, 2, 3)]
+    v1_recs += [_run_rec("4h-s0", "B1", s) for s in (1, 2, 3)]
+    v2_recs = [_fit_rec("4h-s4", "B2", s, "v2", [], m1=True, m2=s in (1, 2)) for s in (1, 2, 3)]
+    leak = _fit_rec("4h-s0", "B2", 1, "v2", [])
+    leak["harvest"]["champions"] = 1
+    v2_recs.append(leak)
+
+    def state_of(recs: list[dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "runs": {
+                budget.run_key(
+                    r["variant"], r["rung"], r["seed"], fitness=r.get("fitness", "v1")
+                ): r
+                for r in recs
+            }
+        }
+
+    v1_only = budget.report_lines(state_of(v1_recs))
+    mixed = budget.report_lines(state_of(v1_recs + v2_recs))
+    assert mixed[: len(v1_only)] == v1_only
+    assert "  GATE LEAK: 4h s0 has a champion" not in v1_only
+    assert mixed[len(v1_only) :] == [
+        "tf 4h seeds=3 fitness=v2",
+        "  GATE LEAK: 4h s0 has a champion",
+        "  4h-s0: B1 M1=0/3 M2=0/3 | B2 M1=0/3 M2=0/3 | B3 M1=0/3 M2=0/3 | B4 M1=0/3 M2=0/3",
+        "  4h-s2: B1 M1=0/3 M2=0/3 | B2 M1=0/3 M2=0/3 | B3 M1=0/3 M2=0/3 | B4 M1=0/3 M2=0/3",
+        "  4h-s3: B1 M1=0/3 M2=0/3 | B2 M1=0/3 M2=0/3 | B3 M1=0/3 M2=0/3 | B4 M1=0/3 M2=0/3",
+        "  4h-s4: B1 M1=0/3 M2=0/3 | B2 M1=3/3 M2=2/3 | B3 M1=0/3 M2=0/3 | B4 M1=0/3 M2=0/3",
+        "  4h-s5: B1 M1=0/3 M2=0/3 | B2 M1=0/3 M2=0/3 | B3 M1=0/3 M2=0/3 | B4 M1=0/3 M2=0/3",
+        "  s0 champion count: 1",
+        "  s0 4h-s0 B2 seed 1: no candidate corr",
+    ]
+    wave = budget.next_wave(state_of(v1_recs + v2_recs), "4h")
+    assert wave and wave == budget.next_wave(state_of(v1_recs), "4h")

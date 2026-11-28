@@ -620,6 +620,35 @@ def test_selection_seed_derivations_are_frozen(monkeypatch: pytest.MonkeyPatch) 
         assert np.array_equal(common, synth.build_schedule(window, 150, 0.0, common_seed).returns)
 
 
+def test_tagged_topup_draws_its_own_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    # R-fv-3: under --stream-tag T the top-up runs on [T, 0x5E1EC8], disjoint from the
+    # G-pool top-up and from T's own selection reps; no tag keeps the G-pool top-up seeds
+    # (2023834628, frozen above). Two unrelated tags; 0xF17E2's seed is pinned.
+    _stub_chain(monkeypatch)
+    seeds: list[int] = []
+    real = layer1._null_schedule
+
+    def spy(plan_name: str, n: int, seed: int, common: Any, rho: float) -> Any:
+        seeds.append(seed)
+        return real(plan_name, n, seed, common, rho)
+
+    monkeypatch.setattr(layer1, "_null_schedule", spy)
+
+    def first_seed(tag: int | tuple[int, ...] | None) -> int:
+        seeds.clear()
+        settings = gatechain.settings_for("W3")
+        layer1.selection_null("W3", 0.0, 1, _closes(), settings, candidates=1, stream_tag=tag)
+        return seeds[0]
+
+    assert layer1.selection_topup_tag(None) == layer1.SELECTION_TOPUP_TAG
+    assert first_seed(layer1.selection_topup_tag(None)) == 2023834628
+    topups = {t: first_seed(layer1.selection_topup_tag(t)) for t in (0xF17E2, 12345)}
+    assert topups[0xF17E2] == 744350953  # SeedSequence([20261017, 0xF17E2, 0x5E1EC8, 0, 0, 0])
+    assert topups[0xF17E2] != topups[12345]
+    for tag, seed in topups.items():
+        assert seed not in (2023834628, first_seed(tag))
+
+
 @pytest.mark.parametrize(
     ("counts", "topup", "status", "exit_code", "quick"),
     [
@@ -685,3 +714,267 @@ def test_pick_all_main_selection_rule(
     assert report["gpool_selection"]["status"] == status
     line = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("G-pool selection")]
     assert len(line) == 1 and line[0].endswith(f"-> {status}")
+
+
+# ------------------------------------------- G-fit: --fitness v2 (clmmc.3 T5a, R31)
+
+
+def _with_trades(fit: FitnessResult, trades: int) -> FitnessResult:
+    from dataclasses import replace
+
+    return replace(fit, total_trades=trades)
+
+
+def test_v2_pick_eligibility_is_train_gate_and_positive_score() -> None:
+    # R31: under v2 a positive own score no longer implies the train gate (v2 scores
+    # losers > 0), so eligibility is passes_train_gate AND adjusted > 0. Edges: trades
+    # 49 / 50 (MIN_TRADES), total_return 0.0 (not > 0), adjusted 0.0. v1 is unchanged.
+    names = ("RSI", "MACD", "BBANDS", "ATR", "CCI", "ROC")
+    fits = [
+        _with_trades(_fit(total_return=0.3), 60),  # eligible
+        _with_trades(_fit(total_return=-0.1), 60),  # loser with own > 0
+        _with_trades(_fit(total_return=0.25), 49),  # one trade under the floor
+        _with_trades(_fit(total_return=0.2), 50),  # exactly the floor: eligible
+        _with_trades(_fit(total_return=0.0), 60),  # break-even: not > 0
+        _with_trades(_fit(total_return=0.15, adjusted_score=0.0), 60),  # score 0
+    ]
+    scored = [(_chrom(name), fit) for name, fit in zip(names, fits, strict=True)]
+
+    def returns(picks: list[tuple[StrategyChromosome, FitnessResult]]) -> list[float]:
+        return [fit.total_return for _, fit in picks]
+
+    assert returns(layer1.pick_pool(scored, "top5", fitness="v2")) == [0.3, 0.2]
+    # v1: adjusted > 0 alone (v1's own hard gate already zeroes the losers)
+    assert returns(layer1.pick_pool(scored, "top5")) == [0.3, -0.1, 0.25, 0.2, 0.0]
+    assert returns(layer1.pick_pool(scored, "top5", fitness="v1")) == [0.3, -0.1, 0.25, 0.2, 0.0]
+    # --pick all is the train gate under both modes (R16: v2 does not change the pool)
+    for fitness in ("v1", "v2"):
+        assert returns(layer1.pick_pool(scored, "all", fitness=fitness)) == [0.3, 0.2, 0.15]
+
+
+@pytest.mark.parametrize(("window", "rho"), [("W3", 0.0), ("W6", 0.5)])
+def test_v2_selection_null_scores_candidates_with_v2_own(
+    monkeypatch: pytest.MonkeyPatch, window: str, rho: float
+) -> None:
+    # R31 through selection_null: every candidate is scored by v2 own (fitness_v2 set,
+    # adjusted == own), the picks are train-passers with a positive score, the best
+    # eligible candidate is picked, and some v2-positive loser is left out (the rule
+    # bites). v1 on the same seeds carries no fitness_v2. Two unrelated configs.
+    from vibe_quant.discovery.fitness import MIN_TRADES, passes_train_gate
+
+    scored: list[FitnessResult] = []
+    picked: list[FitnessResult] = []
+    real = layer1._null_fitness
+
+    def spy(*args: Any, **kwargs: Any) -> FitnessResult:
+        fit = real(*args, **kwargs)
+        scored.append(fit)
+        return fit
+
+    def chain(*args: Any, **_kwargs: Any) -> dict[str, object]:
+        picked.append(cast("FitnessResult", args[1]))
+        return {"chain_recent": {167: False, 22121: False}}
+
+    monkeypatch.setattr(layer1, "_null_fitness", spy)
+    monkeypatch.setattr(gatechain, "evaluate_candidate", chain)
+    settings = gatechain.settings_for(window)
+    out = layer1.selection_null(window, rho, 1, _closes(), settings, candidates=60, fitness="v2")
+    assert len(scored) == 60
+    assert all(f.fitness_v2 is not None and f.adjusted_score == f.fitness_v2.own for f in scored)
+    eligible = [f for f in scored if passes_train_gate(f, MIN_TRADES) and f.adjusted_score > 0]
+    assert picked and all(any(p is e for e in eligible) for p in picked)
+    assert picked[0].adjusted_score == max(f.adjusted_score for f in eligible)
+    assert any(f.adjusted_score > 0 and not passes_train_gate(f, MIN_TRADES) for f in scored)
+    assert out["fitness"] == "v2" and out["fp_count"] == 0
+
+    scored.clear()
+    v1 = layer1.selection_null(window, rho, 1, _closes(), settings, candidates=60)
+    assert len(scored) == 60 and all(f.fitness_v2 is None for f in scored)
+    assert "fitness" not in v1 and "fp_count" not in v1  # the default row is unchanged
+
+
+def test_run_grid_forwards_fitness_and_stream_tag(monkeypatch: pytest.MonkeyPatch) -> None:
+    # --fitness and --stream-tag reach every selection-null config through the worker
+    # initargs (the inline path runs the same tuple a pool child gets); the top-up runs on
+    # (tag, SELECTION_TOPUP_TAG) under a tag (R-fv-3) and forwards fitness. What a tag
+    # does to the seeds is pinned by
+    # test_selection_seed_derivations_are_frozen. Two unrelated (tag, fitness) inputs.
+    seen: list[tuple[tuple[object, ...], dict[str, Any]]] = []
+
+    def record(*args: Any, **kwargs: Any) -> dict[str, object]:
+        seen.append((args[:2], kwargs))
+        return {}
+
+    monkeypatch.setattr(layer1, "selection_null", record)
+    keys = [(w, r) for w in layer1.WINDOWS for r in layer1.SELECTION_RHOS]
+    for tag, fitness in ((0xF17E2, "v2"), (12345, "v1")):
+        seen.clear()
+        layer1.run_grid([], 0, 1, _closes(), selection_reps=3, fitness=fitness, stream_tag=tag)
+        assert [args for args, _ in seen] == keys
+        assert {(k["stream_tag"], k["fitness"]) for _, k in seen} == {(tag, fitness)}
+    for topup_in, topup_tag in ((None, 0x5E1EC8), (0xF17E2, (0xF17E2, 0x5E1EC8))):
+        seen.clear()
+        layer1.run_selection_topup(
+            [("W6", 0.5)], 800, 1, _closes(), pick="top5", fitness="v2", stream_tag=topup_in
+        )
+        assert [args for args, _ in seen] == [("W6", 0.5)]
+        assert (seen[0][1]["stream_tag"], seen[0][1]["fitness"]) == (topup_tag, "v2")
+        assert seen[0][1]["pick"] == "top5"
+
+
+@pytest.mark.parametrize(
+    ("counts", "topup", "status", "exit_code"),
+    [
+        ((3, 0, 0, 0), None, "PASS", 0),
+        ((3, 4, 10, 0), (27, 28), "FAIL", 1),
+    ],
+)
+def test_v2_main_records_fitness_and_runs_the_selection_rule(
+    counts: tuple[int, ...],
+    topup: tuple[int, ...] | None,
+    status: str,
+    exit_code: int,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # R31 + R-fv-1: --fitness v2 forwards v2 and the stream tag to the grid, records
+    # "fitness": "v2" and the R-ga3-1 selection verdict (top-up on SELECTION_TOPUP_TAG,
+    # fitness forwarded) for --pick top5, and exits with the verdict.
+    keys = [(w, r) for w in layer1.WINDOWS for r in layer1.SELECTION_RHOS]
+    nulls = [
+        {"window": w, "rho": r, "reps": 200, "fp_count": c, "fp_rate": c / 200, "fitness": "v2"}
+        for (w, r), c in zip(keys, counts, strict=True)
+    ]
+    grid_kwargs: list[dict[str, Any]] = []
+    topups: list[tuple[list[tuple[str, float]], int, dict[str, Any]]] = []
+    written: list[tuple[dict[str, Any], Path]] = []
+
+    def fake_grid(*_a: Any, **kwargs: Any) -> tuple[list[Any], list[dict[str, object]]]:
+        grid_kwargs.append(kwargs)
+        return [], cast("list[dict[str, object]]", nulls)
+
+    def fake_topup(
+        keys_: list[tuple[str, float]], reps: int, workers: int, closes: Any, **kwargs: Any
+    ) -> list[dict[str, object]]:
+        topups.append((list(keys_), reps, kwargs))
+        assert topup is not None
+        return [
+            {"window": w, "rho": r, "reps": reps, "fp_count": c, "fp_rate": c / reps}
+            for (w, r), c in zip(keys_, topup, strict=True)
+        ]
+
+    monkeypatch.setattr(layer1, "load_closes", lambda catalog: _closes())
+    monkeypatch.setattr(layer1, "run_grid", fake_grid)
+    monkeypatch.setattr(layer1, "run_selection_topup", fake_topup)
+    monkeypatch.setattr(layer1, "build_report", lambda *a, **k: {"job": layer1.JOB})
+    monkeypatch.setattr(layer1, "print_verdicts", lambda report: None)
+    monkeypatch.setattr(
+        layer1, "write_report", lambda report, out: written.append((dict(report), Path(out)))
+    )
+    args = ["--fitness", "v2", "--stream-tag", "0xF17E2", "--dsr-rule", "q95"]
+    rc = layer1.main([*args, "--selection-reps", "200", "--workers", "1"])
+    assert rc == exit_code
+    assert grid_kwargs[-1]["fitness"] == "v2"
+    assert grid_kwargs[-1]["stream_tag"] == 989154
+    assert grid_kwargs[-1]["pick"] == "top5"
+    if topup is None:
+        assert topups == []
+    else:
+        assert [(k, r) for k, r, _ in topups] == [([("W3", 0.5), ("W6", 0.0)], 800)]
+        assert topups[0][2]["fitness"] == "v2" and topups[0][2]["pick"] == "top5"
+        assert topups[0][2]["stream_tag"] == 989154  # R-fv-3: the top-up follows the tag
+    report, out = written[-1]
+    assert report["gfit_selection"]["rule"]["topup_tag"] == [989154, 0x5E1EC8]
+    assert out == Path("data/swarm/20261122-edge/prereg/gfit/layer1_v2_tagf17e2.json")
+    assert report["fitness"] == "v2"
+    assert report["pick"] == "top5" and report["dsr_rule"] == "q95"
+    assert report["gfit_selection"]["status"] == status
+    assert "gpool_selection" not in report
+    lines = capsys.readouterr().out.splitlines()
+    line = [ln for ln in lines if ln.startswith("G-fit selection")]
+    assert line == [line[0]] and line[0].endswith(f"-> {status}")
+    assert "fitness=v2" in line[0]
+
+
+def test_v1_main_report_is_unchanged_by_the_fitness_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # R31: no --fitness and --fitness v1 write the same bytes, with no fitness key, no
+    # selection verdict, the legacy default path and fitness v1 / no tag to the grid.
+    nulls = [{"window": "W3", "rho": 0.0, "reps": 10, "fp_rate": 0.0}]
+    grid_kwargs: list[dict[str, Any]] = []
+    written: list[tuple[str, Path]] = []
+
+    def fake_grid(*_a: Any, **kwargs: Any) -> tuple[list[Any], list[dict[str, object]]]:
+        grid_kwargs.append(kwargs)
+        return [], cast("list[dict[str, object]]", nulls)
+
+    monkeypatch.setattr(layer1, "load_closes", lambda catalog: _closes())
+    monkeypatch.setattr(layer1, "run_grid", fake_grid)
+    monkeypatch.setattr(
+        layer1, "build_report", lambda *a, **k: {"job": layer1.JOB, "selection_null": nulls}
+    )
+    monkeypatch.setattr(layer1, "print_verdicts", lambda report: None)
+    monkeypatch.setattr(
+        layer1,
+        "write_report",
+        lambda report, out: written.append((json.dumps(report, sort_keys=True), Path(out))),
+    )
+    assert layer1.main(["--quick", "--workers", "1"]) == 0
+    assert layer1.main(["--quick", "--workers", "1", "--fitness", "v1"]) == 0
+    assert written[0] == written[1]
+    assert written[0] == (
+        json.dumps({"job": layer1.JOB, "selection_null": nulls}, sort_keys=True),
+        Path(layer1.DEFAULT_OUT),
+    )
+    for kwargs in grid_kwargs:
+        assert kwargs.get("fitness", "v1") == "v1"
+        assert kwargs.get("stream_tag") is None
+
+
+def test_default_out_never_overwrites_another_run_kind(monkeypatch: pytest.MonkeyPatch) -> None:
+    # R-fv-6: without --out, each non-default knob suffixes the file name, so --pick all
+    # --fitness v2 never hits the G-pool report and a tagged v1 run never hits the P-1
+    # report; default-knob runs keep today's exact paths.
+    nulls = [
+        {"window": w, "rho": r, "reps": 200, "fp_count": 0, "fp_rate": 0.0}
+        for w in layer1.WINDOWS
+        for r in layer1.SELECTION_RHOS
+    ]
+    written: list[Path] = []
+    monkeypatch.setattr(layer1, "load_closes", lambda catalog: _closes())
+    monkeypatch.setattr(layer1, "run_grid", lambda *a, **k: ([], nulls))
+    monkeypatch.setattr(layer1, "build_report", lambda *a, **k: {"job": layer1.JOB})
+    monkeypatch.setattr(layer1, "print_verdicts", lambda report: None)
+    monkeypatch.setattr(layer1, "write_report", lambda report, out: written.append(Path(out)))
+    p1 = Path(layer1.DEFAULT_OUT).parent
+    gpool, gfit = Path(layer1.GPOOL_DIR), Path(layer1.GFIT_DIR)
+    cases = [
+        ([], Path(layer1.DEFAULT_OUT)),
+        (["--pick", "all"], gpool / "layer1.json"),
+        (["--quick", "--pick", "all"], gpool / "layer1.quick.json"),
+        (["--fitness", "v2"], gfit / "layer1_v2.json"),
+        (["--pick", "all", "--fitness", "v2"], gpool / "layer1_fv2.json"),
+        (["--quick", "--pick", "all", "--fitness", "v2"], gpool / "layer1_fv2.quick.json"),
+        (["--fitness", "v1", "--stream-tag", "0xF17E2"], p1 / "layer1_tagf17e2.json"),
+        (["--fitness", "v2", "--stream-tag", "0xF17E2"], gfit / "layer1_v2_tagf17e2.json"),
+        (["--pick", "all", "--stream-tag", "12345"], gpool / "layer1_tag3039.json"),
+    ]
+    for argv, expected in cases:
+        layer1.main([*argv, "--selection-reps", "200", "--workers", "1"])
+        assert written[-1] == expected, argv
+    assert len({path for _, path in cases}) == len(cases)
+    layer1.main(["--out", "x/y.json", "--pick", "all", "--fitness", "v2", "--workers", "1"])
+    assert written[-1] == Path("x/y.json")
+
+
+def test_stream_tag_rejects_the_reserved_stream_tags(capsys: pytest.CaptureFixture[str]) -> None:
+    # --stream-tag 0x5E1EC8 would replay the G-pool top-up stream and 0x5E1EC7 the
+    # common-shock stream; both are refused before any work. Other tags parse.
+    for tag in ("0x5E1EC8", "0x5E1EC7", str(0x5E1EC8)):
+        with pytest.raises(SystemExit) as exc:
+            layer1.main(["--stream-tag", tag, "--check", "missing.json"])
+        assert exc.value.code == 2
+        assert "reserved" in capsys.readouterr().err
+    assert layer1._stream_tag("0xF17E2") == 0xF17E2
+    assert layer1._stream_tag("0x5E1EC9") == 0x5E1EC9

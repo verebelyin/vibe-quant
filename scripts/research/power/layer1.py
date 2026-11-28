@@ -112,6 +112,12 @@ GPOOL_JOB: str = "20261122-edge"
 GPOOL_DIR: str = "data/swarm/20261122-edge/prereg/gpool"
 #: The selection top-up's tag, prefixed to BOTH seed derivations (R-ga3-1).
 SELECTION_TOPUP_TAG: int = 0x5E1EC8
+#: A seed-derivation prefix: one tag, or several (a ``--stream-tag`` run's top-up).
+StreamTag = int | tuple[int, ...]
+#: ``--fitness``: the selection null's fitness (vibe-quant-clmmc.3 T5a). The grid stays v1.
+FITNESS_MODES: tuple[str, ...] = ("v1", "v2")
+#: The G-fit pre-registration's job-local outputs (``--fitness v2``, arch-c3-1 §5 line (i)).
+GFIT_DIR: str = "data/swarm/20261122-edge/prereg/gfit"
 
 _INV_SQRT2: float = 1.0 / math.sqrt(2.0)
 
@@ -503,30 +509,43 @@ def select_picks(
     *,
     top_k: int = SELECTION_TOP_K,
     min_distance: float = SELECTION_MIN_DISTANCE,
+    fitness: str = "v1",
 ) -> list[tuple[StrategyChromosome, FitnessResult | float]]:
     """R33: the production top-K pick over the positive-score candidates.
 
     ``scored`` is sorted by adjusted score descending; only ``adjusted_score > 0``
     candidates are eligible, and the pick is the repo's own
     :func:`~vibe_quant.discovery.pipeline._select_diverse_top_k` with the
-    production ``top_k = 5`` / ``min_distance = 0.15``.
+    production ``top_k = 5`` / ``min_distance = 0.15``. ``fitness="v2"`` also
+    requires ``passes_train_gate`` (R31): v2 scores a losing genome above 0.
     """
-    positive = [(chrom, fit) for chrom, fit in scored if _score(fit) > 0.0]
+    positive = [
+        (chrom, fit)
+        for chrom, fit in scored
+        if _score(fit) > 0.0
+        and (
+            fitness == "v1"
+            or (isinstance(fit, FitnessResult) and passes_train_gate(fit, MIN_TRADES))
+        )
+    ]
     return _select_diverse_top_k(positive, top_k, min_distance)
 
 
 def pick_pool(
-    scored: Sequence[tuple[StrategyChromosome, FitnessResult]], pick: str
+    scored: Sequence[tuple[StrategyChromosome, FitnessResult]], pick: str, fitness: str = "v1"
 ) -> list[tuple[StrategyChromosome, FitnessResult]]:
     """The genomes the gates see: the production top-5 or, for ``all``, every train-passer.
 
     ``all`` mirrors ``--gate-pool all``: every ``passes_train_gate`` genome in
-    ``scored`` order. ``adjusted_score > 0`` implies the train gate, so the
-    top-5 pick is always a subset of the ``all`` pool (A18).
+    ``scored`` order (both fitness modes, R16). Under v1 ``adjusted_score > 0``
+    implies the train gate and under v2 the pick requires it, so the top-5 pick
+    is always a subset of the ``all`` pool (A18).
     """
     if pick == "all":
         return [(chrom, fit) for chrom, fit in scored if passes_train_gate(fit, MIN_TRADES)]
-    return cast("list[tuple[StrategyChromosome, FitnessResult]]", select_picks(scored))
+    return cast(
+        "list[tuple[StrategyChromosome, FitnessResult]]", select_picks(scored, fitness=fitness)
+    )
 
 
 def _null_schedule(
@@ -546,13 +565,15 @@ def _null_schedule(
 
 
 def _null_fitness(
-    sched: synth.Schedule, chrom: StrategyChromosome, timeframe: str
+    sched: synth.Schedule, chrom: StrategyChromosome, timeframe: str, fitness: str = "v1"
 ) -> FitnessResult:
     """Fitness of one S = 0 null candidate from its (already blended) schedule."""
     plan = sched.plan
     windows = tuple(synth.make_window(sched, ws, we) for ws, we in plan.eval_windows)
     bt = synth.aggregate_windows(windows)
-    return _evaluate_single(chrom, _const_backtest(bt), None, MIN_TRADES, timeframe)
+    return _evaluate_single(
+        chrom, _const_backtest(bt), None, MIN_TRADES, timeframe, fitness=fitness
+    )
 
 
 def selection_null(
@@ -567,7 +588,8 @@ def selection_null(
     seed_base: int = SEED_BASE,
     dsr_rule: str = "emax",
     pick: str = "top5",
-    stream_tag: int | None = None,
+    stream_tag: StreamTag | None = None,
+    fitness: str = "v1",
 ) -> dict[str, object]:
     """R33/V2: false-positive rate of one selection-null configuration.
 
@@ -579,11 +601,13 @@ def selection_null(
     legacy bar.
 
     ``pick="all"`` scores every train-passer instead of the top-5 (the G-pool
-    check) and adds ``fp_count``. ``stream_tag`` (the top-up's
-    ``SELECTION_TOPUP_TAG``) prefixes both seed derivations; None keeps them.
+    check) and adds ``fp_count``. ``stream_tag`` (``--stream-tag``, or the top-up's
+    :func:`selection_topup_tag`) prefixes both seed derivations; None keeps them.
+    ``fitness="v2"`` scores every candidate with v2 own, picks train-passers only
+    (R31) and adds ``fitness`` + ``fp_count``.
     """
     timeframe = settings.config.timeframe
-    tag = [] if stream_tag is None else [stream_tag]
+    tag = [] if stream_tag is None else list(_tag_tuple(stream_tag))
     w_idx = WINDOWS.index(plan_name)
     rho_idx = SELECTION_RHOS.index(rho)
     fp = 0
@@ -607,9 +631,10 @@ def selection_null(
             cseed = (rep_seed + i) % (2**32)
             chrom = generate_random_chromosome(random.Random(cseed))
             sched = _null_schedule(plan_name, n, cseed, common, rho)
-            entries.append((chrom, sched, _null_fitness(sched, chrom, timeframe), cseed))
+            fit = _null_fitness(sched, chrom, timeframe, fitness)
+            entries.append((chrom, sched, fit, cseed))
         entries.sort(key=lambda entry: entry[2].adjusted_score, reverse=True)
-        picks = pick_pool([(chrom, fit) for chrom, _, fit, _ in entries], pick)
+        picks = pick_pool([(chrom, fit) for chrom, _, fit, _ in entries], pick, fitness)
         picks_total += len(picks)
         picked = {id(chrom) for chrom, _ in picks}
         spread: float | None = None
@@ -648,8 +673,10 @@ def selection_null(
     }
     if pick == "all":
         result.update(pick=pick, fp_count=fp)
+    if fitness == "v2":
+        result.update(fitness=fitness, fp_count=fp)
     if stream_tag is not None:
-        result["stream_tag"] = stream_tag
+        result["stream_tag"] = _tag_json(stream_tag)
     return result
 
 
@@ -663,7 +690,8 @@ def _init_worker(
     selection_reps: int,
     dsr_rule: str,
     pick: str = "top5",
-    stream_tag: int | None = None,
+    stream_tag: StreamTag | None = None,
+    fitness: str = "v1",
 ) -> None:
     """Pool initializer: silence logs and cache the shared inputs per worker.
 
@@ -681,6 +709,7 @@ def _init_worker(
         dsr_rule=dsr_rule,
         pick=pick,
         stream_tag=stream_tag,
+        fitness=fitness,
         settings={window: gatechain.settings_for(window) for window in WINDOWS},
     )
 
@@ -706,7 +735,8 @@ def _null_worker(key: tuple[str, float]) -> dict[str, object]:
         seed_base=cast("int", _WORKER["seed_base"]),
         dsr_rule=cast("str", _WORKER["dsr_rule"]),
         pick=cast("str", _WORKER["pick"]),
-        stream_tag=cast("int | None", _WORKER["stream_tag"]),
+        stream_tag=cast("StreamTag | None", _WORKER["stream_tag"]),
+        fitness=cast("str", _WORKER["fitness"]),
     )
 
 
@@ -720,21 +750,23 @@ def run_grid(
     seed_base: int = SEED_BASE,
     dsr_rule: str = "emax",
     pick: str = "top5",
+    stream_tag: int | None = None,
+    fitness: str = "v1",
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     """Run the grid (and the selection null) on a process pool.
 
     ``workers <= 1`` runs inline; otherwise ``ProcessPoolExecutor`` with the
     shared ``closes`` cached in each worker. Identical seeds make the output
-    identical for any worker count (R19).
+    identical for any worker count (R19). ``stream_tag`` and ``fitness`` reach
+    the selection null only (the grid cells stay v1 on the untagged stream).
     """
     keys = [(window, rho) for window in WINDOWS for rho in SELECTION_RHOS]
+    initargs = (closes, reps, seed_base, selection_reps, dsr_rule, pick, stream_tag, fitness)
     if workers <= 1:
-        _init_worker(closes, reps, seed_base, selection_reps, dsr_rule, pick)
+        _init_worker(*initargs)
         return [_worker(cell) for cell in grid], [_null_worker(key) for key in keys]
     with ProcessPoolExecutor(
-        max_workers=workers,
-        initializer=_init_worker,
-        initargs=(closes, reps, seed_base, selection_reps, dsr_rule, pick),
+        max_workers=workers, initializer=_init_worker, initargs=initargs
     ) as pool:
         cell_results = list(pool.map(_worker, grid))
         null_results = list(pool.map(_null_worker, keys))
@@ -749,9 +781,12 @@ def run_selection_topup(
     *,
     dsr_rule: str = "emax",
     pick: str = "all",
+    fitness: str = "v1",
+    stream_tag: int | None = None,
 ) -> list[dict[str, object]]:
-    """The selection configs' independent top-up on the ``SELECTION_TOPUP_TAG`` stream."""
-    initargs = (closes, 0, SEED_BASE, reps, dsr_rule, pick, SELECTION_TOPUP_TAG)
+    """The selection configs' independent top-up on :func:`selection_topup_tag` (stream_tag)."""
+    topup_tag = selection_topup_tag(stream_tag)
+    initargs = (closes, 0, SEED_BASE, reps, dsr_rule, pick, topup_tag, fitness)
     if workers <= 1:
         _init_worker(*initargs)
         return [_null_worker(key) for key in keys]
@@ -761,6 +796,23 @@ def run_selection_topup(
         return list(pool.map(_null_worker, keys))
 
 
+def selection_topup_tag(stream_tag: int | None) -> StreamTag:
+    """The top-up's seed prefix: ``SELECTION_TOPUP_TAG``, or ``(stream_tag, it)`` (R-fv-3).
+
+    A tagged run's top-up prefix is two entries long, so its seeds differ from the
+    G-pool top-up's and from the tag's own selection reps (both one entry long).
+    """
+    return SELECTION_TOPUP_TAG if stream_tag is None else (stream_tag, SELECTION_TOPUP_TAG)
+
+
+def _tag_tuple(tag: StreamTag) -> tuple[int, ...]:
+    return (tag,) if isinstance(tag, int) else tag
+
+
+def _tag_json(tag: StreamTag) -> int | list[int]:
+    return tag if isinstance(tag, int) else list(tag)
+
+
 def _selection_key(row: Mapping[str, object]) -> str:
     return f"{row['window']}:rho={row['rho']}"
 
@@ -768,8 +820,11 @@ def _selection_key(row: Mapping[str, object]) -> str:
 def selection_verdict(
     null_results: Sequence[Mapping[str, object]],
     topup_results: Sequence[Mapping[str, object]] | None = None,
+    *,
+    label: str = "G-pool selection (pick=all)",
+    topup_tag: StreamTag = SELECTION_TOPUP_TAG,
 ) -> dict[str, object]:
-    """The G-pool selection line's verdict under ``SELECTION_RULE`` (``--pick all``)."""
+    """A selection line's verdict under ``SELECTION_RULE`` (``--pick all`` / ``--fitness v2``)."""
     counts = {_selection_key(row): int(cast("int", row["fp_count"])) for row in null_results}
     reps = {int(cast("int", row["reps"])) for row in null_results}
     topup = (
@@ -797,9 +852,9 @@ def selection_verdict(
             "fail_at": SELECTION_RULE.fail_at,
             "topup_reps": SELECTION_RULE.topup_reps,
             "topup_pass": SELECTION_RULE.topup_pass,
-            "topup_tag": SELECTION_TOPUP_TAG,
+            "topup_tag": _tag_json(topup_tag),
         },
-        "line": f"G-pool selection (pick=all): [{verdict.readings}] -> {verdict.status}",
+        "line": f"{label}: [{verdict.readings}] -> {verdict.status}",
     }
 
 
@@ -1075,6 +1130,37 @@ def write_report(report: Mapping[str, object], out: Path) -> None:
     out.with_suffix(".md").write_text(_markdown(report))
 
 
+def _stream_tag(text: str) -> int:
+    """``--stream-tag``: a decimal or ``0x`` hex seed tag, never a reserved stream's tag.
+
+    0x5E1EC8 would replay the G-pool top-up stream and 0x5E1EC7 the common-shock stream.
+    """
+    tag = int(text, 0)
+    if tag in (SELECTION_TOPUP_TAG, 0x5E1EC7):
+        raise argparse.ArgumentTypeError(f"{text} is a reserved seed-stream tag")
+    return tag
+
+
+def default_out(pick: str, fitness: str, stream_tag: int | None, quick: bool) -> Path:
+    """The report path without ``--out``: each non-default knob suffixes the name (R-fv-6).
+
+    Default-knob runs keep their paths (P-1, G-pool, G-fit); ``--fitness v2`` with
+    ``--pick all`` adds ``_fv2`` and a ``--stream-tag`` adds ``_tag<hex>``, so no run kind
+    overwrites another's report.
+    """
+    if pick == "all":
+        base = Path(GPOOL_DIR) / ("layer1_fv2" if fitness == "v2" else "layer1")
+    elif fitness == "v2":
+        base = Path(GFIT_DIR) / "layer1_v2"
+    elif stream_tag is None:
+        return Path(DEFAULT_OUT)  # the P-1 report; --quick never moved it
+    else:
+        base = Path(DEFAULT_OUT).with_suffix("")
+    if stream_tag is not None:
+        base = base.with_name(f"{base.name}_tag{stream_tag:x}")
+    return base.with_suffix(".quick.json" if quick else ".json")
+
+
 @contextlib.contextmanager
 def _quiet_vibe_quant() -> Iterator[None]:
     """Silence the repo's INFO chatter for the enclosed run, then restore the level.
@@ -1116,13 +1202,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Selection-null pick: top5 (default, production top-5) or all (every "
         "train-passer, the --gate-pool all pool; the G-pool rule and job-local output).",
     )
+    parser.add_argument(
+        "--fitness",
+        choices=list(FITNESS_MODES),
+        default="v1",
+        help="Selection-null fitness: v1 (default) or v2 (v2 own scores, picks are train-"
+        "passers with a positive score; the G-fit selection rule and job-local output). "
+        "The grid cells stay v1.",
+    )
+    parser.add_argument(
+        "--stream-tag",
+        type=_stream_tag,
+        default=None,
+        help="Seed tag prefixed to both selection-null seed derivations (e.g. 0xF17E2; "
+        "absent = the untagged stream). The v1 line on the same seeds is the same "
+        "command with --fitness v1 and the same --stream-tag. The 800-rep top-up then "
+        "draws its own stream [tag, 0x5E1EC8]. 0x5E1EC7/0x5E1EC8 are reserved; without "
+        "--out the file name gains _tag<hex>.",
+    )
     args = parser.parse_args(argv)
     if args.out is None:
-        if args.pick == "all":
-            name = "layer1.quick.json" if args.quick else "layer1.json"
-            args.out = Path(GPOOL_DIR) / name
-        else:
-            args.out = Path(DEFAULT_OUT)
+        args.out = default_out(args.pick, args.fitness, args.stream_tag, args.quick)
 
     with _quiet_vibe_quant():
         if args.check is not None:
@@ -1156,11 +1256,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             selection_reps=selection_reps,
             dsr_rule=args.dsr_rule,
             pick=args.pick,
+            stream_tag=args.stream_tag,
+            fitness=args.fitness,
         )
         report = build_report(cell_results, null_results, reps=reps, selection_reps=selection_reps)
         exit_code = 0
-        if args.pick == "all":
-            gpool = selection_verdict(null_results)
+        # --pick all keeps its G-pool key and line; --fitness v2 (top5) is the G-fit line
+        verdict_key = "gpool_selection" if args.pick == "all" else "gfit_selection"
+        label = (
+            "G-pool selection (pick=all)"
+            if args.fitness == "v1"
+            else f"G-fit selection (fitness={args.fitness}, pick={args.pick})"
+        )
+        if args.pick == "all" or args.fitness == "v2":
+            topup_tag = selection_topup_tag(args.stream_tag)
+            gpool = selection_verdict(null_results, label=label, topup_tag=topup_tag)
             if gpool["marginal"] and not args.quick and selection_reps == SELECTION_RULE.reps:
                 keys = [
                     (str(row["window"]), float(cast("float", row["rho"])))
@@ -1174,17 +1284,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                     closes,
                     dsr_rule=args.dsr_rule,
                     pick=args.pick,
+                    fitness=args.fitness,
+                    stream_tag=args.stream_tag,
                 )
-                gpool = selection_verdict(null_results, topup_rows)
+                gpool = selection_verdict(
+                    null_results, topup_rows, label=label, topup_tag=topup_tag
+                )
             report.update(
-                job=GPOOL_JOB, pick=args.pick, dsr_rule=args.dsr_rule, gpool_selection=gpool
+                {"job": GPOOL_JOB, "pick": args.pick, "dsr_rule": args.dsr_rule, verdict_key: gpool}
             )
+            if args.fitness == "v2":
+                report["fitness"] = args.fitness
             exit_code = cast("int", gpool["exit_code"])
         out = Path(args.out)
         write_report(report, out)
         print_verdicts(report)
-        if args.pick == "all":
-            print(cast("dict[str, str]", report["gpool_selection"])["line"])
+        if args.pick == "all" or args.fitness == "v2":
+            print(cast("dict[str, str]", report[verdict_key])["line"])
         print(
             f"wrote {out} ({len(cell_results)} cells, {len(null_results)} selection-null configs)"
         )

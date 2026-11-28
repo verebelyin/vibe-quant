@@ -11,8 +11,9 @@ the profile-aware ``layer2`` functions (``P4H`` byte-identical, ``P1D`` = 1d / W
 - ``check-btc0 --tf``: the s0 scratch catalog reproduces the real catalog bit for bit.
 - ``direct-chain --variant``: the planted rule through the real gate chain (positive control).
 - ``null-corr --tf``: the calibrated null pool of that timeframe (LONG draws for 1d).
-- ``discover --variant --rung --seed [--probe full_pool] [--dsr-rule {emax,q95}]``: one
-  isolated discovery run (``--dsr-rule`` defaults to an explicit emax pin).
+- ``discover --variant --rung --seed [--probe full_pool] [--dsr-rule {emax,q95}] [--fitness v2]``:
+  one isolated discovery run (``--dsr-rule`` defaults to an explicit emax pin; ``--fitness v2``
+  keys the run ``...|fv2``, scores it under C_K from v2 s0 runs and reports it in its own block).
 - ``harvest [--tf]``: screen candidates, compute M1/M2 under ``C_K`` and advance the cells.
 - ``next-wave --tf``: PRINT the exact shell commands of the next budget wave (runs nothing).
 - ``report``: per-cell ``B*``, M1/M2 counts per rung, s0 champion count, the prereg
@@ -95,6 +96,9 @@ TIMEOUT_S: dict[str, float] = {"4h": 2400.0, "1d": 3600.0}
 PROBE_FULL_POOL = "full_pool"
 PROBE_TF = "4h"
 PROBE_VARIANT = "4h-s4"
+
+#: ``discover --fitness``: v1 = the legacy argv/key/record; v2 suffixes the run key ``|fv2``.
+FITNESS_MODES: tuple[str, ...] = ("v1", "v2")
 
 #: Confidence fields the btc0 fidelity check bit-compares (R3).
 CONF_FIELDS = ("sharpe", "trades", "return", "profit_factor", "max_drawdown")
@@ -305,11 +309,16 @@ def k_for_run(run: dict[str, Any], m: int) -> int:
     return k
 
 
-def s0_max_signed_corr(state: dict[str, Any], tf: str, pop: int, gens: int) -> float:
-    """R8: the max SIGNED corr over completed s0 runs of THIS tf at this (pop, gens). Absent -> exit 2."""
+def s0_max_signed_corr(
+    state: dict[str, Any], tf: str, pop: int, gens: int, fitness: str = "v1"
+) -> float:
+    """R8: the max SIGNED corr over completed s0 runs of THIS tf at this (pop, gens) and THIS
+    fitness (R32: a v2 run's C_K reads v2 s0 runs only). Absent -> exit 2."""
     corrs: list[float] = []
     for run in all_runs(state):
         if run.get("variant") != s0_variant(tf) or run.get("status") != "completed":
+            continue
+        if run_fitness(run) != fitness:
             continue
         if is_probe_run(run) or LADDER.get(str(run.get("rung"))) != (pop, gens):
             continue
@@ -327,12 +336,21 @@ def s0_max_signed_corr(state: dict[str, Any], tf: str, pop: int, gens: int) -> f
 # --- state helpers --------------------------------------------------------------------------
 
 
-def run_key(variant: str, rung: str, seed: int, probe: bool = False) -> str:
-    return f"{variant}|{rung}|{seed}" + ("|probe" if probe else "")
+def run_key(variant: str, rung: str, seed: int, probe: bool = False, fitness: str = "v1") -> str:
+    return (
+        f"{variant}|{rung}|{seed}"
+        + ("|probe" if probe else "")
+        + ("|fv2" if fitness == "v2" else "")
+    )
 
 
 def is_probe_run(run: dict[str, Any]) -> bool:
     return bool(run.get("probe"))
+
+
+def run_fitness(run: dict[str, Any]) -> str:
+    """The fitness a run was launched with: only a v2 record stores it."""
+    return str(run.get("fitness") or "v1")
 
 
 def all_runs(state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -344,9 +362,14 @@ def tf_seeds(state: dict[str, Any], tf: str) -> int:
 
 
 def get_run(
-    state: dict[str, Any], variant: str, rung: str, seed: int, probe: bool = False
+    state: dict[str, Any],
+    variant: str,
+    rung: str,
+    seed: int,
+    probe: bool = False,
+    fitness: str = "v1",
 ) -> dict[str, Any] | None:
-    return (state.get("runs") or {}).get(run_key(variant, rung, seed, probe))
+    return (state.get("runs") or {}).get(run_key(variant, rung, seed, probe, fitness))
 
 
 def _completed(state: dict[str, Any], variant: str, rung: str, seed: int) -> bool:
@@ -374,21 +397,21 @@ def _pending(
     return int(run.get("reruns", 0)) < 1
 
 
-def m1_count(state: dict[str, Any], variant: str, rung: str) -> int:
+def m1_count(state: dict[str, Any], variant: str, rung: str, fitness: str = "v1") -> int:
     return sum(
         1
         for s in range(1, tf_seeds(state, tf_of(variant)) + 1)
-        if (r := get_run(state, variant, rung, s)) is not None
+        if (r := get_run(state, variant, rung, s, fitness=fitness)) is not None
         and r.get("status") == "completed"
         and (r.get("score") or {}).get("M1") is True
     )
 
 
-def m2_count(state: dict[str, Any], variant: str, rung: str) -> int:
+def m2_count(state: dict[str, Any], variant: str, rung: str, fitness: str = "v1") -> int:
     return sum(
         1
         for s in range(1, tf_seeds(state, tf_of(variant)) + 1)
-        if (r := get_run(state, variant, rung, s)) is not None
+        if (r := get_run(state, variant, rung, s, fitness=fitness)) is not None
         and r.get("status") == "completed"
         and (r.get("score") or {}).get("M2") is True
     )
@@ -415,17 +438,18 @@ def cell_rung(state: dict[str, Any], variant: str) -> str | None:
     return None
 
 
-def gate_leak(state: dict[str, Any], tf: str) -> bool:
+def gate_leak(state: dict[str, Any], tf: str, fitness: str = "v1") -> bool:
     """R11: an s0 run that produced a champion is a machinery gate leak.
 
     s0 is the real tape: no plant, but an unknown natural edge. A champion there fails the
     preregistered empirical zero-champion check; it is not a known false discovery and gives
     no false-positive rate (rate claims use seeded synthetic zero-edge controls, R-c17-2).
+    Per fitness: a v2 s0 champion is reported in the v2 block and never stops the v1 waves.
     """
     return any(
         r.get("status") == "completed" and int((r.get("harvest") or {}).get("champions", 0)) > 0
         for r in all_runs(state)
-        if r.get("variant") == s0_variant(tf) and not is_probe_run(r)
+        if r.get("variant") == s0_variant(tf) and not is_probe_run(r) and run_fitness(r) == fitness
     )
 
 
@@ -505,19 +529,20 @@ def next_wave_commands(state: dict[str, Any], tf: str, ctx: layer2.Ctx) -> list[
     return cmds
 
 
-def _s0_runs(state: dict[str, Any], tf: str) -> list[dict[str, Any]]:
-    """The completed, non-probe s0 runs of one tf, in (rung, seed) order."""
+def _s0_runs(state: dict[str, Any], tf: str, fitness: str = "v1") -> list[dict[str, Any]]:
+    """The completed, non-probe s0 runs of one tf and fitness, in (rung, seed) order."""
     runs = [
         r
         for r in all_runs(state)
         if r.get("variant") == s0_variant(tf)
         and r.get("status") == "completed"
         and not is_probe_run(r)
+        and run_fitness(r) == fitness
     ]
     return sorted(runs, key=lambda r: (str(r.get("rung")), int(r.get("seed", 0))))
 
 
-def s0_corr_lines(state: dict[str, Any], tf: str) -> list[str]:
+def s0_corr_lines(state: dict[str, Any], tf: str, fitness: str = "v1") -> list[str]:
     """The prereg check per completed s0 run: its max SIGNED candidate corr vs C95(K).
 
     K is the run's own harvested evaluated count and C95(K) comes from the tf's null pool
@@ -530,7 +555,7 @@ def s0_corr_lines(state: dict[str, Any], tf: str) -> list[str]:
     reps = 0
     pool_problem = ""
     c95: dict[int, tuple[float | None, str]] = {}
-    for run in _s0_runs(state, tf):
+    for run in _s0_runs(state, tf, fitness):
         where = f"  s0 {run.get('variant')} {run.get('rung')} seed {run.get('seed')}"
         harvest = run.get("harvest") or {}
         corrs = [
@@ -572,32 +597,48 @@ def s0_corr_lines(state: dict[str, Any], tf: str) -> list[str]:
 
 
 def report_lines(state: dict[str, Any]) -> list[str]:
-    """R15: per-cell B*, M1/M2 counts per rung, s0 champion count and the git-sha set."""
+    """R15: per-cell B*, M1/M2 counts per rung, s0 champion count and the git-sha set.
+
+    v1 first (byte-identical to the pre-fitness report), then one block per tf for the v2
+    runs (R32: M1/M2 per rung, its own gate leak, s0 champions and s0 corr lines; no B*, the
+    v2 grid is fixed by the pre-registration)."""
     lines = ["budget report"]
     shas = sorted({str(r.get("sha")) for r in all_runs(state) if r.get("sha")})
     lines.append("git shas: " + (", ".join(shas) if shas else "(none)"))
-    for tf in ("4h", "1d"):
-        if not any(tf_of(r["variant"]) == tf for r in all_runs(state)):
-            continue
-        refresh_cells(state, tf)
-        n = tf_seeds(state, tf)
-        lines.append(f"tf {tf} seeds={n}")
-        if gate_leak(state, tf):
-            lines.append(f"  GATE LEAK: {tf} s0 has a champion")
-        for variant in variants_for(tf):
-            cell = (state.get("cells") or {}).get(variant, {})
-            parts = " | ".join(
-                f"{k} M1={m1_count(state, variant, k)}/{n} M2={m2_count(state, variant, k)}/{n}"
-                for k in LADDER_KEYS
+    for fitness in FITNESS_MODES:
+        for tf in ("4h", "1d"):
+            if not any(
+                tf_of(r["variant"]) == tf and run_fitness(r) == fitness for r in all_runs(state)
+            ):
+                continue
+            n = tf_seeds(state, tf)
+            if fitness == "v1":
+                refresh_cells(state, tf)
+                lines.append(f"tf {tf} seeds={n}")
+            else:
+                lines.append(f"tf {tf} seeds={n} fitness={fitness}")
+            if gate_leak(state, tf, fitness):
+                lines.append(f"  GATE LEAK: {tf} s0 has a champion")
+            for variant in variants_for(tf):
+                parts = " | ".join(
+                    f"{k} M1={m1_count(state, variant, k, fitness)}/{n}"
+                    f" M2={m2_count(state, variant, k, fitness)}/{n}"
+                    for k in LADDER_KEYS
+                )
+                if fitness == "v1":
+                    cell = (state.get("cells") or {}).get(variant, {})
+                    lines.append(f"  {variant}: B*={cell.get('B_star') or 'none'} | {parts}")
+                else:
+                    lines.append(f"  {variant}: {parts}")
+            champion = sum(
+                int((r.get("harvest") or {}).get("champions", 0))
+                for r in all_runs(state)
+                if r["variant"] == s0_variant(tf)
+                and r.get("status") == "completed"
+                and run_fitness(r) == fitness
             )
-            lines.append(f"  {variant}: B*={cell.get('B_star') or 'none'} | {parts}")
-        champion = sum(
-            int((r.get("harvest") or {}).get("champions", 0))
-            for r in all_runs(state)
-            if r["variant"] == s0_variant(tf) and r.get("status") == "completed"
-        )
-        lines.append(f"  s0 champion count: {champion}")
-        lines.extend(s0_corr_lines(state, tf))
+            lines.append(f"  s0 champion count: {champion}")
+            lines.extend(s0_corr_lines(state, tf, fitness))
     return lines
 
 
@@ -647,11 +688,12 @@ def invalidate_variant(s: dict[str, Any], variant: str) -> None:
 # --- discovery argv -------------------------------------------------------------------------
 
 
-def requested_config(run: dict[str, Any]) -> tuple[tuple[str, ...] | None, str]:
-    """The (indicator pool, DSR rule) a run was launched with: a probe drops the pool and an
-    absent ``dsr_rule`` is the explicit ``emax`` pin (``discovery_argv``)."""
+def requested_config(run: dict[str, Any]) -> tuple[tuple[str, ...] | None, str, str]:
+    """The (indicator pool, DSR rule, fitness) a run was launched with: a probe drops the pool,
+    an absent ``dsr_rule`` is the explicit ``emax`` pin (``discovery_argv``) and an absent
+    ``fitness`` is v1."""
     pool = None if run.get("probe") else layer2.NULL_INDICATOR_POOL
-    return pool, run.get("dsr_rule") or "emax"
+    return pool, run.get("dsr_rule") or "emax", run_fitness(run)
 
 
 def discovery_argv(
@@ -662,9 +704,11 @@ def discovery_argv(
     rung: str,
     probe: bool = False,
     dsr_rule: str | None = None,
+    fitness: str | None = None,
 ) -> list[str]:
-    """The discovery CLI argv for one wave run; ``probe`` drops the 5-indicator restriction and
-    ``dsr_rule`` appends ``--dsr-rule <rule>`` (``None`` = explicit ``emax`` pin)."""
+    """The discovery CLI argv for one wave run; ``probe`` drops the 5-indicator restriction,
+    ``dsr_rule`` appends ``--dsr-rule <rule>`` (``None`` = explicit ``emax`` pin) and
+    ``fitness="v2"`` ends it with ``--fitness v2`` (v1 / None = the legacy argv)."""
     pop, gens = LADDER[rung]
     cmd = layer2.discovery_command(
         run_id, db, seed, pop=pop, gens=gens, profile=profile, dsr_rule=dsr_rule
@@ -672,6 +716,8 @@ def discovery_argv(
     if probe:
         i = cmd.index("--indicator-pool")
         del cmd[i : i + 2]
+    if fitness == "v2":
+        cmd += ["--fitness", "v2"]
     return cmd
 
 
@@ -988,6 +1034,7 @@ def cmd_null_corr(ctx: layer2.Ctx, args: argparse.Namespace) -> int:
 def cmd_discover(ctx: layer2.Ctx, args: argparse.Namespace) -> int:
     variant, rung, seed = args.variant, args.rung, int(args.seed)
     probe = args.probe == PROBE_FULL_POOL
+    fitness = args.fitness or "v1"
     if variant not in VARIANTS:
         msg = f"unknown variant {variant!r}"
         raise layer2.Layer2Error(msg)
@@ -995,13 +1042,17 @@ def cmd_discover(ctx: layer2.Ctx, args: argparse.Namespace) -> int:
         msg = f"unknown rung {rung!r}"
         raise layer2.Layer2Error(msg)
     tf = tf_of(variant)
-    key = run_key(variant, rung, seed, probe)
+    key = run_key(variant, rung, seed, probe, fitness)
     state = load_state(ctx.out)
     if rule_mismatch(state, variant):
         msg = f"{variant} was built with another pick rule than {picked_rule_name(state)!r}; rebuild it"
         raise layer2.Layer2Error(msg)
     existing = (state.get("runs") or {}).get(key)
-    where = f"{variant} {rung} seed {seed}" + (" [probe]" if probe else "")
+    where = (
+        f"{variant} {rung} seed {seed}"
+        + (" [probe]" if probe else "")
+        + (" [fv2]" if fitness == "v2" else "")
+    )
     if existing and not ctx.force:
         print(f"{where}: already recorded ({existing['status']})")
         if existing.get("status") != "completed":
@@ -1012,7 +1063,16 @@ def cmd_discover(ctx: layer2.Ctx, args: argparse.Namespace) -> int:
     profile = profile_for(state, tf)
     root = ctx.accepted_root(state, variant)
     pop, gens = LADDER[rung]
-    run_dir = ctx.scratch / "runs" / (f"{variant}-{rung}-seed{seed}" + ("-probe" if probe else ""))
+    # a v2 run gets its own dir: the shared name would rmtree its v1 twin's run
+    run_dir = (
+        ctx.scratch
+        / "runs"
+        / (
+            f"{variant}-{rung}-seed{seed}"
+            + ("-probe" if probe else "")
+            + ("-fv2" if fitness == "v2" else "")
+        )
+    )
     if not layer2._under(run_dir, ctx.scratch):
         msg = f"refusing run dir {run_dir}: outside {ctx.scratch}"
         raise layer2.Layer2Error(msg)
@@ -1021,7 +1081,7 @@ def cmd_discover(ctx: layer2.Ctx, args: argparse.Namespace) -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
 
     def command(run_id: int, db: Path, sd: int) -> list[str]:
-        return discovery_argv(profile, run_id, db, sd, rung, probe, args.dsr_rule)
+        return discovery_argv(profile, run_id, db, sd, rung, probe, args.dsr_rule, fitness)
 
     timeout = args.timeout if args.timeout is not None else TIMEOUT_S[tf]
     rec = layer2.run_discovery(
@@ -1041,6 +1101,8 @@ def cmd_discover(ctx: layer2.Ctx, args: argparse.Namespace) -> int:
         build_id=(state.get("variants") or {}).get(variant, {}).get("build_id"),
         dsr_rule=args.dsr_rule,
     )
+    if fitness == "v2":
+        rec["fitness"] = fitness  # v1 records stay key-for-key the legacy ones
     update_state(ctx.out, lambda s: s.setdefault("runs", {}).__setitem__(key, rec))
     print(
         f"{where}: {rec['status']} run_id={rec['run_id']} {rec['wall_s']}s {rec.get('error', '')}".rstrip()
@@ -1095,9 +1157,15 @@ def harvest_tf(ctx: layer2.Ctx, state: dict[str, Any], tf: str) -> int:
             return 3
     profile = profile_for(state, tf)
     for run in runs:
-        pool, rule = requested_config(run)
+        pool, rule, fitness = requested_config(run)
         layer2._harvest_one(
-            ctx, ctx.accepted_root(state, run["variant"]), run, profile, pool=pool, dsr_rule=rule
+            ctx,
+            ctx.accepted_root(state, run["variant"]),
+            run,
+            profile,
+            pool=pool,
+            dsr_rule=rule,
+            fitness=fitness,
         )
     null = (state.get("null") or {}).get(tf)
     pool: list[tuple[StrategyChromosome, float, float | None]] | None = None
@@ -1121,7 +1189,7 @@ def harvest_tf(ctx: layer2.Ctx, state: dict[str, Any], tf: str) -> int:
         if k not in c95_cache:
             c95_cache[k] = float(layer2.null_threshold(pool, k, reps)["c95"])
         pop, gens = LADDER[run["rung"]]
-        s0_max = s0_max_signed_corr(state, tf, pop, gens)
+        s0_max = s0_max_signed_corr(state, tf, pop, gens, run_fitness(run))
         c_k = layer2.corr_threshold(c95_cache[k], s0_max)
         planted_s = ((run.get("harvest") or {}).get("found") or {}).get("planted_train_S")
         run["score"] = {
@@ -1132,7 +1200,9 @@ def harvest_tf(ctx: layer2.Ctx, state: dict[str, Any], tf: str) -> int:
             "C_K": c_k,
         }
 
-    keys = [run_key(r["variant"], r["rung"], r["seed"], is_probe_run(r)) for r in runs]
+    keys = [
+        run_key(r["variant"], r["rung"], r["seed"], is_probe_run(r), run_fitness(r)) for r in runs
+    ]
 
     def _save(s: dict[str, Any]) -> None:
         for key in keys:
@@ -1238,6 +1308,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["emax", "q95"],
         default=None,
         help="design-dsr-q95: opt-in DSR critical value (absent = legacy argv)",
+    )
+    p.add_argument(
+        "--fitness",
+        choices=list(FITNESS_MODES),
+        default=None,
+        help="arch-c3-1: v2 appends --fitness v2 and keys the run ...|fv2 (absent / v1 = legacy)",
     )
     p.add_argument("--timeout", type=float, default=None)
     p = sub.add_parser("harvest", help="R5/R6: isolation, LONG, M1/M2 under C_K, cells")

@@ -1199,17 +1199,26 @@ def harvest_run(db: Path, run_id: int) -> dict[str, Any]:
         "r31": check_isolation(trials),
         "indicator_pool": notes.get("indicator_pool"),
         "candidates": candidates,
+        # only a v2 run stores notes.fitness: a v1 harvest record stays byte-identical
+        **({"fitness": notes["fitness"]} if "fitness" in notes else {}),
     }
 
 
-def config_violations(h: dict[str, Any], pool: Sequence[str] | None, dsr_rule: str) -> list[str]:
+def config_violations(
+    h: dict[str, Any], pool: Sequence[str] | None, dsr_rule: str, fitness: str = "v1"
+) -> list[str]:
     """What a harvested run actually used against what the harness asked for; [] = consistent.
 
     Checks the run's output, not its argv: P-2 (2026-10-19) passed ``--indicator-pool`` to 96+
     runs whose MA genes ignored it (found a day later), and a CLI default switch reached research
     runs that omitted ``--dsr-rule``. ``pool`` None = no restriction asked (a probe run).
+    ``fitness``: only a v2 run stores ``notes.fitness`` (absent = v1), so a v2 request whose
+    notes lack it, or a v1 request whose notes say v2, fails closed (vibe-quant-clmmc.3).
     """
     out: list[str] = []
+    stored_fitness = h.get("fitness")
+    if (stored_fitness or "v1") != fitness:
+        out.append(f"notes fitness {stored_fitness!r} != requested {fitness!r}")
     if pool is not None:
         allowed = set(pool)
         stored = h.get("indicator_pool")
@@ -2084,12 +2093,14 @@ def _harvest_one(
     *,
     pool: Sequence[str] | None = NULL_INDICATOR_POOL,
     dsr_rule: str = "emax",
+    fitness: str = "v1",
 ) -> bool:
     """Harvest ONE completed run into ``run["harvest"]``; returns its R31 isolation flag.
 
-    Fails closed (Layer2Error) when the run used another pool or DSR rule than requested."""
+    Fails closed (Layer2Error) when the run used another pool, DSR rule or fitness than
+    requested."""
     h = harvest_run(Path(run["db"]), int(run["run_id"]))
-    bad = config_violations(h, pool, dsr_rule)
+    bad = config_violations(h, pool, dsr_rule, fitness)
     if bad:
         msg = f"run {run['run_id']} did not run the requested config: {'; '.join(bad)}"
         raise Layer2Error(msg)

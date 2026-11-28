@@ -2802,3 +2802,32 @@ def test_layer2_rebuild_over_the_price_ratio_latches_and_the_retry_never_builds(
     assert _catalogs(tmp_path) == []
     assert layer2.main(args) == 2
     assert len(calls) == 1
+
+
+def test_config_violations_fail_closed_on_another_fitness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R-fv-2: the harvest compares the fitness the run STORED (notes.fitness, absent = v1)
+    with the requested one; v1 notes carry no fitness key and the harvest adds none."""
+    v2 = {"fitness": "v2", "candidates": [], "dsr_trials": {}}
+    v1 = {"candidates": [], "dsr_trials": {}}
+    assert layer2.config_violations(v2, None, "emax", "v2") == []
+    assert layer2.config_violations(v1, None, "emax", "v1") == []
+    assert layer2.config_violations(v1, None, "emax") == []
+    assert layer2.config_violations(v2, None, "emax") == ["notes fitness 'v2' != requested 'v1'"]
+    assert layer2.config_violations(v1, None, "emax", "v2") == [
+        "notes fitness None != requested 'v2'"
+    ]
+
+    db = tmp_path / "s.db"
+    plain = layer2.create_run(db)
+    _save_notes(db, plain, {"evaluated": 1, "top_strategies": []})
+    assert "fitness" not in layer2.harvest_run(db, plain)
+    tagged = layer2.create_run(db)
+    _save_notes(db, tagged, {"evaluated": 1, "top_strategies": [], "fitness": "v2"})
+    assert layer2.harvest_run(db, tagged)["fitness"] == "v2"
+
+    monkeypatch.setattr(layer2, "harvest_run", lambda db, rid: {"r31": {"ok": True}, **v1})
+    ctx = cast("layer2.Ctx", None)
+    with pytest.raises(layer2.Layer2Error, match="notes fitness None != requested 'v2'"):
+        layer2._harvest_one(ctx, tmp_path, {"db": str(db), "run_id": 7}, pool=None, fitness="v2")
