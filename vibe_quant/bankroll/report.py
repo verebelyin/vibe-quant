@@ -21,6 +21,10 @@
    worker process that dies (abort, OOM kill) breaks the pool and every cell in flight:
    the pool is rebuilt and each broken cell re-runs alone, so only the crashing cell's
    row fails (``BrokenProcessPool: ...``) and serial/parallel rows stay equal.
+   With ``margin_sweep`` on and a recommended size, a second stage runs the margin cells
+   (mode x leverage x margin limit) at that size through the same pool and fence, gives
+   each cell its liquidating move and names the safest setting; no recommended size skips
+   it, and an error outside the per-cell catch fails only the sweep (the size report stays).
 5. **Publish** in one transaction (``publish_bankroll_report``: ownership, open job and
    parent freshness checked where the report is written); a publish that raises ends the
    report ``failed``.
@@ -48,12 +52,17 @@ import tempfile
 import time
 from concurrent.futures import Executor, Future, ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from vibe_quant.bankroll.kelly import DEFAULT_TARGET_VOL, KellyStats, kelly_stats
-from vibe_quant.bankroll.recommend import kelly_actionable, recommend
+from vibe_quant.bankroll.recommend import (
+    Recommendation,
+    kelly_actionable,
+    recommend,
+    safest_setting,
+)
 from vibe_quant.bankroll.snapshot import (
     MarketSnapshot,
     capture_market,
@@ -62,13 +71,23 @@ from vibe_quant.bankroll.snapshot import (
     reclaim_abandoned,
     report_root,
 )
-from vibe_quant.bankroll.stress import CellPlan, RowOutcome, plan_cells, row_risk_facts
+from vibe_quant.bankroll.stress import (
+    CellPlan,
+    MarginCellPlan,
+    RowOutcome,
+    plan_cells,
+    plan_margin_cells,
+    row_risk_facts,
+)
+from vibe_quant.bankroll_grid import build_cells
 from vibe_quant.liquidation_settings import LiquidationMode, LiquidationSettings
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable, Hashable, Mapping, Sequence
 
+    from vibe_quant.bankroll.liq_move import Book, Move
     from vibe_quant.db.state_manager import StateManager
+    from vibe_quant.dsl.schema import StrategyDSL
     from vibe_quant.jobs.manager import BacktestJobManager
     from vibe_quant.validation.results import ValidationResult
     from vibe_quant.validation.variant import VariantInput
@@ -99,6 +118,16 @@ HEADLINE_FIELDS: tuple[str, ...] = (
     "total_funding",
 )
 """Stored parent headline the baseline replay must equal exactly (C21)."""
+DEFAULT_SWEEP_MODES: tuple[LiquidationMode, ...] = ("isolated", "cross")
+DEFAULT_SWEEP_LEVERAGES: tuple[float, ...] = (3, 5, 10)
+DEFAULT_SWEEP_MARGIN_LIMITS: tuple[float, ...] = (0.5, 1.0)
+SCENARIO_LABEL = (
+    "Modeled scenario: the largest book the margin limit admits at the starting balance "
+    "(positions at the exposure cap plus one smaller position for the margin left), entered "
+    "at one moment and all moving against you at once; funding and fees ignored. Cross rows "
+    "of a multi-coin strategy hold only for that simultaneous entry and are never named "
+    "safest. Each row's liquidation count is from its own run."
+)
 
 RowRole = Literal["baseline", "control", "cell"]
 
@@ -125,6 +154,10 @@ class ReportRequest:
     multiples: tuple[float, ...] = DEFAULT_MULTIPLES
     liquidation_mode: LiquidationMode | None = None
     workers: int = field(default_factory=default_workers)
+    margin_sweep: bool = False
+    sweep_modes: tuple[LiquidationMode, ...] = DEFAULT_SWEEP_MODES
+    sweep_leverages: tuple[float, ...] = DEFAULT_SWEEP_LEVERAGES
+    sweep_margin_limits: tuple[float, ...] = DEFAULT_SWEEP_MARGIN_LIMITS
 
     @classmethod
     def from_json(cls, raw: Mapping[str, Any]) -> ReportRequest:
@@ -138,7 +171,18 @@ class ReportRequest:
             multiples=tuple(sorted({*ks, 1.0})),
             liquidation_mode=raw.get("liquidation_mode"),
             workers=default_workers() if workers is None else int(workers),
+            # Absent (a request stored before the sweep existed) replays as v1: no sweep.
+            margin_sweep=raw.get("margin_sweep") is True,
+            # Absent or null reads as the default grid.
+            sweep_modes=_listed(raw, "sweep_modes", DEFAULT_SWEEP_MODES),
+            sweep_leverages=_listed(raw, "sweep_leverages", DEFAULT_SWEEP_LEVERAGES),
+            sweep_margin_limits=_listed(raw, "sweep_margin_limits", DEFAULT_SWEEP_MARGIN_LIMITS),
         )
+
+
+def _listed(raw: Mapping[str, Any], key: str, default: tuple[Any, ...]) -> tuple[Any, ...]:
+    value = raw.get(key)
+    return default if value is None else tuple(value)
 
 
 def run_config_of(inputs: Mapping[str, Any]) -> dict[str, object]:
@@ -190,24 +234,48 @@ def dsl_hasher(strategy_name: str) -> Callable[[object], str | None]:
     return dsl_hash
 
 
-def _taker_symbols(inputs: Mapping[str, Any], symbols: Sequence[str]) -> tuple[str, ...]:
-    """The run symbols whose 1m klines a taker-flow indicator reads (else none).
-
-    The types come from the validated DSL the engine runs (translated like
-    :func:`dsl_hasher`): the schema upper-cases a stored ``taker_imbalance``.
-    """
-    from vibe_quant.dsl.aux_data import TAKER_TYPES
+def _validated_dsl(inputs: Mapping[str, Any]) -> StrategyDSL:
+    """The validated DSL the engine runs (translated like :func:`dsl_hasher`)."""
     from vibe_quant.dsl.parser import validate_strategy_dict
     from vibe_quant.dsl.translator import translate_dsl_config
 
-    dsl = validate_strategy_dict(
+    return validate_strategy_dict(
         translate_dsl_config(
             json.loads(str(inputs["dsl_json"])),
             strategy_name=str(inputs.get("strategy_name", "strategy")),
         )
     )
-    types = {ind.type for ind in dsl.indicators.values()}
+
+
+def _taker_symbols(inputs: Mapping[str, Any], symbols: Sequence[str]) -> tuple[str, ...]:
+    """The run symbols whose 1m klines a taker-flow indicator reads (else none).
+
+    The types come from the validated DSL: the schema upper-cases a stored
+    ``taker_imbalance``.
+    """
+    from vibe_quant.dsl.aux_data import TAKER_TYPES
+
+    types = {ind.type for ind in _validated_dsl(inputs).indicators.values()}
     return tuple(symbols) if TAKER_TYPES & types else ()
+
+
+def _entry_sides(inputs: Mapping[str, Any]) -> tuple[int, ...]:
+    """The sides the strategy can enter: +1 long, -1 short (non-empty entry conditions)."""
+    entry = _validated_dsl(inputs).entry_conditions
+    return tuple(side for side, conds in ((1, entry.long), (-1, entry.short)) if conds)
+
+
+def _starting_balance(identity: Mapping[str, Any]) -> float | None:
+    """The parent's recorded venue starting balance; ``None`` when it recorded none, or
+    one that is not finite or <= 0 (R-bk-2: shown like a missing one)."""
+    venue = identity.get("venue")
+    if not isinstance(venue, str):
+        return None
+    raw = json.loads(venue).get("starting_balance_usdt")
+    if raw is None:
+        return None
+    balance = float(raw)
+    return balance if math.isfinite(balance) and balance > 0 else None
 
 
 # --- one engine run (pool worker) -----------------------------------------------------
@@ -368,10 +436,9 @@ def headline_mismatch(stored: Mapping[str, Any], replay: CellRun) -> list[str]:
     ]
 
 
-def _outcome(k: float, run: CellRun | None, plan: CellPlan | None) -> RowOutcome:
+def _outcome(k: float, run: CellRun | None, error: str | None) -> RowOutcome:
     if run is None:
-        return RowOutcome(k=k, status="not_runnable",
-                          error=None if plan is None else plan.error)  # fmt: skip
+        return RowOutcome(k=k, status="not_runnable", error=error)
     if run.status != "ok":
         return RowOutcome(k=k, status="failed", error=run.error)
     if run.engine_force_stopped:
@@ -444,6 +511,30 @@ def _start_ns(identity: Mapping[str, Any]) -> int:
     return start_ns
 
 
+@dataclass(frozen=True)
+class _SizeVerdict:
+    baseline: RowOutcome
+    stats: KellyStats | None
+    outcomes: list[RowOutcome]
+    rec: Recommendation
+
+
+def size_recommendation(
+    request: ReportRequest, plans: Sequence[CellPlan], baseline: CellRun,
+    runs: Mapping[float, CellRun],
+) -> _SizeVerdict:  # fmt: skip
+    """Kelly from the baseline's daily series, every size row's outcome, the recommendation."""
+    base_outcome = _outcome(1.0, baseline, None)
+    stats: KellyStats | None = None
+    if baseline.daily is not None:
+        stats = kelly_stats(baseline.daily, target_vol=request.target_vol)
+    outcomes = [_outcome(plan.k, runs.get(plan.k), plan.error) for plan in plans]
+    rec = recommend(
+        outcomes, stats, baseline=base_outcome, user_cap=request.user_cap, dd_limit=request.dd_limit
+    )
+    return _SizeVerdict(base_outcome, stats, outcomes, rec)
+
+
 def build_report(
     *,
     inputs: Mapping[str, Any],
@@ -453,20 +544,15 @@ def build_report(
     baseline: CellRun,
     runs: Mapping[float, CellRun],
     k1_is_baseline: bool,
+    margin_sweep: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    """The published report: Kelly card, size-stress rows, recommendation, disclosures."""
+    """The published report: Kelly card, size-stress rows, recommendation, margin sweep
+    (``None`` when not requested), disclosures."""
     start_ns = _start_ns(inputs["parent_identity"])
-    base_outcome = _outcome(1.0, baseline, None)
-    stats: KellyStats | None = None
-    if baseline.daily is not None:
-        stats = kelly_stats(baseline.daily, target_vol=request.target_vol)
-    outcomes: list[RowOutcome] = []
-    for plan in plans:
-        run = runs.get(plan.k)
-        outcomes.append(_outcome(plan.k, run, plan))
-    rec = recommend(
-        outcomes, stats, baseline=base_outcome, user_cap=request.user_cap, dd_limit=request.dd_limit
-    )
+    verdict = size_recommendation(request, plans, baseline, runs)
+    base_outcome, stats, outcomes, rec = (
+        verdict.baseline, verdict.stats, verdict.outcomes, verdict.rec,
+    )  # fmt: skip
     reasons = dict(rec.row_reasons)
     rows: list[dict[str, object]] = []
     for plan, outcome in zip(plans, outcomes, strict=True):
@@ -506,12 +592,116 @@ def build_report(
             "binding": rec.binding,
             "text": rec.text,
         },
+        "margin_sweep": margin_sweep,
         "disclosures": {
             "slippage_timing": SLIPPAGE_TIMING.get(baseline.mtm_ledger or ""),
             "k1_control": None
             if k1_is_baseline
             else f"k=1 is a control run in {mode} mode; it is not compared to the parent.",
         },
+    }
+
+
+# --- the margin sweep (stage 2) -------------------------------------------------------
+
+MarginKey = tuple[str, LiquidationMode, float, float]
+
+
+def _sweep_stub(status: Literal["skipped", "failed"], reason: str,
+                rec: Recommendation) -> dict[str, object]:  # fmt: skip
+    return {
+        "status": status, "reason": reason, "recommendation_reason": rec.reason, "k": rec.k,
+        "scenario": None, "cells": [], "safest": None, "safest_reason": None,
+    }  # fmt: skip
+
+
+def _move_json(move: Move) -> dict[str, object]:
+    return {
+        "status": move.status,
+        "value": _num(move.value),
+        "side": move.side,
+        "legs": [[symbol, _num(notional)] for symbol, notional in move.legs],
+        "reason": move.reason,
+        "path_dependent": move.path_dependent,
+    }
+
+
+def _margin_sweep(
+    *,
+    inputs: Mapping[str, Any],
+    request: ReportRequest,
+    params: Mapping[str, object],
+    symbols: Sequence[str],
+    size_plan: CellPlan,
+    size_run: CellRun,
+    run_jobs: Callable[
+        [Sequence[tuple[MarginKey, Mapping[str, object]]]], dict[MarginKey, CellRun]
+    ],
+) -> dict[str, object]:
+    """Run the margin cells at ``size_plan``; each cell's row, liquidating move, the safest.
+
+    A reused cell (its merged parameters equal the k-row's) takes the k-row's run.
+    """
+    # Lazy: the API imports this module and must not pull vibe_quant.liquidation
+    # (test_symbol_leverage::test_importing_the_rule_never_imports_the_liquidation_package).
+    from vibe_quant.bankroll import liq_move
+    from vibe_quant.liquidation.tiers import load_tier_tables
+
+    identity = inputs["parent_identity"]
+    cells = build_cells(request.sweep_modes, request.sweep_leverages, request.sweep_margin_limits)
+    margin = plan_margin_cells(params, size_plan, cells, symbols)
+    keys: list[MarginKey] = [("margin", c.mode, c.leverage, c.max_margin_pct) for c in margin]
+    runs = run_jobs([(key, c.overrides) for key, c in zip(keys, margin, strict=True)
+                     if c.status == "planned" and not c.reused])  # fmt: skip
+    balance = _starting_balance(identity)
+    sides = _entry_sides(inputs)
+    tables = load_tier_tables()
+    start_ns = _start_ns(identity)
+    scored: list[tuple[MarginCellPlan, RowOutcome, Move]] = []
+    rows: list[tuple[CellRun | None, Book | None]] = []
+    for key, cell in zip(keys, margin, strict=True):
+        assert cell.mode != "off"  # build_cells admits isolated and cross only
+        run = size_run if cell.reused else runs.get(key)
+        book, move = liq_move.cell_move(
+            mode=cell.mode, leverage=cell.leverage, max_margin_pct=cell.max_margin_pct,
+            cap=size_plan.effective_cap, starting_balance=balance, symbols=symbols,
+            sides=sides, tables=tables,
+        )  # fmt: skip
+        scored.append((cell, _outcome(size_plan.k, run, cell.error), move))
+        rows.append((run, book))
+    best, safest_reason, reasons = safest_setting(scored, dd_limit=request.dd_limit)
+    out_cells: list[dict[str, object]] = []
+    for (cell, outcome, move), (run, book), reason in zip(scored, rows, reasons, strict=True):
+        row = _row_json(replace(cell.size, leverage=cell.leverage, mode=cell.mode), "cell",
+                        run, outcome, reason, start_ns)  # fmt: skip
+        out_cells.append({
+            **row,
+            "max_margin_pct": cell.max_margin_pct,
+            "reused": cell.reused,
+            "positions": None if book is None else book.positions,
+            "remainder": None if book is None else _num(book.remainder),
+            "move": _move_json(move),
+        })  # fmt: skip
+    safest: dict[str, object] | None = None
+    if best is not None:
+        cell, _outcome_best, move = scored[best]
+        safest = {"mode": cell.mode, "leverage": cell.leverage,
+                  "max_margin_pct": cell.max_margin_pct, "move": _move_json(move)}  # fmt: skip
+    return {
+        "status": "completed",
+        "reason": None,
+        "recommendation_reason": None,
+        "k": size_plan.k,
+        "scenario": {
+            "starting_balance": _num(balance),
+            "notional": None if balance is None else _num(size_plan.effective_cap * balance),
+            "sides": [name for side, name in ((1, "long"), (-1, "short")) if side in sides],
+            "symbols": list(symbols),
+            "label": SCENARIO_LABEL,
+        },
+        "cells": out_cells,
+        "safest": safest,
+        "safest_reason": safest_reason,
     }
 
 
@@ -577,79 +767,104 @@ def _coordinate(
     )  # fmt: skip
 
     pool = _Pool(request.workers)
+    clones = itertools.count()
     try:
         baseline = pool.executor.submit(
             run_cell, inp, {}, clone_for_engine(snapshot, root / "baseline" / "catalog"),
             snapshot.archive,
         ).result()  # fmt: skip
         _baseline_checks(state.get_backtest_result(int(inputs["run_id"])), inputs, baseline)
-        runs = _run_cells(state, report_id, pid, pool, inp, snapshot,
-                          [p for p in plans if p.status == "planned"
+        runs = _run_cells(state, report_id, pid, pool, inp, snapshot, clones,
+                          [(p.k, p.overrides) for p in plans if p.status == "planned"
                            and not (k1_is_baseline and p.k == 1.0)])  # fmt: skip
+        if k1_is_baseline:
+            runs[1.0] = baseline
+        sweep: dict[str, object] | None = None
+        if request.margin_sweep:
+            rec = size_recommendation(request, plans, baseline, runs).rec
+            sweep = _sweep_stub("skipped", "no_recommended_size", rec)
+            if rec.k is not None:
+                size_plan = next(p for p in plans if p.k == rec.k)
+                try:
+                    sweep = _margin_sweep(
+                        inputs=inputs, request=request, params=params, symbols=symbols,
+                        size_plan=size_plan, size_run=runs[rec.k],
+                        run_jobs=lambda jobs: _run_cells(state, report_id, pid, pool, inp,
+                                                         snapshot, clones, jobs),
+                    )  # fmt: skip
+                except (Fenced, ReportStop):
+                    raise
+                except Exception as exc:  # noqa: BLE001 -- a sweep bug keeps the size report
+                    logger.warning("bankroll report %d: margin sweep failed (%s)",
+                                   report_id, type(exc).__name__)  # fmt: skip
+                    sweep = _sweep_stub("failed", f"{type(exc).__name__}: {exc}", rec)
     except BaseException:
         _stop_executor(pool.executor)
         raise
     pool.executor.shutdown(wait=True)
-    if k1_is_baseline:
-        runs[1.0] = baseline
     return build_report(inputs=inputs, request=request, mode=mode, plans=plans,
-                        baseline=baseline, runs=runs, k1_is_baseline=k1_is_baseline)  # fmt: skip
+                        baseline=baseline, runs=runs, k1_is_baseline=k1_is_baseline,
+                        margin_sweep=sweep)  # fmt: skip
 
 
-def _run_cells(
+def _run_cells[K: Hashable](
     state: StateManager,
     report_id: int,
     pid: int,
     pool: _Pool,
     inp: VariantInput,
     snapshot: MarketSnapshot,
-    plans: Sequence[CellPlan],
-) -> dict[float, CellRun]:
-    """Run ``plans`` at most ``pool.workers`` at a time; fence-check before handing out each.
+    clones: itertools.count[int],
+    jobs: Sequence[tuple[K, Mapping[str, object]]],
+) -> dict[K, CellRun]:
+    """Run ``jobs`` (key, overrides) at most ``pool.workers`` at a time; fence-check before
+    handing out each. Size cells are keyed by ``k``, margin cells by ``("margin", mode,
+    leverage, margin limit)``; ``clones`` numbers the engines' private catalogs across
+    both stages.
 
     A dead worker breaks every cell in flight with it: each broken cell re-runs alone on a
     fresh pool, and one that breaks alone is that cell's failed row (C23).
     """
-    runs: dict[float, CellRun] = {}
-    clones = itertools.count()
-    batch = (state, report_id, pid, pool, inp, snapshot, runs, clones)
-    for plan, _exc in _run_batch(*batch, plans, pool.workers):
-        for again, exc in _run_batch(*batch, [plan], 1):
-            runs[again.k] = CellRun(status="failed", error=f"{type(exc).__name__}: {exc}")
+    runs: dict[K, CellRun] = {}
+    for job, _exc in _run_batch(state, report_id, pid, pool, inp, snapshot, runs, clones,
+                                jobs, pool.workers):  # fmt: skip
+        for (key, _), exc in _run_batch(state, report_id, pid, pool, inp, snapshot, runs,
+                                        clones, [job], 1):  # fmt: skip
+            runs[key] = CellRun(status="failed", error=f"{type(exc).__name__}: {exc}")
     return runs
 
 
-def _run_batch(
+def _run_batch[K: Hashable](
     state: StateManager,
     report_id: int,
     pid: int,
     pool: _Pool,
     inp: VariantInput,
     snapshot: MarketSnapshot,
-    runs: dict[float, CellRun],
+    runs: dict[K, CellRun],
     clones: itertools.count[int],
-    plans: Sequence[CellPlan],
+    jobs: Sequence[tuple[K, Mapping[str, object]]],
     limit: int,
-) -> list[tuple[CellPlan, BrokenProcessPool]]:
-    """Run ``plans`` (``limit`` in flight) into ``runs``; returns the cells a dead worker
+) -> list[tuple[tuple[K, Mapping[str, object]], BrokenProcessPool]]:
+    """Run ``jobs`` (``limit`` in flight) into ``runs``; returns the cells a dead worker
     broke, after replacing the broken pool."""
-    broken: list[tuple[CellPlan, BrokenProcessPool]] = []
-    pending: dict[Future[CellRun], tuple[CellPlan, Executor]] = {}
-    queue = list(plans)
+    broken: list[tuple[tuple[K, Mapping[str, object]], BrokenProcessPool]] = []
+    pending: dict[Future[CellRun], tuple[tuple[K, Mapping[str, object]], Executor]] = {}
+    queue = list(jobs)
     while queue or pending:
         while queue and len(pending) < limit:
-            plan = queue.pop(0)
+            job = queue.pop(0)
             if not state.bankroll_report_owned(report_id, pid):
                 raise Fenced(f"report {report_id} is no longer owned by pid {pid}")
             catalog = clone_for_engine(snapshot, snapshot.root / f"w{next(clones)}" / "catalog")
-            fut, executor = pool.submit(inp, plan.overrides, catalog, snapshot.archive)
-            pending[fut] = (plan, executor)
+            fut, executor = pool.submit(inp, job[1], catalog, snapshot.archive)
+            pending[fut] = (job, executor)
         done = next(iter(_wait_any(pending)))
-        plan, executor = pending.pop(done)
+        job, executor = pending.pop(done)
         try:
-            runs[plan.k] = done.result()
+            runs[job[0]] = done.result()
         except BrokenProcessPool as exc:
-            broken.append((plan, exc))
+            broken.append((job, exc))
             pool.rebuild(executor)
     return broken
 
@@ -765,6 +980,7 @@ def _owned_run(
 __all__ = [
     "DEFAULT_MULTIPLES",
     "REPLAY_LABEL",
+    "SCENARIO_LABEL",
     "CellRun",
     "ReportRequest",
     "build_report",

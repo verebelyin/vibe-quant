@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
     from vibe_quant.bankroll.kelly import KellyStats
     from vibe_quant.bankroll.liq_move import Move
-    from vibe_quant.bankroll.stress import (  # type: ignore[attr-defined]  # T2 adds it
+    from vibe_quant.bankroll.stress import (
         MarginCellPlan,
         RowOutcome,
     )

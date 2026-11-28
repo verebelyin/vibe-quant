@@ -2976,7 +2976,7 @@ class StateManager:
         """Latest report of ``run_id`` plus ``freshness``, read in one snapshot.
 
         ``freshness`` is ``fresh`` or ``stale`` (``stale_reasons`` lists why); a stale
-        report's ``recommendation`` is masked to None.
+        report's ``recommendation`` and margin-sweep ``safest`` setting are masked to None.
         """
         if not _sqlite_int(run_id):
             return None
@@ -2991,8 +2991,13 @@ class StateManager:
             reasons = _bankroll_stale_reasons(self.conn, out["inputs"], dsl_hash)
         out["freshness"] = "stale" if reasons else "fresh"
         out["stale_reasons"] = reasons
-        if reasons and isinstance(out["report"], dict) and "recommendation" in out["report"]:
-            out["report"]["recommendation"] = None
+        report = out["report"]
+        if reasons and isinstance(report, dict):
+            if "recommendation" in report:
+                report["recommendation"] = None
+            sweep = report.get("margin_sweep")
+            if isinstance(sweep, dict) and "safest" in sweep:
+                sweep["safest"] = None
         return out
 
     def list_running_bankroll_report_ids(self) -> list[int]:

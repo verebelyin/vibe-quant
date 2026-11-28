@@ -73,6 +73,11 @@ HEADLINE: dict[str, Any] = {
 }
 START_NS = 1_740_787_200 * 10**9  # 2025-03-01T00:00Z
 DAY_NS = 86_400 * 10**9
+VENUE = json.dumps({"starting_balance_usdt": 1000})
+SWEEP: dict[str, object] = {"margin_sweep": True}
+GRID: list[tuple[str, float, float]] = [
+    (m, lev, p) for m in ("isolated", "cross") for lev in (3, 5, 10) for p in (0.5, 1.0)
+]
 # 80 days alternating +1.1% / -0.9%: mean 0.001, f_half ~ 5 -> the user cap (1.0) binds.
 DAILY = tuple(0.011 if i % 2 == 0 else -0.009 for i in range(80))
 
@@ -199,6 +204,7 @@ class World:
         identity: bool = True,
         headline: Mapping[str, Any] = HEADLINE,
         dsl: Mapping[str, object] = RSI_DSL,
+        venue: str | None = VENUE,
     ) -> int:
         if self.strategy_id is None:
             self.strategy_id = self.sm.create_strategy(NAME, dict(dsl))
@@ -208,11 +214,14 @@ class World:
         )
         notes: dict[str, object] = {}
         if identity:
-            notes["validation_input"] = {
+            recorded: dict[str, object] = {
                 "v": 1, "strategy_name": NAME, "dsl_sha256": self.hasher(dict(dsl)),
                 "symbols": ["BTCUSDT"], "timeframe": "4h", "start_date": "2025-03-01",
                 "end_date": "2025-06-01",
             }  # fmt: skip
+            if venue is not None:
+                recorded["venue"] = venue
+            notes["validation_input"] = recorded
         self.sm.save_backtest_result(run_id, {**headline, "notes": json.dumps(notes)})
         self.sm.update_backtest_run_status(run_id, "completed")
         return run_id
@@ -283,6 +292,19 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
 
 def rows_by_k(report: Mapping[str, Any]) -> dict[float, dict[str, Any]]:
     return {r["k"]: r for r in report["rows"]}
+
+
+def is_margin(o: Mapping[str, object], mode: str, lev: float, pct: float) -> bool:
+    """``o`` is the margin-sweep cell (mode, leverage, margin limit)."""
+    return "leverage" in o and (o["liquidation_mode"], o["leverage"], o["max_margin_pct"]) == (
+        mode, lev, pct,
+    )  # fmt: skip
+
+
+def margin_cell(report: Mapping[str, Any], mode: str, lev: float, pct: float) -> dict[str, Any]:
+    (cell,) = [c for c in report["margin_sweep"]["cells"]
+               if (c["mode"], c["leverage"], c["max_margin_pct"]) == (mode, lev, pct)]  # fmt: skip
+    return cell  # type: ignore[no-any-return]
 
 
 # --- C21: identity, then headline (red-first) --------------------------------------------
@@ -688,19 +710,23 @@ def _cli_detail_rerun(world: World, run_id: int) -> None:
         (_cli_detail_rerun, "result_replaced"),
     ],
 )
-def test_freshness(world: World, change: Callable[[World, int], None], reason: str) -> None:
-    """The parent changes after the baseline passed (during the stress cells): the
-    publish sees it inside its transaction -> ``stale_parent``; GET says stale and
-    masks the recommendation."""
+@pytest.mark.parametrize("stage", ["size", "margin"])
+def test_freshness(
+    world: World, change: Callable[[World, int], None], reason: str, stage: str
+) -> None:
+    """The parent changes after the baseline passed (during a size cell, or during the
+    margin cell cross 10x / 100%): the publish sees it inside its transaction ->
+    ``stale_parent``; GET says stale and masks the recommendation."""
     run_id = world.parent()
 
     def script(k: float, o: Mapping[str, object]) -> ValidationResult:
-        if k == 2.0:
+        hit = is_margin(o, "cross", 10, 1.0) if stage == "margin" else k == 2.0
+        if hit:
             change(world, run_id)
         return default_cell(k, o)
 
     world.engine.script = script
-    report_id, job_id = world.admit(run_id)
+    report_id, job_id = world.admit(run_id, SWEEP if stage == "margin" else None)
     assert world.run(report_id, job_id) == 1
     row = world.report(report_id)
     assert row["status"] == "stale_parent" and row["report"] is None
@@ -708,6 +734,7 @@ def test_freshness(world: World, change: Callable[[World, int], None], reason: s
     latest = world.sm.get_latest_bankroll_report(run_id, dsl_hash=world.hasher)
     assert latest is not None
     assert latest["freshness"] == "stale" and reason in latest["stale_reasons"]
+    assert world.engine.ks == [1.0, 0.5, 2.0] + ([1.0] * 12 if stage == "margin" else [])
 
 
 def test_result_replaced_before_the_run_stops_after_the_baseline(world: World) -> None:
@@ -724,16 +751,233 @@ def test_result_replaced_before_the_run_stops_after_the_baseline(world: World) -
     assert world.engine.ks == [1.0]
 
 
-def test_get_masks_a_report_gone_stale_after_publish(world: World) -> None:
-    run_id, report_id, _job_id, code = world.launch()
+@pytest.mark.parametrize("sweep", [False, True])
+def test_get_masks_a_report_gone_stale_after_publish(world: World, sweep: bool) -> None:
+    """A stale report shows neither the recommended size nor the safest setting; its rows
+    and margin cells stay (R25)."""
+    run_id, report_id, _job_id, code = world.launch(SWEEP if sweep else None)
     assert code == 0
     fresh = world.sm.get_latest_bankroll_report(run_id, dsl_hash=world.hasher)
     assert fresh is not None and fresh["freshness"] == "fresh"
     assert fresh["report"]["recommendation"]["k"] == 1.0
+    safest = {"mode": "cross", "leverage": 3, "max_margin_pct": 0.5,
+              "move": {"status": "ok", "value": 1.9880478087649402, "side": "short",
+                       "legs": [["BTCUSDT", 500.0]], "reason": None,
+                       "path_dependent": False}}  # fmt: skip
+    if sweep:
+        assert fresh["report"]["margin_sweep"]["safest"] == safest
+    else:
+        assert fresh["report"]["margin_sweep"] is None
     _edit_dsl(world, run_id)
     stale = world.sm.get_latest_bankroll_report(run_id, dsl_hash=world.hasher)
     assert stale is not None and stale["id"] == report_id
     assert stale["freshness"] == "stale" and stale["report"]["recommendation"] is None
+    if sweep:
+        assert stale["report"]["margin_sweep"]["safest"] is None
+        assert len(stale["report"]["margin_sweep"]["cells"]) == 12
+    else:
+        assert stale["report"]["margin_sweep"] is None
+
+
+# --- margin sweep at the recommended size (design arch-bankroll-1 T3: R20-R25) ----------
+
+ISO_L3_MOVE: dict[str, object] = {
+    "status": "ok", "value": 0.32802124833997337, "side": "short",
+    "legs": [["BTCUSDT", 500.0]], "reason": None, "path_dependent": False,
+}  # fmt: skip
+CROSS_MOVE: dict[str, object] = {**ISO_L3_MOVE, "value": 1.9880478087649402}
+
+
+def margin_calls(world: World) -> list[tuple[object, object, object]]:
+    return [(c["overrides"]["liquidation_mode"], c["overrides"]["leverage"],
+             c["overrides"]["max_margin_pct"])
+            for c in world.engine.calls if "leverage" in c["overrides"]]  # fmt: skip
+
+
+def test_margin_sweep_runs_at_recommended_k(world: World) -> None:
+    """R20: 12 margin cells at the recommended k=1 (sizing of the k-row, each with its own
+    mode/leverage/limit), each cell's liquidating move at the 1000 USDT starting balance,
+    and the safest setting cross 3x / 50% (one coin: cross is not path dependent)."""
+    _run_id, report_id, _job_id, code = world.launch(SWEEP)
+    assert code == 0
+    report = world.report(report_id)["report"]
+    json.dumps(report, allow_nan=False)
+    assert world.engine.ks == [1.0, 0.5, 2.0] + [1.0] * 12
+    assert margin_calls(world) == GRID
+    for call, (mode, lev, pct) in zip(world.engine.calls[3:], GRID, strict=True):
+        assert call["overrides"] == {
+            "max_position_pct": 0.5, "risk_per_trade": 0.02, "liquidation_mode": mode,
+            "leverage": lev, "max_margin_pct": pct,
+        }  # fmt: skip
+    assert report["recommendation"]["k"] == 1.0
+    sweep = report["margin_sweep"]
+    assert (sweep["status"], sweep["reason"], sweep["recommendation_reason"], sweep["k"]) == (
+        "completed", None, None, 1.0,
+    )  # fmt: skip
+    assert sweep["scenario"] == {
+        "starting_balance": 1000.0, "notional": 500.0, "sides": ["long", "short"],
+        "symbols": ["BTCUSDT"], "label": rep.SCENARIO_LABEL,
+    }  # fmt: skip
+    assert [(c["mode"], c["leverage"], c["max_margin_pct"]) for c in sweep["cells"]] == GRID
+    iso = margin_cell(report, "isolated", 3, 0.5)
+    assert iso["move"] == ISO_L3_MOVE
+    assert (iso["positions"], iso["remainder"], iso["reused"]) == (1, 0.0, False)
+    assert (iso["k"], iso["role"], iso["status"], iso["error"]) == (1.0, "cell", "ok", None)
+    assert (iso["eligible"], iso["ineligible_reason"]) == (True, None)
+    assert (iso["total_return"], iso["mtm_dd"], iso["liquidation_count"]) == (0.25, 0.2, 0)
+    assert iso["effective_cap"] == 0.5 and iso["effective_risk"] == 0.02
+    for mode, lev, pct in GRID[6:]:
+        cross = margin_cell(report, mode, lev, pct)
+        assert cross["move"] == CROSS_MOVE and cross["mode"] == "cross"
+    assert sweep["safest"] == {"mode": "cross", "leverage": 3, "max_margin_pct": 0.5,
+                               "move": CROSS_MOVE}  # fmt: skip
+    assert sweep["safest_reason"] is None
+
+
+@pytest.mark.parametrize(
+    ("result", "reason"),
+    [
+        ({"dd": 0.35}, "no_eligible_row"),
+        ({"liquidation": {"mode": "isolated", "count": 1, "events": []}}, "liquidated"),
+    ],
+)
+def test_margin_sweep_skipped(world: World, result: dict[str, Any], reason: str) -> None:
+    """R21 (user Q1=A): no recommended size -> no margin engine call; the sweep says
+    skipped with the recommendation's own reason."""
+    world.engine.script = lambda k, o: result_of(**result)
+    _run_id, report_id, _job_id, code = world.launch(SWEEP)
+    assert code == 0
+    report = world.report(report_id)["report"]
+    assert report["recommendation"]["k"] is None
+    assert report["recommendation"]["reason"] == reason
+    assert world.engine.ks == [1.0, 0.5, 2.0]
+    assert report["margin_sweep"] == {
+        "status": "skipped", "reason": "no_recommended_size", "recommendation_reason": reason,
+        "k": None, "scenario": None, "cells": [], "safest": None, "safest_reason": None,
+    }  # fmt: skip
+
+
+def test_legacy_request_no_sweep(world: World) -> None:
+    """R22: a stored request without ``margin_sweep`` (and one with it false) replays as
+    v1: no margin cell runs and the payload says ``margin_sweep: None``. Explicit null
+    sweep lists read as the defaults."""
+    nulls = {"sweep_modes": None, "sweep_leverages": None, "sweep_margin_limits": None}
+    for req in (None, {"margin_sweep": False}, {"margin_sweep": False, **nulls}):
+        world.engine.calls.clear()
+        _run_id, report_id, _job_id, code = world.launch(req)
+        assert code == 0
+        report = world.report(report_id)["report"]
+        assert report["margin_sweep"] is None
+        assert report["request"]["margin_sweep"] is False
+        assert world.engine.ks == [1.0, 0.5, 2.0]
+
+
+def test_margin_cell_failure(world: World) -> None:
+    """R23: a margin cell that raises is that cell's failed row; the report completes and
+    the safest setting is picked from the other cells."""
+
+    def script(k: float, o: Mapping[str, object]) -> ValidationResult:
+        if is_margin(o, "cross", 5, 1.0):
+            raise RuntimeError("boom")
+        return default_cell(k, o)
+
+    world.engine.script = script
+    _run_id, report_id, _job_id, code = world.launch(SWEEP)
+    row = world.report(report_id)
+    assert (code, row["status"]) == (0, "completed")
+    sweep = row["report"]["margin_sweep"]
+    failed = margin_cell(row["report"], "cross", 5, 1.0)
+    assert (failed["status"], failed["error"]) == ("failed", "RuntimeError: boom")
+    assert (failed["eligible"], failed["ineligible_reason"]) == (False, "failed")
+    assert "total_return" not in failed
+    assert sweep["status"] == "completed"
+    assert sweep["safest"] == {"mode": "cross", "leverage": 3, "max_margin_pct": 0.5,
+                               "move": CROSS_MOVE}  # fmt: skip
+
+
+@pytest.mark.parametrize("cause", ["move_raises", "venue_not_json"])
+def test_margin_stage_error_keeps_v1(
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    cause: str,
+) -> None:
+    """R23c: an error escaping the per-cell catch (the liquidating move raises, or the
+    recorded venue is not JSON) fails only the sweep: rows and recommendation equal the
+    sweep-off report. The log names the type, not the message."""
+    from vibe_quant.bankroll import liq_move
+
+    venue = "{not json" if cause == "venue_not_json" else VENUE
+    _r, off_id, _j, code = world.launch(venue=venue)
+    assert code == 0
+
+    def boom(**kwargs: object) -> None:
+        raise RuntimeError("boom-marker-7f3")
+
+    if cause == "move_raises":
+        monkeypatch.setattr(liq_move, "cell_move", boom)
+    _r, on_id, _j, code = world.launch(SWEEP, venue=venue)
+    on = world.report(on_id)
+    assert (code, on["status"]) == (0, "completed")
+    off_report = world.report(off_id)["report"]
+    assert off_report["rows"]
+    assert on["report"]["rows"] == off_report["rows"]
+    assert on["report"]["recommendation"] == off_report["recommendation"]
+    sweep = on["report"]["margin_sweep"]
+    reason = sweep.pop("reason")
+    assert sweep == {
+        "status": "failed", "recommendation_reason": None, "k": 1.0, "scenario": None,
+        "cells": [], "safest": None, "safest_reason": None,
+    }  # fmt: skip
+    if cause == "move_raises":
+        assert reason == "RuntimeError: boom-marker-7f3"
+        assert "margin sweep failed (RuntimeError)" in caplog.text
+        assert "boom-marker-7f3" not in caplog.text
+    else:
+        assert reason.startswith("JSONDecodeError: ")
+        assert "margin sweep failed (JSONDecodeError)" in caplog.text
+
+
+def test_margin_cell_reuses_the_k_row_run(world: World) -> None:
+    """The margin cell equal to the k-row (parent isolated 10x, margin limit 50%) runs no
+    engine and reports the k-row's own run (here the baseline: k=1 is the baseline)."""
+
+    def script(k: float, o: Mapping[str, object]) -> ValidationResult:
+        return result_of(total_return=0.21) if "leverage" in o else default_cell(k, o)
+
+    world.engine.script = script
+    params = {**PARENT_PARAMS, "max_margin_pct": 0.5}
+    _run_id, report_id, _job_id, code = world.launch(SWEEP, params=params)
+    assert code == 0
+    report = world.report(report_id)["report"]
+    assert margin_calls(world) == [c for c in GRID if c != ("isolated", 10, 0.5)]
+    reused = margin_cell(report, "isolated", 10, 0.5)
+    assert (reused["reused"], reused["status"], reused["total_return"]) == (True, "ok", 0.25)
+    other = margin_cell(report, "isolated", 5, 0.5)
+    assert (other["reused"], other["total_return"]) == (False, 0.21)
+
+
+@pytest.mark.parametrize("venue", [
+    json.dumps({"name": "BINANCE"}), None,
+    json.dumps({"starting_balance_usdt": 0}), json.dumps({"starting_balance_usdt": -5}),
+])  # fmt: skip
+def test_margin_sweep_no_balance(world: World, venue: str | None) -> None:
+    """R24: the parent recorded no starting balance (or one <= 0, R-bk-2): the cells still
+    run and report, every move is unavailable (``no_starting_balance``), the scenario
+    shows no balance or notional and no setting is named safest."""
+    _run_id, report_id, _job_id, code = world.launch(SWEEP, venue=venue)
+    assert code == 0
+    sweep = world.report(report_id)["report"]["margin_sweep"]
+    assert sweep["status"] == "completed" and len(sweep["cells"]) == 12
+    assert sweep["scenario"]["starting_balance"] is None
+    assert sweep["scenario"]["notional"] is None
+    for cell in sweep["cells"]:
+        assert cell["status"] == "ok" and cell["total_return"] == 0.25
+        assert cell["move"] == {"status": "unavailable", "value": None, "side": None,
+                                "legs": [], "reason": "no_starting_balance",
+                                "path_dependent": False}  # fmt: skip
+        assert (cell["positions"], cell["remainder"]) == (None, None)
+    assert (sweep["safest"], sweep["safest_reason"]) == (None, "no_safe_setting")
 
 
 # --- C26 (coordinator part): claim, fence, SIGTERM ------------------------------------
@@ -768,14 +1012,24 @@ def test_claim_records_the_owner(world: World) -> None:
     assert job["pid_start_time"] == process_start_time(os.getpid())
 
 
-def test_cancel_fences_the_next_cell(world: World) -> None:
-    """A cancel that lands while a cell runs: the next cell is never handed out, nothing
-    is published, and the reconcile ends the report ``cancelled``."""
+@pytest.mark.parametrize(
+    ("req", "stage", "ks"),
+    [
+        ({"multiples": [0.5, 1.0, 2.0, 3.0]}, "size", [1.0, 0.5]),
+        ({**SWEEP, "multiples": [0.5, 1.0, 2.0]}, "margin", [1.0, 0.5, 2.0, 1.0]),
+    ],
+)
+def test_cancel_fences_the_next_cell(
+    world: World, req: dict[str, object], stage: str, ks: list[float]
+) -> None:
+    """A cancel that lands while a cell runs (the size cell k=0.5, or the first margin
+    cell): the next cell is never handed out, nothing is published, and the reconcile
+    ends the report ``cancelled``."""
     run_id = world.parent()
-    report_id, job_id = world.admit(run_id, {"multiples": [0.5, 1.0, 2.0, 3.0]})
+    report_id, job_id = world.admit(run_id, req)
 
     def script(k: float, o: Mapping[str, object]) -> ValidationResult:
-        if k == 0.5:
+        if is_margin(o, "isolated", 3, 0.5) if stage == "margin" else k == 0.5:
             conn = get_connection(world.db)
             try:
                 run_lifecycle.finish(conn, job_id, run_lifecycle.JobStatus.KILLED, None,
@@ -786,7 +1040,7 @@ def test_cancel_fences_the_next_cell(world: World) -> None:
 
     world.engine.script = script
     assert world.run(report_id, job_id) == 1
-    assert world.engine.ks == [1.0, 0.5]
+    assert world.engine.ks == ks
     assert world.report(report_id)["report"] is None
     assert world.job(job_id)["status"] == "killed"
     assert world.sm.reconcile_bankroll_reports(job_alive=alive, terminate=never_signal) == [
