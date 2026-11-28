@@ -9,6 +9,7 @@ import dataclasses
 import math
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -17,9 +18,14 @@ from vibe_quant.bankroll.stress import (
     CellPlan,
     RowOutcome,
     plan_cells,
+    plan_margin_cells,
     row_risk_facts,
 )
+from vibe_quant.bankroll_grid import build_cells
 from vibe_quant.sizing_settings import MAX_RISK_PER_TRADE, SizingConfigError, SizingSettings
+
+if TYPE_CHECKING:
+    from vibe_quant.liquidation_settings import LiquidationMode
 
 GRID = [0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 5.0, 10.0]
 
@@ -273,3 +279,137 @@ def test_time_to_ruin() -> None:
     )
     assert (isolated.liquidation_count, isolated.time_to_first_liquidation_s) == (1, 60.0)
     assert isolated.time_to_ruin_s is None
+
+
+# --- margin cells: the sweep over mode x leverage x margin limit at one k-row (R18-R19) ---
+
+_PARENT = {"max_position_pct": 0.5, "risk_per_trade": 0.02, "leverage": 10.0}
+
+
+def _k_row(parent: dict[str, object], k: float, mode: LiquidationMode = "isolated") -> CellPlan:
+    return plan_cells(parent, [k], mode)[0]
+
+
+def test_plan_margin_cells() -> None:
+    """R18: each cell is admitted on its own; a cap over the cell's leverage refuses it."""
+    size = _k_row(_PARENT, 10.0)
+    assert (size.effective_cap, size.effective_risk) == (5.0, 0.2)
+    cells = build_cells(["isolated", "cross"], [3, 5, 10], [0.5])
+    plans = plan_margin_cells(_PARENT, size, cells, ["BTCUSDT"])
+
+    assert [(p.mode, p.leverage, p.max_margin_pct, p.status) for p in plans] == [
+        ("isolated", 3.0, 0.5, "not_runnable"),
+        ("isolated", 5.0, 0.5, "planned"),
+        ("isolated", 10.0, 0.5, "planned"),
+        ("cross", 3.0, 0.5, "not_runnable"),
+        ("cross", 5.0, 0.5, "planned"),
+        ("cross", 10.0, 0.5, "planned"),
+    ]
+    refused = plans[0]
+    assert refused.error == "max_position_pct (5.0) must not exceed leverage (3.0)"
+    assert (refused.overrides, refused.reused) == ({}, False)
+    assert plans[3].error == "max_position_pct (5.0) must not exceed leverage (3.0)"
+    assert plans[1].overrides == {
+        "max_position_pct": 5.0,
+        "risk_per_trade": 0.2,
+        "liquidation_mode": "isolated",
+        "leverage": 5.0,
+        "max_margin_pct": 0.5,
+    }
+    assert plans[5].overrides == {
+        "max_position_pct": 5.0,
+        "risk_per_trade": 0.2,
+        "liquidation_mode": "cross",
+        "leverage": 10.0,
+        "max_margin_pct": 0.5,
+    }
+    assert all(p.size is size for p in plans)
+    assert [p.error for p in plans if p.status == "planned"] == [None] * 4
+    # The parent's parameters are never modified.
+    assert _PARENT == {"max_position_pct": 0.5, "risk_per_trade": 0.02, "leverage": 10.0}
+
+    # Another parent and limit: cap 0.25 at k=2 (cap 0.5, risk 0.06) fits every leverage.
+    other = {"max_position_pct": 0.25, "risk_per_trade": 0.03, "leverage": 20}
+    plans = plan_margin_cells(
+        other, _k_row(other, 2.0, "cross"), build_cells(["cross"], [1, 20], [1.0]), ["ETHUSDT"]
+    )
+    assert [(p.status, p.overrides) for p in plans] == [
+        (
+            "planned",
+            {
+                "max_position_pct": 0.5,
+                "risk_per_trade": 0.06,
+                "liquidation_mode": "cross",
+                "leverage": 1.0,
+                "max_margin_pct": 1.0,
+            },
+        ),
+        (
+            "planned",
+            {
+                "max_position_pct": 0.5,
+                "risk_per_trade": 0.06,
+                "liquidation_mode": "cross",
+                "leverage": 20.0,
+                "max_margin_pct": 1.0,
+            },
+        ),
+    ]
+
+
+def test_margin_cell_coin_max() -> None:
+    """R18b: a leverage over a coin's Binance maximum refuses the cell; equality runs."""
+    size = _k_row(_PARENT, 1.0)
+    cells = build_cells(["isolated"], [75, 100], [1.0])
+    plans = plan_margin_cells(_PARENT, size, cells, ["BTCUSDT", "BNBUSDT"])
+    assert [(p.leverage, p.status) for p in plans] == [(75.0, "planned"), (100.0, "not_runnable")]
+    assert plans[1].error == "leverage 100x exceeds the Binance maximum for BNBUSDT (75x)"
+    assert plans[1].overrides == {}
+    assert plans[0].error is None
+    assert plans[0].overrides["leverage"] == 75.0
+
+    # BTCUSDT alone allows 100x (its maximum is 125x); a coin missing from the snapshot
+    # refuses every cell with the snapshot's text.
+    alone = plan_margin_cells(_PARENT, size, cells, ["BTCUSDT"])
+    assert [p.status for p in alone] == ["planned", "planned"]
+    missing = plan_margin_cells(_PARENT, size, cells[:1], ["NOPEUSDT"])
+    assert missing[0].status == "not_runnable"
+    assert missing[0].error is not None
+    assert missing[0].error.startswith("no Binance leverage bracket for NOPEUSDT")
+
+
+def test_margin_cell_reuse() -> None:
+    """R19: the cell equal to the k-row (same mode, leverage and limit) reuses its run."""
+    parent = {**_PARENT, "max_margin_pct": 0.5}
+    size = _k_row(parent, 2.0, "cross")
+    cells = build_cells(["isolated", "cross"], [5, 10], [0.5, 1.0])
+    plans = plan_margin_cells(parent, size, cells, ["BTCUSDT"])
+    reused = [(p.mode, p.leverage, p.max_margin_pct) for p in plans if p.reused]
+    assert reused == [("cross", 10.0, 0.5)]
+    hit = next(p for p in plans if p.reused)
+    assert (hit.status, hit.error) == ("planned", None)
+    assert {**parent, **hit.overrides} == {**parent, **size.overrides}
+
+    # A parent without a limit: every cell sets one, so none equals the k-row.
+    size = _k_row(_PARENT, 2.0, "cross")
+    plans = plan_margin_cells(_PARENT, size, cells, ["BTCUSDT"])
+    assert [p.reused for p in plans] == [False] * 8
+    assert [p.status for p in plans] == ["planned"] * 8
+
+    # A refused cell is never reused, even when its merged params equal the k-row.
+    parent = {**_PARENT, "leverage": 100.0, "liquidation_mode": "isolated", "max_margin_pct": 0.5}
+    size = _k_row(parent, 1.0, "isolated")
+    assert size.status == "planned"
+    plans = plan_margin_cells(parent, size, build_cells(["isolated"], [100], [0.5]), ["BNBUSDT"])
+    assert [(p.status, p.reused) for p in plans] == [("not_runnable", False)]
+    assert plans[0].error == "leverage 100x exceeds the Binance maximum for BNBUSDT (75x)"
+
+
+def test_margin_cells_refuse_unplanned_size_row() -> None:
+    """A not_runnable k-row has no sizing of its own: planning on it would run the cells at
+    the parent's cap under the k-row's label, so it is refused outright."""
+    parent = {**_PARENT, "leverage": 1.0, "liquidation_mode": "isolated", "max_margin_pct": 0.5}
+    size = _k_row(parent, 4.0, "isolated")
+    assert size.status == "not_runnable"
+    with pytest.raises(ValueError, match=r"^size row k=4\.0 is not_runnable; plan margin cells"):
+        plan_margin_cells(parent, size, build_cells(["isolated"], [1, 5], [0.5]), ["BTCUSDT"])

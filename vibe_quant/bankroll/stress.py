@@ -11,6 +11,10 @@ and ``k`` is never a multiplier of actual exposure or drawdown.
 Each cell is admitted on its own through the existing parsers (sizing, liquidation,
 cap-vs-leverage); a refusal makes that cell ``not_runnable`` with the parser's text and the
 other cells still run. Imports no engine, validation or DB module (import isolation).
+
+The margin sweep (:func:`plan_margin_cells`) varies margin mode x leverage x margin limit at
+one k-row's sizing; each of its cells is admitted the same way, plus the coin maximum
+leverage of every traded symbol.
 """
 
 from __future__ import annotations
@@ -24,9 +28,12 @@ from vibe_quant.liquidation_settings import (
     LiquidationSettings,
 )
 from vibe_quant.sizing_settings import MAX_RISK_PER_TRADE, SizingConfigError, SizingSettings
+from vibe_quant.symbol_leverage import SymbolLeverageError, check_leverage
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
+
+    from vibe_quant.bankroll_grid import BankrollCell
 
 RISK_LIMIT: float = MAX_RISK_PER_TRADE
 """The sizing-budget limit a cell's risk is held at (the shared 50% admission limit)."""
@@ -92,6 +99,75 @@ def plan_cells(
                 risk_held_at_limit=requested > RISK_LIMIT,
                 overrides=overrides if error is None else {},
                 error=error,
+            )
+        )
+    return plans
+
+
+@dataclass(frozen=True)
+class MarginCellPlan:
+    """One margin-sweep cell at the k-row ``size``. ``overrides`` (empty when not runnable)
+    merge into a copy of the parent's parameters; ``reused`` marks the cell whose merged
+    parameters equal the k-row's, which takes the k-row's run instead of a new one."""
+
+    mode: LiquidationMode
+    leverage: float
+    max_margin_pct: float
+    size: CellPlan
+    status: CellStatus
+    overrides: dict[str, object] = field(default_factory=dict)
+    error: str | None = None
+    reused: bool = False
+
+
+def plan_margin_cells(
+    parent_params: Mapping[str, object],
+    size_plan: CellPlan,
+    cells: Sequence[BankrollCell],
+    symbols: Sequence[str],
+) -> list[MarginCellPlan]:
+    """Plan one cell per grid cell, in the given order, at ``size_plan``'s cap and risk.
+
+    A cell is refused (``not_runnable``, with the parser's text) when its settings do not
+    parse, its leverage cannot margin the cap, or it exceeds a symbol's Binance maximum;
+    the other cells still plan. ``parent_params`` is never modified.
+
+    Raises ``ValueError`` when ``size_plan`` is not ``planned``: it has no overrides, so
+    its cells would run at the parent's sizing under the k-row's label.
+    """
+    if size_plan.status != "planned":
+        raise ValueError(
+            f"size row k={size_plan.k} is {size_plan.status}; plan margin cells "
+            "only on a planned k-row"
+        )
+    k_row = {**parent_params, **size_plan.overrides}
+    plans: list[MarginCellPlan] = []
+    for cell in cells:
+        overrides: dict[str, object] = {
+            **size_plan.overrides,
+            "liquidation_mode": cell.mode,
+            "leverage": cell.leverage,
+            "max_margin_pct": cell.max_margin_pct,
+        }
+        merged = {**parent_params, **overrides}
+        error: str | None = None
+        try:
+            sizing = SizingSettings.from_params(merged)
+            LiquidationSettings.from_params(merged)
+            sizing.check_leverage(cell.leverage)
+            check_leverage(symbols, cell.leverage)
+        except (SizingConfigError, LiquidationConfigError, SymbolLeverageError) as exc:
+            error = str(exc)
+        plans.append(
+            MarginCellPlan(
+                mode=cell.mode,
+                leverage=cell.leverage,
+                max_margin_pct=cell.max_margin_pct,
+                size=size_plan,
+                status="planned" if error is None else "not_runnable",
+                overrides=overrides if error is None else {},
+                error=error,
+                reused=error is None and merged == k_row,
             )
         )
     return plans
