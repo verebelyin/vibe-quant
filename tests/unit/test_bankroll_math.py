@@ -167,11 +167,11 @@ def test_kelly_stats_is_frozen_record() -> None:
 
 
 def test_import_isolation() -> None:
-    """kelly/stress/recommend pull in no engine, validation or DB module."""
+    """kelly/stress/recommend/liq_move pull in no engine, validation or DB module."""
     code = (
         "import sys\n"
         "import vibe_quant.bankroll.kelly, vibe_quant.bankroll.stress\n"
-        "import vibe_quant.bankroll.recommend\n"
+        "import vibe_quant.bankroll.recommend, vibe_quant.bankroll.liq_move\n"
         "bad = sorted(m for m in sys.modules if m.split('.')[0] == 'nautilus_trader'"
         " or m.startswith(('vibe_quant.validation', 'vibe_quant.db')))\n"
         "print(bad)\n"
