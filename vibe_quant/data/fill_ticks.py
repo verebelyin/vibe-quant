@@ -172,6 +172,7 @@ def _build_one(symbol: str, timeframe: str, catalog_path: Path, root: Path) -> P
     from nautilus_trader.persistence.catalog import ParquetDataCatalog
 
     from vibe_quant.data.catalog import get_bar_type
+    from vibe_quant.data.instrument_read import read_instruments
     from vibe_quant.screening.nt_runner import MissingBarDataError
     from vibe_quant.validation.extraction import load_catalog_bars
 
@@ -192,11 +193,9 @@ def _build_one(symbol: str, timeframe: str, catalog_path: Path, root: Path) -> P
             bars = load_catalog_bars(catalog_path, bar_type)
             if bars is None or len(bars.ts) == 0:
                 raise MissingBarDataError(f"no 1m bars for {symbol} in {catalog_path}")
-            main_cat = ParquetDataCatalog(str(catalog_path))
-            found = main_cat.instruments(instrument_ids=[instrument_id])
+            found = read_instruments(catalog_path, instrument_id)
             if not found:
-                # Where the (often relative) catalog resolved: the cause of gate flake
-                # vibe-quant-28p7p is unknown, so the error carries what would name it.
+                # Where the (often relative) catalog resolved, for a genuinely absent set.
                 listing = (
                     sorted(p.name for p in instrument_dir.iterdir())
                     if instrument_dir.is_dir()

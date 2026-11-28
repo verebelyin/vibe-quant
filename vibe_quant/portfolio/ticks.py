@@ -293,12 +293,9 @@ def _ascending(symbol: str, ticks: tuple[PriceTick, ...]) -> tuple[PriceTick, ..
 
 def _catalog_instruments(catalog: Path) -> dict[str, CryptoPerpetual]:
     """The catalog's instruments by raw symbol (the precisions NT checks ticks against)."""
-    from nautilus_trader.persistence.catalog import ParquetDataCatalog
+    from vibe_quant.data.instrument_read import read_instruments
 
-    return {
-        str(instrument.raw_symbol): instrument
-        for instrument in ParquetDataCatalog(str(catalog)).instruments()
-    }
+    return {str(instrument.raw_symbol): instrument for instrument in read_instruments(catalog)}
 
 
 def _quote_volume(spec: CarrySpec, archive: Path, symbol: str) -> dict[int, float]:

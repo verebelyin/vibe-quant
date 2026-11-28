@@ -14,6 +14,7 @@ from nautilus_trader.model.data import Bar, TradeTick
 from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.persistence.catalog import ParquetDataCatalog
 
+from tests.unit.test_instrument_read import fd_exhausted_instrument_dir
 from vibe_quant.data.catalog import create_instrument, get_bar_type
 from vibe_quant.data.fill_ticks import (
     FILL_TICK_SIZE,
@@ -225,6 +226,33 @@ def test_missing_instrument_error_names_cwd_absolute_path_and_dir(
     assert f"cwd {tmp_path}" in msg
     assert f"absolute {cat}" in msg
     assert "BTCUSDT-PERP.BINANCE: absent" in msg
+
+
+def test_transient_fd_exhaustion_does_not_read_as_a_missing_instrument(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gate flake 28p7p: NT's instruments() walks the dir through fsspec, which turns an
+    EMFILE on the listing into ``[]`` (-> 'no instrument for ETHUSDT'). A spike that
+    clears must not fail the build."""
+    cat = _full_day_catalog(tmp_path)
+    injected = fd_exhausted_instrument_dir(monkeypatch, cat, failures=1)
+    fts = resolve_fill_ticks(["BTCUSDT"], "1h", DAY0, DAY0 + 23 * HOUR + 2 * MIN, cat)
+    assert injected[0] == 1
+    assert fts.missing_boundaries == {"BTCUSDT": 0}
+    assert (Path(fts.paths["BTCUSDT"]) / "meta.json").is_file()
+
+
+def test_persistent_fd_exhaustion_raises_the_oserror_not_a_missing_instrument(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import errno
+
+    cat = _full_day_catalog(tmp_path)
+    fd_exhausted_instrument_dir(monkeypatch, cat, failures=None)
+    with pytest.raises(OSError) as exc:
+        resolve_fill_ticks(["BTCUSDT"], "1h", DAY0, DAY0 + HOUR, cat)
+    assert not isinstance(exc.value, MissingBarDataError)
+    assert exc.value.errno == errno.EMFILE
 
 
 def test_coverage_error_names_the_last_tick_and_the_cutoff(tmp_path: Path) -> None:

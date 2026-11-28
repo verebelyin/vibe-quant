@@ -110,9 +110,9 @@ def load_instrument(catalog_path: str, instrument_id: str) -> Instrument:
     """The catalog instrument (cached per process)."""
     key = (catalog_path, instrument_id)
     if key not in _INSTRUMENTS:
-        from nautilus_trader.persistence.catalog import ParquetDataCatalog
+        from vibe_quant.data.instrument_read import read_instruments
 
-        found = ParquetDataCatalog(catalog_path).instruments(instrument_ids=[instrument_id])
+        found = read_instruments(catalog_path, instrument_id)
         if not found:
             raise FastTierUnsupported(f"instrument {instrument_id} not in catalog {catalog_path}")
         _INSTRUMENTS[key] = found[0]
