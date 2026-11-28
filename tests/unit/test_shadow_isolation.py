@@ -102,7 +102,11 @@ _SCRIPT = textwrap.dedent(
             if skip_prefix and name.startswith(skip_prefix):
                 continue
             h = hashlib.sha256()
-            for row in conn.execute(f'SELECT * FROM "{name}" ORDER BY rowid'):
+            order = "rowid"
+            if conn.execute(f'PRAGMA table_list("{name}")').fetchone()[4]:  # WITHOUT ROWID
+                pk = sorted((r[5], r[1]) for r in conn.execute(f'PRAGMA table_info("{name}")'))
+                order = ", ".join(f'"{col}"' for rank, col in pk if rank)
+            for row in conn.execute(f'SELECT * FROM "{name}" ORDER BY {order}'):
                 h.update(repr(row).encode())
             out[name] = h.hexdigest()
         conn.close()

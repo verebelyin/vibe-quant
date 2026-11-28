@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import calendar
 import math
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import sqlite3
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Sequence
 
 DEFAULT_ARCHIVE_PATH = Path("data/archive/raw_data.db")
 
@@ -95,6 +96,69 @@ CREATE TABLE IF NOT EXISTS raw_accepted_gaps (
     UNIQUE(symbol, interval, from_open_time, to_open_time)
 );
 
+-- Binance Vision daily ``metrics`` files, one row per (symbol, day, zip md5).
+-- Append-only: a regenerated file (new md5) adds a row; ``status`` says what
+-- it held: ``ok`` (its rows are in raw_metrics), ``same``/``drift`` (a
+-- ``--recheck`` compared it to the archived ``ok`` rows) or ``malformed``.
+-- ``csv_rows`` = parsed CSV body rows, ``rows`` = rows this file stored.
+CREATE TABLE IF NOT EXISTS raw_metrics_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    day TEXT NOT NULL,
+    filename TEXT,
+    sha256 TEXT,
+    md5 TEXT NOT NULL,
+    size INTEGER,
+    vision_last_modified TEXT,
+    csv_rows INTEGER NOT NULL,
+    rows INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('ok', 'same', 'drift', 'malformed')),
+    detail TEXT,
+    downloaded_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(symbol, day, md5)
+);
+
+-- 5-minute positioning rows from ``ok`` metrics files (create_time in ms UTC;
+-- a blank CSV field is NULL). Never updated: a drifted re-serve is recorded
+-- in raw_metrics_files only.
+CREATE TABLE IF NOT EXISTS raw_metrics (
+    symbol TEXT NOT NULL,
+    create_time INTEGER NOT NULL,
+    sum_open_interest REAL,
+    sum_open_interest_value REAL,
+    count_toptrader_long_short_ratio REAL,
+    sum_toptrader_long_short_ratio REAL,
+    count_long_short_ratio REAL,
+    sum_taker_long_short_vol_ratio REAL,
+    file_id INTEGER NOT NULL REFERENCES raw_metrics_files(id),
+    PRIMARY KEY(symbol, create_time)
+) WITHOUT ROWID;
+
+-- Operator acknowledgements of a drift/malformed metrics file. Append-only;
+-- only ``ack-metrics`` writes here.
+CREATE TABLE IF NOT EXISTS raw_metrics_acks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id INTEGER NOT NULL UNIQUE REFERENCES raw_metrics_files(id),
+    md5 TEXT NOT NULL,
+    detail TEXT,
+    reason TEXT NOT NULL,
+    acked_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Deribit DVOL candles (open_time in ms UTC). Append-only (INSERT OR IGNORE).
+CREATE TABLE IF NOT EXISTS raw_dvol (
+    currency TEXT NOT NULL,
+    resolution_s INTEGER NOT NULL,
+    open_time INTEGER NOT NULL,
+    open REAL,
+    high REAL,
+    low REAL,
+    close REAL,
+    source TEXT,
+    downloaded_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY(currency, resolution_s, open_time)
+) WITHOUT ROWID;
+
 CREATE INDEX IF NOT EXISTS idx_raw_klines_symbol_time
     ON raw_klines(symbol, interval, open_time);
 CREATE INDEX IF NOT EXISTS idx_raw_mark_klines_symbol_time
@@ -157,6 +221,27 @@ def _expected_klines_in_month(interval: str, year: int, month: int) -> int | Non
         return None
     _, days_in_month = calendar.monthrange(year, month)
     return days_in_month * per_day
+
+
+# One raw_metrics row: create_time (ms UTC), then the six CSV value columns in
+# header order (sum_open_interest .. sum_taker_long_short_vol_ratio); None = blank.
+MetricsRow = tuple[
+    int, float | None, float | None, float | None, float | None, float | None, float | None
+]
+
+
+@dataclass(frozen=True)
+class MetricsFileMeta:
+    """What ``insert_metrics_file`` records about one Vision metrics zip."""
+
+    filename: str
+    md5: str
+    sha256: str
+    size: int
+    vision_last_modified: str | None
+    csv_rows: int
+    status: str  # 'ok' | 'same' | 'drift' | 'malformed'
+    detail: str | None
 
 
 class RawDataArchive:
@@ -441,6 +526,141 @@ class RawDataArchive:
                 (symbol, interval),
             )
         ]
+
+    def insert_metrics_file(
+        self,
+        symbol: str,
+        day: date,
+        meta: MetricsFileMeta,
+        rows: Sequence[MetricsRow],
+    ) -> int:
+        """Record one metrics file and, when ``meta.status == 'ok'``, its rows.
+
+        One transaction. A file already recorded for (symbol, day, md5) is a
+        no-op. ``rows`` are stored only for an ``ok`` file; a raw_metrics
+        primary-key conflict there raises and rolls the whole file back.
+
+        Returns:
+            Rows inserted into raw_metrics: 0 for malformed/same/drift or an
+            already recorded file.
+        """
+        stored = list(rows) if meta.status == "ok" else []
+        with self.conn:
+            cursor = self.conn.execute(
+                """INSERT INTO raw_metrics_files
+                   (symbol, day, filename, sha256, md5, size, vision_last_modified,
+                    csv_rows, rows, status, detail)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(symbol, day, md5) DO NOTHING""",
+                (
+                    symbol,
+                    day.isoformat(),
+                    meta.filename,
+                    meta.sha256,
+                    meta.md5,
+                    meta.size,
+                    meta.vision_last_modified,
+                    meta.csv_rows,
+                    len(stored),
+                    meta.status,
+                    meta.detail,
+                ),
+            )
+            if cursor.rowcount != 1:
+                return 0
+            file_id = cursor.lastrowid
+            self.conn.executemany(
+                """INSERT INTO raw_metrics
+                   (symbol, create_time, sum_open_interest, sum_open_interest_value,
+                    count_toptrader_long_short_ratio, sum_toptrader_long_short_ratio,
+                    count_long_short_ratio, sum_taker_long_short_vol_ratio, file_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [(symbol, *row, file_id) for row in stored],
+            )
+        return len(stored)
+
+    def get_metrics_files(self, symbol: str) -> list[sqlite3.Row]:
+        """Every recorded metrics file of *symbol*, by day then insertion order."""
+        return list(
+            self.conn.execute(
+                "SELECT * FROM raw_metrics_files WHERE symbol = ? ORDER BY day, id",
+                (symbol,),
+            )
+        )
+
+    def get_metrics(
+        self, symbol: str, start_ms: int | None = None, end_ms: int | None = None
+    ) -> list[sqlite3.Row]:
+        """raw_metrics rows of *symbol* with ``start_ms <= create_time < end_ms``."""
+        query = "SELECT * FROM raw_metrics WHERE symbol = ?"
+        params: list[Any] = [symbol]
+        if start_ms is not None:
+            query += " AND create_time >= ?"
+            params.append(start_ms)
+        if end_ms is not None:
+            query += " AND create_time < ?"
+            params.append(end_ms)
+        query += " ORDER BY create_time"
+        return list(self.conn.execute(query, params))
+
+    def get_metrics_range(self, symbol: str) -> tuple[int, int, int] | None:
+        """``(count, min create_time, max create_time)``, None when none archived."""
+        row = self.conn.execute(
+            "SELECT COUNT(*), MIN(create_time), MAX(create_time) FROM raw_metrics WHERE symbol = ?",
+            (symbol,),
+        ).fetchone()
+        if row is None or not row[0]:
+            return None
+        return int(row[0]), int(row[1]), int(row[2])
+
+    def insert_metrics_ack(self, file_id: int, md5: str, detail: str | None, reason: str) -> bool:
+        """Acknowledge a drift/malformed metrics file (append-only).
+
+        Returns:
+            True when this call inserted the ack, False when *file_id* was
+            already acknowledged.
+        """
+        cursor = self.conn.execute(
+            """INSERT INTO raw_metrics_acks (file_id, md5, detail, reason)
+               VALUES (?, ?, ?, ?) ON CONFLICT(file_id) DO NOTHING""",
+            (file_id, md5, detail, reason),
+        )
+        self.conn.commit()
+        return cursor.rowcount == 1
+
+    def get_metrics_acks(self, symbol: str) -> dict[int, sqlite3.Row]:
+        """Acks of *symbol*'s metrics files, keyed by ``file_id``."""
+        return {
+            int(row["file_id"]): row
+            for row in self.conn.execute(
+                """SELECT a.* FROM raw_metrics_acks a
+                   JOIN raw_metrics_files f ON f.id = a.file_id
+                   WHERE f.symbol = ?""",
+                (symbol,),
+            )
+        }
+
+    def insert_dvol(
+        self,
+        currency: str,
+        resolution_s: int,
+        candles: Iterable[tuple[int, float, float, float, float]],
+        source: str,
+    ) -> int:
+        """Store ``(open_ms, open, high, low, close)`` candles, ignoring archived ones.
+
+        Returns:
+            Candles inserted (an already archived open_time keeps its old values).
+        """
+        before = self.conn.total_changes
+        self.conn.executemany(
+            """INSERT OR IGNORE INTO raw_dvol
+               (currency, resolution_s, open_time, open, high, low, close, source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            [(currency, resolution_s, *candle, source) for candle in candles],
+        )
+        self.conn.commit()
+        return self.conn.total_changes - before
 
     def get_klines(
         self,
