@@ -532,7 +532,7 @@ def test_mock_backtest_long_sharpe_unchanged() -> None:
 
     random.seed(1)
     chrom = _random_chromosome(Direction.LONG)
-    assert mock_backtest(chrom)["sharpe_ratio"] == 1.4986434861362583
+    assert mock_backtest(chrom)["sharpe_ratio"] == 1.8881666857843626
 
 
 # ---------------------------------------------------------------------------

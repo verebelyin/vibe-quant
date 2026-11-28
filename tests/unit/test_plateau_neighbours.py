@@ -283,7 +283,7 @@ def test_uid_is_sha256_of_neighbour_key() -> None:
 
 def test_stops_respect_the_run_range() -> None:
     """R15b: a capped run never steps a stop past the cap; the step itself is unchanged."""
-    random.seed(0)
+    random.seed(2)
     chrom = _random_chromosome(direction_constraint=Direction.SHORT)
     chrom.stop_loss_pct = 8.46
 

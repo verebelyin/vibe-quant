@@ -16,10 +16,11 @@ symbol) and keeps integer running sums (volumes scaled by 10^p, p <= 4 chosen
 per symbol), so a window value is a difference of two int64s and one float
 division -- independent of where the query series starts.
 
-Positioning metrics (OI_CHANGE, LS_RATIO_Z) read the archived Binance Vision
-5-minute ``raw_metrics`` rows once per (absolute archive path, symbol, column),
-derive one value per ROW on the full series (row i reads rows <= i only) and
-look it up as-of each bar close with a publication lag (``METRICS_LAG_NS``).
+Positioning indicators read archived series once per (absolute archive path,
+source, column): OI_CHANGE / LS_RATIO_Z the Binance Vision 5-minute ``raw_metrics``
+rows, DVOL_Z the Deribit hourly ``raw_dvol`` candles. Each derives one value per ROW
+on the full series (row i reads rows <= i only) and looks it up as-of each bar
+close with a publication lag (``METRICS_LAG_NS`` / ``DVOL_LAG_NS``).
 
 Causality: archived settlement times carry ms jitter (``...08:00:00.004``), so
 each is snapped to the 8h boundary when it lies within +-60s
@@ -50,6 +51,8 @@ import numpy as np
 from vibe_quant.errors import DataUnavailableError
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
+
     import pandas as pd
 
 
@@ -246,7 +249,8 @@ def preflight(
     Positioning metrics (OI_CHANGE / LS_RATIO_Z): raises when the archive has no
     metrics table or no non-NULL rows of the column for a symbol, its first row is
     more than ``PREFLIGHT_START_MARGIN_NS`` after ``start_date``, or its last row is
-    before ``end_date - 1 day``. Interior holes are NaN at lookup time.
+    before ``end_date - 1 day``. DVOL_Z: the same checks on the hourly DVOL candles of
+    each symbol's currency (``dvol_currency``). Interior holes are NaN at lookup time.
     """
     from vibe_quant.dsl.indicators import indicator_registry
     from vibe_quant.validation.funding import _FUNDING_PERIOD_NS
@@ -255,12 +259,13 @@ def preflight(
     _preflight_regime(indicator_types, symbols, start_ns, end_ns, start_date, end_date)
     _preflight_taker(indicator_types, symbols, start_ns, end_ns, start_date, end_date)
     _preflight_metrics(indicator_types, symbols, start_ns, end_ns, start_date, end_date)
+    _preflight_dvol(indicator_types, symbols, start_ns, end_ns, start_date, end_date)
     if not any(
         (spec := indicator_registry.get(t)) is not None
         and spec.needs_context
         and t not in REGIME_TYPES
         and t not in TAKER_TYPES
-        and t not in METRICS_TYPES
+        and t not in POSITIONING_TYPES
         for t in indicator_types
     ):
         return
@@ -614,28 +619,53 @@ def taker_imbalance_asof(symbol: str, bar_close_ns: np.ndarray, period: int) -> 
     return np.where(ok, value, np.nan)
 
 
-# -- Binance Vision positioning metrics (OI_CHANGE / LS_RATIO_Z) -----------------------
+# -- positioning: Binance Vision metrics (OI_CHANGE / LS_RATIO_Z), Deribit DVOL (DVOL_Z) --
 
 METRICS_TYPES = frozenset({"LS_RATIO_Z", "OI_CHANGE"})
+DVOL_TYPES = frozenset({"DVOL_Z"})
+# The one rule bankroll and shadow refuse by (their snapshots have no metrics or DVOL).
+POSITIONING_TYPES = METRICS_TYPES | DVOL_TYPES
 METRICS_STEP_NS = 300 * 10**9
 # A row stamped ``s`` is published 7-174 s after ``s`` (MEASURED 2026-11-27); a bar may use
 # it from close ``s + METRICS_LAG_NS`` and while the close is less than
 # ``METRICS_MAX_STALE_NS`` past that (one missing newest row is bridged, two are not).
 METRICS_LAG_NS = 600 * 10**9
 METRICS_MAX_STALE_NS = 600 * 10**9
-_METRICS_END_MARGIN_NS = 86_400 * 10**9
+# An hourly DVOL candle opened at ``o`` is complete at ``o + 1 h`` (the downloader stores
+# only finished candles); usable from close ``o + DVOL_LAG_NS`` while the close is less
+# than ``DVOL_MAX_STALE_NS`` past that (one missing candle is bridged, two are not).
+DVOL_STEP_NS = 3600 * 10**9
+DVOL_LAG_NS = 3600 * 10**9
+DVOL_MAX_STALE_NS = 7200 * 10**9
+_POSITIONING_END_MARGIN_NS = 86_400 * 10**9
 _OI_COLUMN = "sum_open_interest"
 _LS_COLUMN = "sum_toptrader_long_short_ratio"
 _METRICS_COLUMNS = {"OI_CHANGE": _OI_COLUMN, "LS_RATIO_Z": _LS_COLUMN}
+_DVOL_COLUMN = "dvol_close"  # cache tag of raw_dvol.close (never a metrics column name)
 
-# (absolute archive path, symbol, column) -> (source stamp, (create_time ns, values));
+# (absolute archive path, symbol or currency, column) -> (source stamp, (stamp ns, values));
 # NULL fields are left out of the column's series (holes).
 _MetricsEntry = tuple[np.ndarray, np.ndarray]
 _METRICS: dict[tuple[str, str, str], tuple[tuple[object, object], _MetricsEntry]] = {}
-# (symbol, column, kind, period) -> (source entry identity, derived value per row)
+# (symbol or currency, column, kind, period) -> (source entry identity, value per row),
+# least recently used first. Bounded by bytes, not entries: a GA run draws a new period per
+# genome (277 LS_RATIO_Z periods at BTC size held 0.87 GiB, MEASURED), while one run reads
+# symbols x indicators keys every bar, which an entry cap below that count re-derives per
+# read. 1 GiB holds ~200 BTC-size arrays; the newest entry stays even when it alone is over.
+DERIVED_CACHE_BYTES = 1 << 30
 _METRICS_DERIVED: dict[tuple[str, str, str, int], tuple[object, np.ndarray]] = {}
 # Per-run resolved archive path, like ``_TAKER_HOT`` (configure() and preflight drop it).
 _METRICS_HOT: tuple[Path | None, Path, str] | None = None
+
+
+def positioning_types(types: Iterable[str]) -> list[str]:
+    """The positioning indicator types among ``types``, sorted (bankroll/shadow refuse them)."""
+    return sorted(POSITIONING_TYPES.intersection(types))
+
+
+def dvol_currency(symbol: str) -> str:
+    """Deribit DVOL index a symbol's DVOL_Z reads: ``ETH`` for ETHUSDT, else ``BTC``."""
+    return "ETH" if symbol == "ETHUSDT" else "BTC"
 
 
 def _no_metrics(symbol: str, path: Path) -> AuxDataUnavailableError:
@@ -645,24 +675,29 @@ def _no_metrics(symbol: str, path: Path) -> AuxDataUnavailableError:
     )
 
 
-def metrics_series(
-    symbol: str, column: str, *, revalidate: bool = False
-) -> tuple[np.ndarray, np.ndarray]:
-    """(create_time ns int64, value float64) of ``symbol``'s non-NULL ``column`` rows, ascending.
+def _no_dvol(currency: str, path: Path) -> AuxDataUnavailableError:
+    return AuxDataUnavailableError(
+        f"No Deribit {currency} DVOL archived in {path} — "
+        f"python -m vibe_quant.data download-dvol --currencies {currency}"
+    )
 
-    Read-only; cached per (absolute archive path, symbol, column). ``revalidate``
-    (preflight) re-stats the archive and its ``-wal`` and reloads when they changed;
-    per-bar lookups reuse the entry loaded for this process (see ``_taker_klines``).
 
-    Raises:
-        AuxDataUnavailableError: archive file or metrics table missing, or no rows.
+def _archive_series(
+    source: tuple[str, str],
+    sql: str,
+    missing: Callable[[Path], AuxDataUnavailableError],
+    revalidate: bool,
+) -> _MetricsEntry:
+    """(stamp ns int64, value float64) rows of ``sql`` (ms stamp, value; arg ``source[0]``).
+
+    Read-only; cached per (absolute archive path, *source). ``revalidate`` (preflight)
+    re-stats the archive and its ``-wal`` and reloads when they changed; per-bar lookups
+    reuse the entry loaded for this process (see ``_taker_klines``). ``missing`` builds
+    the error for a missing archive file or table, or no rows.
     """
     global _METRICS_HOT
-    if column not in _METRICS_COLUMNS.values():
-        msg = f"Unknown metrics column {column!r}"
-        raise ValueError(msg)
     path = _taker_archive_path()
-    key = (str(path), symbol, column)
+    key = (str(path), *source)
     if revalidate:
         _METRICS_HOT = None
     else:
@@ -671,7 +706,7 @@ def metrics_series(
             return cached[1]
     stamp = _taker_source_stamp(path)
     if stamp[0] is None or not path.is_file():
-        raise _no_metrics(symbol, path)
+        raise missing(path)
     hit = _METRICS.get(key)
     if hit is not None and hit[0] == stamp:
         return hit[1]
@@ -680,19 +715,15 @@ def metrics_series(
 
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
-        rows = conn.execute(
-            f"SELECT create_time, {column} FROM raw_metrics "  # noqa: S608  (whitelisted column)
-            f"WHERE symbol = ? AND {column} IS NOT NULL ORDER BY create_time",
-            (symbol,),
-        ).fetchall()
+        rows = conn.execute(sql, (source[0],)).fetchall()
     except sqlite3.OperationalError as e:
         if "no such table" in str(e):
-            raise _no_metrics(symbol, path) from None
+            raise missing(path) from None
         raise
     finally:
         conn.close()
     if not rows:
-        raise _no_metrics(symbol, path)
+        raise missing(path)
     entry = (
         np.fromiter((r[0] for r in rows), dtype=np.int64, count=len(rows)) * 1_000_000,
         np.fromiter((r[1] for r in rows), dtype=np.float64, count=len(rows)),
@@ -701,17 +732,60 @@ def metrics_series(
     return entry
 
 
-def _metrics_entry_hot(symbol: str, column: str) -> _MetricsEntry:
-    """Per-bar form of ``metrics_series(symbol, column)``: no ``getcwd``/``abspath`` per bar."""
+def metrics_series(
+    symbol: str, column: str, *, revalidate: bool = False
+) -> tuple[np.ndarray, np.ndarray]:
+    """(create_time ns int64, value float64) of ``symbol``'s non-NULL ``column`` rows, ascending.
+
+    Cached and revalidated like :func:`_archive_series`.
+
+    Raises:
+        AuxDataUnavailableError: archive file or metrics table missing, or no rows.
+    """
+    if column not in _METRICS_COLUMNS.values():
+        msg = f"Unknown metrics column {column!r}"
+        raise ValueError(msg)
+    sql = (
+        f"SELECT create_time, {column} FROM raw_metrics "  # noqa: S608  (whitelisted column)
+        f"WHERE symbol = ? AND {column} IS NOT NULL ORDER BY create_time"
+    )
+    return _archive_series((symbol, column), sql, lambda p: _no_metrics(symbol, p), revalidate)
+
+
+def dvol_series(currency: str, *, revalidate: bool = False) -> tuple[np.ndarray, np.ndarray]:
+    """(open_time ns int64, close float64) of ``currency``'s hourly DVOL candles, ascending.
+
+    Cached and revalidated like :func:`_archive_series`; NULL closes are holes.
+
+    Raises:
+        AuxDataUnavailableError: archive file or DVOL table missing, or no candles.
+    """
+    sql = (
+        "SELECT open_time, close FROM raw_dvol WHERE currency = ? AND resolution_s = 3600 "
+        "AND close IS NOT NULL ORDER BY open_time"
+    )
+    return _archive_series(
+        (currency, _DVOL_COLUMN), sql, lambda p: _no_dvol(currency, p), revalidate
+    )
+
+
+def _load_series(source: tuple[str, str]) -> _MetricsEntry:
+    if source[1] == _DVOL_COLUMN:
+        return dvol_series(source[0])
+    return metrics_series(*source)
+
+
+def _series_hot(source: tuple[str, str]) -> _MetricsEntry:
+    """Per-bar form of ``_load_series(source)``: no ``getcwd``/``abspath`` per bar."""
     global _METRICS_HOT
     from vibe_quant.data.archive import DEFAULT_ARCHIVE_PATH
 
     hot = _METRICS_HOT
     if hot is not None and hot[0] is _archive_path and hot[1] is DEFAULT_ARCHIVE_PATH:
-        cached = _METRICS.get((hot[2], symbol, column))
+        cached = _METRICS.get((hot[2], *source))
         if cached is not None:
             return cached[1]
-    entry = metrics_series(symbol, column)
+    entry = _load_series(source)
     _METRICS_HOT = (_archive_path, DEFAULT_ARCHIVE_PATH, str(_taker_archive_path()))
     return entry
 
@@ -750,9 +824,16 @@ def _oi_change_rows(ts: np.ndarray, x: np.ndarray, period: int) -> np.ndarray:
         return np.where(ok, x / x[safe] - 1.0, out)
 
 
-def _z_rows(ts: np.ndarray, y: np.ndarray, period: int) -> np.ndarray:
+# Window elements per ``_z_rows`` chunk: bounds the std temporaries to ~32 MiB each
+# (unchunked, one LS_RATIO_Z(288) at 650k rows peaked +1.42 GiB, MEASURED).
+_Z_CHUNK_ELEMS = 1 << 22
+
+
+def _z_rows(
+    ts: np.ndarray, y: np.ndarray, period: int, step_ns: int = METRICS_STEP_NS
+) -> np.ndarray:
     """``(w[-1] - mean(w)) / std(w, ddof=1)`` over the ``period`` rows ending at each row,
-    defined only when they are contiguous (``ts[i] - ts[i-p+1] == (p-1)*STEP``, no holes)
+    defined only when they are contiguous (``ts[i] - ts[i-p+1] == (p-1)*step``, no holes)
     and ``std > 1e-15``."""
     out = np.full(ts.size, np.nan)
     if period < 2 or ts.size < period:
@@ -760,44 +841,75 @@ def _z_rows(ts: np.ndarray, y: np.ndarray, period: int) -> np.ndarray:
     from numpy.lib.stride_tricks import sliding_window_view
 
     win = sliding_window_view(y, period)
-    mean = win.mean(axis=1)
-    std = win.std(axis=1, ddof=1)
-    contiguous = ts[period - 1 :] - ts[: ts.size - period + 1] == (period - 1) * METRICS_STEP_NS
-    with np.errstate(invalid="ignore", divide="ignore"):
-        out[period - 1 :] = np.where(
-            contiguous & (std > 1e-15), (y[period - 1 :] - mean) / std, np.nan
-        )
+    contiguous = ts[period - 1 :] - ts[: ts.size - period + 1] == (period - 1) * step_ns
+    last = y[period - 1 :]
+    rows = max(1, _Z_CHUNK_ELEMS // period)  # win.std makes chunk x period temporaries
+    for a in range(0, win.shape[0], rows):
+        b = a + rows
+        mean = win[a:b].mean(axis=1)
+        std = win[a:b].std(axis=1, ddof=1)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            out[period - 1 + a : period - 1 + b] = np.where(
+                contiguous[a:b] & (std > 1e-15), (last[a:b] - mean) / std, np.nan
+            )
     return out
 
 
-_METRICS_KINDS = {"oi_change": (_OI_COLUMN, _oi_change_rows), "ls_z": (_LS_COLUMN, _z_rows)}
+def _dvol_z_rows(ts: np.ndarray, y: np.ndarray, period: int) -> np.ndarray:
+    return _z_rows(ts, y, period, DVOL_STEP_NS)
 
 
-def _metrics_derived(entry: _MetricsEntry, symbol: str, kind: str, period: int) -> np.ndarray:
-    """Per-row value of ``kind`` on the FULL archived series (row i reads rows <= i only)."""
-    column, fn = _METRICS_KINDS[kind]
-    key = (symbol, column, kind, period)
-    hit = _METRICS_DERIVED.get(key)
+# kind -> (column, per-row derivation, lag, max stale past usable)
+_KINDS: dict[str, tuple[str, Callable[[np.ndarray, np.ndarray, int], np.ndarray], int, int]] = {
+    "oi_change": (_OI_COLUMN, _oi_change_rows, METRICS_LAG_NS, METRICS_MAX_STALE_NS),
+    "ls_z": (_LS_COLUMN, _z_rows, METRICS_LAG_NS, METRICS_MAX_STALE_NS),
+    "dvol_z": (_DVOL_COLUMN, _dvol_z_rows, DVOL_LAG_NS, DVOL_MAX_STALE_NS),
+}
+
+
+def _source_of(symbol: str, column: str) -> tuple[str, str]:
+    """Cache source of ``column`` for ``symbol``: DVOL is per currency, metrics per symbol."""
+    return (dvol_currency(symbol), column) if column == _DVOL_COLUMN else (symbol, column)
+
+
+def _positioning_derived(
+    entry: _MetricsEntry, source: tuple[str, str], kind: str, period: int
+) -> np.ndarray:
+    """Per-row value of ``kind`` on the FULL archived series (row i reads rows <= i only).
+
+    LRU over ``DERIVED_CACHE_BYTES`` of arrays: a hit moves to the newest end, the oldest
+    go until the rest fit.
+    """
+    key = (*source, kind, period)
+    hit = _METRICS_DERIVED.pop(key, None)
     if hit is not None and hit[0] is entry:
+        _METRICS_DERIVED[key] = hit
         return hit[1]
-    derived = fn(entry[0], entry[1], period)
+    derived = _KINDS[kind][1](entry[0], entry[1], period)
     _METRICS_DERIVED[key] = (entry, derived)
+    total = sum(v[1].nbytes for v in _METRICS_DERIVED.values())
+    while total > DERIVED_CACHE_BYTES and len(_METRICS_DERIVED) > 1:
+        total -= _METRICS_DERIVED.pop(next(iter(_METRICS_DERIVED)))[1].nbytes
     return derived
 
 
-def _metrics_asof(symbol: str, kind: str, bar_close_ns: np.ndarray, period: int) -> np.ndarray:
-    entry = metrics_series(symbol, _METRICS_KINDS[kind][0])
-    derived = _metrics_derived(entry, symbol, kind, period)
-    idx = _asof_index(entry[0], bar_close_ns, METRICS_LAG_NS, METRICS_MAX_STALE_NS)
+def _positioning_asof(symbol: str, kind: str, bar_close_ns: np.ndarray, period: int) -> np.ndarray:
+    column, _, lag_ns, max_stale_ns = _KINDS[kind]
+    source = _source_of(symbol, column)
+    entry = _load_series(source)
+    derived = _positioning_derived(entry, source, kind, period)
+    idx = _asof_index(entry[0], bar_close_ns, lag_ns, max_stale_ns)
     return np.where(idx >= 0, derived[np.clip(idx, 0, None)], np.nan)
 
 
-def _metrics_at(symbol: str, kind: str, close_ns: int, period: int) -> float:
-    entry = _metrics_entry_hot(symbol, _METRICS_KINDS[kind][0])
-    i = _asof_index_at(entry[0], close_ns, METRICS_LAG_NS, METRICS_MAX_STALE_NS)
+def _positioning_at(symbol: str, kind: str, close_ns: int, period: int) -> float:
+    column, _, lag_ns, max_stale_ns = _KINDS[kind]
+    source = _source_of(symbol, column)
+    entry = _series_hot(source)
+    i = _asof_index_at(entry[0], close_ns, lag_ns, max_stale_ns)
     if i < 0:
         return float("nan")
-    return float(_metrics_derived(entry, symbol, kind, period)[i])
+    return float(_positioning_derived(entry, source, kind, period)[i])
 
 
 def oi_change_asof(symbol: str, bar_close_ns: np.ndarray, period: int) -> np.ndarray:
@@ -807,23 +919,35 @@ def oi_change_asof(symbol: str, bar_close_ns: np.ndarray, period: int) -> np.nda
     value is ``x[i] / x[j] - 1`` with j the row stamped ``ts[i] - period * 5m``. NaN
     when no row is usable, j is absent or ``x[j] <= 0``.
     """
-    return _metrics_asof(symbol, "oi_change", bar_close_ns, period)
+    return _positioning_asof(symbol, "oi_change", bar_close_ns, period)
 
 
 def oi_change_at(symbol: str, close_ns: int, period: int) -> float:
     """:func:`oi_change_asof` for ONE bar close (bit-equal, no array allocation)."""
-    return _metrics_at(symbol, "oi_change", close_ns, period)
+    return _positioning_at(symbol, "oi_change", close_ns, period)
 
 
 def ls_ratio_z_asof(symbol: str, bar_close_ns: np.ndarray, period: int) -> np.ndarray:
     """Z-score of the top-trader long/short position ratio over ``period`` contiguous
     5-minute ROWS ending at the as-of row (strict: a hole in the window is NaN)."""
-    return _metrics_asof(symbol, "ls_z", bar_close_ns, period)
+    return _positioning_asof(symbol, "ls_z", bar_close_ns, period)
 
 
 def ls_ratio_z_at(symbol: str, close_ns: int, period: int) -> float:
     """:func:`ls_ratio_z_asof` for ONE bar close (bit-equal, no array allocation)."""
-    return _metrics_at(symbol, "ls_z", close_ns, period)
+    return _positioning_at(symbol, "ls_z", close_ns, period)
+
+
+def dvol_z_asof(symbol: str, bar_close_ns: np.ndarray, period: int) -> np.ndarray:
+    """Z-score of the Deribit DVOL close (``dvol_currency(symbol)``) over ``period``
+    contiguous hourly candles ending at the as-of candle (see ``DVOL_LAG_NS``; strict:
+    a missing candle in the window is NaN)."""
+    return _positioning_asof(symbol, "dvol_z", bar_close_ns, period)
+
+
+def dvol_z_at(symbol: str, close_ns: int, period: int) -> float:
+    """:func:`dvol_z_asof` for ONE bar close (bit-equal, no array allocation)."""
+    return _positioning_at(symbol, "dvol_z", close_ns, period)
 
 
 def _preflight_metrics(
@@ -844,12 +968,38 @@ def _preflight_metrics(
                     f"(first row {_iso(int(ts[0]))}, window start {start_date}) — download-metrics"
                 )
                 raise AuxDataUnavailableError(msg)
-            if int(ts[-1]) < end_ns - _METRICS_END_MARGIN_NS:
+            if int(ts[-1]) < end_ns - _POSITIONING_END_MARGIN_NS:
                 msg = (
                     f"Binance metrics for {symbol} end before the requested window "
                     f"(last row {_iso(int(ts[-1]))}, window end {end_date}) — download-metrics"
                 )
                 raise AuxDataUnavailableError(msg)
+
+
+def _preflight_dvol(
+    indicator_types: list[str],
+    symbols: list[str],
+    start_ns: int,
+    end_ns: int,
+    start_date: str,
+    end_date: str,
+) -> None:
+    if not DVOL_TYPES.intersection(indicator_types):
+        return
+    for currency in sorted({dvol_currency(s) for s in symbols}):
+        ts, _ = dvol_series(currency, revalidate=True)
+        if int(ts[0]) > start_ns + PREFLIGHT_START_MARGIN_NS:
+            msg = (
+                f"Deribit {currency} DVOL starts after the requested window "
+                f"(first candle {_iso(int(ts[0]))}, window start {start_date}) — download-dvol"
+            )
+            raise AuxDataUnavailableError(msg)
+        if int(ts[-1]) < end_ns - _POSITIONING_END_MARGIN_NS:
+            msg = (
+                f"Deribit {currency} DVOL ends before the requested window "
+                f"(last candle {_iso(int(ts[-1]))}, window end {end_date}) — download-dvol"
+            )
+            raise AuxDataUnavailableError(msg)
 
 
 # -- cross-asset regime references (BTC_TREND / BTC_ROC / OWN_TREND) -------------------

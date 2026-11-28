@@ -87,6 +87,14 @@
       "period": "int"
     }
   },
+  "DVOL_Z": {
+    "default_params": {
+      "period": 168
+    },
+    "param_schema": {
+      "period": "int"
+    }
+  },
   "EMA": {
     "default_params": {
       "period": 14

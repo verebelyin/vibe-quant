@@ -84,6 +84,7 @@ class TestIndicatorSpec:
             "BTC_ROC",
             "OI_CHANGE",
             "LS_RATIO_Z",
+            "DVOL_Z",
         )
         for name in flagged:
             spec = indicator_registry.get(name)

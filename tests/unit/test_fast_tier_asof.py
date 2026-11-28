@@ -386,6 +386,7 @@ def test_registry_has_an_asof_context_spec() -> None:
     assert _ASOF == [
         "BTC_ROC",
         "BTC_TREND",
+        "DVOL_Z",
         "FUNDING",
         "FUNDING_Z",
         "LS_RATIO_Z",
@@ -397,11 +398,12 @@ def test_registry_has_an_asof_context_spec() -> None:
 
 @needs_catalog
 @needs_archive
-@pytest.mark.parametrize("name", [n for n in _ASOF if n not in aux_data.METRICS_TYPES])
+@pytest.mark.parametrize("name", [n for n in _ASOF if n not in aux_data.POSITIONING_TYPES])
 def test_every_asof_spec_equals_generated_stream(name: str, _aux_data: None) -> None:
     """Registry-wide: an asof spec's whole-frame column == its generated per-bar stream.
 
-    Positioning specs run in the synthetic test below (the repo archive has no metrics).
+    Positioning specs run in the synthetic test below (the repo archive has no metrics or
+    DVOL).
     """
     spec = indicator_registry.get(name)
     assert spec is not None and spec.compute_fn is not None
@@ -473,16 +475,36 @@ def _metrics_archive(path: Path, symbol: str, first: datetime, last: datetime) -
     return path
 
 
-@pytest.mark.parametrize("name", sorted(aux_data.METRICS_TYPES))
+def _dvol_archive(path: Path, currency: str, first: datetime, last: datetime) -> Path:
+    """Contiguous hourly DVOL candles of ``currency`` opened in ``[first, last]`` (rng(6))."""
+    from vibe_quant.data.archive import RawDataArchive
+
+    n = int((last - first) / timedelta(hours=1)) + 1
+    close = 40.0 + np.random.default_rng(6).random(n) * 20.0
+    first_ms = int(first.timestamp()) * 1000
+    archive = RawDataArchive(path)
+    try:
+        candles = [(first_ms + i * 3_600_000, c, c, c, c) for i, c in enumerate(close.tolist())]
+        archive.insert_dvol(currency, 3600, candles, "test")
+    finally:
+        archive.close()
+    return path
+
+
+@pytest.mark.parametrize("name", sorted(aux_data.POSITIONING_TYPES))
 def test_positioning_spec_equals_generated_stream_synthetic(name: str, tmp_path: Path) -> None:
-    """R12: 1440 synthetic 1m ZEC bars of 2026-03-02 over a tmp metrics archive (from
-    2026-02-28 00:00, ruling R-pos-2): the generated per-bar scalar stream == the
-    whole-frame as-of column, bit for bit, with no NaN and no catalog."""
+    """R12: 1440 synthetic 1m ZEC bars of 2026-03-02 over a tmp archive (metrics from
+    2026-02-28 00:00, ruling R-pos-2; BTC DVOL from 2026-02-21 00:00, > 168 h before the
+    first bar): the generated per-bar scalar stream == the whole-frame as-of column, bit
+    for bit, with no NaN and no catalog."""
     archive = _metrics_archive(
         tmp_path / "raw_data.db",
         "ZECUSDT",
         datetime(2026, 2, 28, tzinfo=UTC),
         datetime(2026, 3, 3, tzinfo=UTC),
+    )
+    _dvol_archive(
+        archive, "BTC", datetime(2026, 2, 21, tzinfo=UTC), datetime(2026, 3, 3, tzinfo=UTC)
     )
     aux_data.configure(archive, None)
     try:
@@ -517,6 +539,12 @@ def test_positioning_spec_equals_generated_stream_synthetic(name: str, tmp_path:
             short = int(datetime(2026, 3, 1, 0, 4, tzinfo=UTC).timestamp()) * 10**9
             assert np.isnan(aux_data.ls_ratio_z_at("ZECUSDT", short, 288))
             assert np.isfinite(aux_data.ls_ratio_z_at("ZECUSDT", short + MIN, 288))
+        if name == "DVOL_Z":
+            # ZECUSDT reads BTC DVOL; the last close whose as-of candle has < 168 candles
+            # up to it (02-27 23:59 reads candle 22:00 = index 166) is NaN, the next is not.
+            short = int(datetime(2026, 2, 27, 23, 59, tzinfo=UTC).timestamp()) * 10**9
+            assert np.isnan(aux_data.dvol_z_at("ZECUSDT", short, 168))
+            assert np.isfinite(aux_data.dvol_z_at("ZECUSDT", short + MIN, 168))
     finally:
         aux_data.configure(None, None)
 

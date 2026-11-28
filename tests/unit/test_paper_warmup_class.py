@@ -131,6 +131,7 @@ def test_context_indicators_refuse_the_start() -> None:
         "OWN_TREND",
         "OI_CHANGE",
         "LS_RATIO_Z",
+        "DVOL_Z",
     ):
         assert _refusal(name) == CONTEXT_REASON, name
 

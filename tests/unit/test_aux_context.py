@@ -164,8 +164,11 @@ def test_invoke_requires_context() -> None:
         invoke_compute_fn(spec, df, {})
 
 
-@pytest.mark.parametrize("ind_type", ["FUNDING_Z", "TAKER_IMBALANCE", "OI_CHANGE", "LS_RATIO_Z"])
+@pytest.mark.parametrize(
+    "ind_type", ["FUNDING_Z", "TAKER_IMBALANCE", "OI_CHANGE", "LS_RATIO_Z", "DVOL_Z"]
+)
 def test_paper_rejects_context_indicator(ind_type: str) -> None:
+    import vibe_quant.dsl.plugins.dvol  # noqa: F401
     import vibe_quant.dsl.plugins.funding  # noqa: F401
     import vibe_quant.dsl.plugins.positioning  # noqa: F401
     import vibe_quant.dsl.plugins.taker  # noqa: F401

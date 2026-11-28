@@ -99,6 +99,7 @@ def test_tradingview_ma_plugins_do_not_enter_the_ga_pools() -> None:
         "BTC_TREND",
         "CCI",
         "DONCHIAN",
+        "DVOL_Z",
         "FUNDING",
         "FUNDING_Z",
         "LS_RATIO_Z",

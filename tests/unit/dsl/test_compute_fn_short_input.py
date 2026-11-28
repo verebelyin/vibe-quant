@@ -76,6 +76,11 @@ def synthetic_aux(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         aux_data, "metrics_series", lambda symbol, column, revalidate=False: metrics[column]
     )
+    # DVOL_Z reads hourly BTC DVOL candles: days 260-301, no holes (> 720 candles before day 300).
+    n_candles = 42 * 24
+    dvol_ts = 260 * _DAY_NS + np.arange(n_candles, dtype=np.int64) * aux_data.DVOL_STEP_NS
+    dvol = (dvol_ts, 40.0 + rng.rand(n_candles) * 20.0)
+    monkeypatch.setattr(aux_data, "dvol_series", lambda currency, revalidate=False: dvol)
     monkeypatch.setattr(aux_data, "_METRICS_HOT", None)
     for cache in ("_SNAPPED", "_DERIVED", "_REF", "_REF_DERIVED", "_METRICS", "_METRICS_DERIVED"):
         monkeypatch.setattr(aux_data, cache, {})
@@ -190,6 +195,7 @@ def test_context_fns_produce_values_on_synthetic_data() -> None:
         "FUNDING_Z",
         "OI_CHANGE",
         "LS_RATIO_Z",
+        "DVOL_Z",
     }
     for spec in context_specs:
         assert spec.compute_fn is not None
