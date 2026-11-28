@@ -153,6 +153,8 @@ def _run(
     result.notes.update(runner._execution_notes(r.run_config, r.detail))
     result.notes["validation_input"] = r.identity
     result.notes["fee_schedule"] = r.venue_config.fee_schedule.to_notes()
+    if result.cost_edge is not None:
+        result.notes["cost_edge"] = result.cost_edge.to_notes()
     if result.funding_fallback_settlements:
         result.notes["funding"] = {
             "fallback_settlements": result.funding_fallback_settlements,

@@ -1599,3 +1599,35 @@ def test_a_walk_forward_window_refused_by_the_guard_fails_the_whole_run_without_
         row["error_message"]
     )
     assert stored is None  # no aggregate of the surviving windows
+
+
+def test_cost_edge_truncated(
+    monkeypatch: pytest.MonkeyPatch, apply_calls: list[dict[str, Any]]
+) -> None:
+    """R12: a cross bust drops P-2 (adds nothing); the hit P-1 adds its kept entry fill only.
+
+    Its 41000 exit lies after the hit and the hit leg pays clearance, not a tier fee: both
+    stay out of the turnover, and the clearance stays out of the commissions.
+    """
+    mk = {BTC: crash_marks(to=30000.0)}
+    install_apply(monkeypatch, apply_calls, mk)
+    later = Pos(
+        "P-2",
+        BTC,
+        [
+            Fill(bar(45), OrderSide.BUY, 1.0, 30000.0, 15.0),
+            Fill(bar(50), OrderSide.SELL, 1.0, 30500.0, 15.0),
+        ],
+    )
+    res = run([long_btc(), later], mk, mode="cross")
+
+    (trade,) = res.trades
+    assert liq_note(res)["dropped"] == 1 and trade.exit_reason == "liquidation"
+    ce = res.cost_edge
+    assert ce is not None
+    assert ce.turnover == 40000.0
+    assert trade.exit_fee > 0.0  # the clearance fee
+    assert ce.commissions == res.total_fees - trade.exit_fee
+    assert ce.commissions == pytest.approx(20.0)
+    assert ce.slippage == 0.0
+    assert ce.net_pnl == trade.net_pnl

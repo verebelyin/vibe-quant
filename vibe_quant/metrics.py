@@ -895,3 +895,6 @@ class PerformanceMetrics:
     # Funding settlements charged at the fallback rate because the archive
     # had no rate for them (0 = funding fully from archived rates).
     funding_fallback_settlements: int = 0
+    # Edge and costs per unit of traded notional (:class:`CostEdge`); report only, read by
+    # no score or gate. ``None`` = not recorded (e.g. no engine result).
+    cost_edge: CostEdge | None = None

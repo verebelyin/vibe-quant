@@ -43,7 +43,7 @@ from vibe_quant.launch_settings import (
 from vibe_quant.liquidation_settings import LiquidationConfigError
 from vibe_quant.logging.events import EventType, create_event
 from vibe_quant.logging.writer import EventWriter
-from vibe_quant.metrics import SHARPE_UNIT, fmt_sharpe, profit_factor
+from vibe_quant.metrics import SHARPE_UNIT, CostEdge, fmt_sharpe, profit_factor
 from vibe_quant.modeled_costs import (
     DEFAULT_AVG_BAR_VOLUME,
     DEFAULT_BAR_VOLATILITY,
@@ -825,6 +825,8 @@ class ValidationRunner:
                 entry_order=entry_order,
             )
             result.notes["fee_schedule"] = venue_config.fee_schedule.to_notes()
+            if result.cost_edge is not None:
+                result.notes["cost_edge"] = result.cost_edge.to_notes()
             if result.funding_fallback_settlements:
                 result.notes["funding"] = {
                     "fallback_settlements": result.funding_fallback_settlements,
@@ -1069,6 +1071,8 @@ class ValidationRunner:
             self._store_results(run_id, aggregate)
             aggregate.notes.update(self._execution_notes(run_config, effective_detail))
             aggregate.notes["fee_schedule"] = venue_config.fee_schedule.to_notes()
+            if aggregate.cost_edge is not None:
+                aggregate.notes["cost_edge"] = aggregate.cost_edge.to_notes()
             # the first force-stopped window fails the run; its stop note is kept with it
             stopped = next(
                 (
@@ -1235,6 +1239,8 @@ class ValidationRunner:
             avg_win=_count_weighted_avg("avg_win", "winning_trades"),
             avg_loss=_count_weighted_avg("avg_loss", "losing_trades"),
             starting_balance=window_results[0].starting_balance,
+            # field sums over the windows; any unrecorded window leaves it unrecorded
+            cost_edge=CostEdge.total([r.cost_edge for r in window_results]),
         )
         aggregate.liquidation_events = [e for r in window_results for e in r.liquidation_events]
         liquidation_note = ValidationRunner._aggregate_liquidation_notes(

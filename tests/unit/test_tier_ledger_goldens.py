@@ -78,6 +78,16 @@ MODE_OFF_SCENARIOS = ["G1", "G2", "G3", "G4", "G5", "G5b", "G6", "G7", "G13"]
 #: The liquidation goldens, each pinned with the mode ON in both tiers.
 #: Every intended hit: liquidation_count >= the value here (0 = identity overlay).
 LIQUIDATION_HITS = {"G8": 1, "G9": 1, "G10": 0, "G11": 1, "G12": 1}
+#: Hand-computed screening turnover (1 BTC per fill): G8 A's 40000 entry (its exit follows
+#: the hit) + three 40000-in winners; G9/G12 the hit position's entry only (G12's B1 is
+#: dropped); G10 every fill (identity overlay); G11 A's entry + S's entry + S's 40000 mark.
+COST_EDGE_TURNOVER = {
+    "G8": 40000.0 + 80500.0 + 80200.0 + 79900.0,
+    "G9": 40000.0,
+    "G10": 78000.0 + 80500.0 + 80200.0 + 79900.0,
+    "G11": 120000.0,
+    "G12": 40000.0,
+}
 
 
 @pytest.fixture(autouse=True)
@@ -699,6 +709,21 @@ def test_liquidation_goldens_match(
     assert observed["screening"]["liquidation_count"] >= expected
     for label in ("validation_post_fill", "validation_engine_slippage"):
         assert observed[label]["notes"]["liquidation"]["count"] >= expected
+
+    # R11: the screening cost edge of the truncated run. Turnover = the tier-fee fills the
+    # overlay keeps (a hit leg, a post-hit fill and a dropped position add nothing) plus
+    # survivor mark legs; clearance is not a commission.
+    screening = observed["screening"]
+    ce = {key: float(value) for key, value in screening["cost_edge"].items()}
+    assert ce["turnover"] == COST_EDGE_TURNOVER[scenario]
+    assert ce["commissions"] == float(screening["total_fees"]) - float(
+        screening["liquidation_forfeited"]
+    )
+    assert ce["slippage"] == 0.0
+    assert ce["net_pnl"] == float(screening["total_return"]) * inputs.balance
+    if expected > 0:  # a hit: the return IS the truncated trades' sum (fake NT stats otherwise)
+        trade_sum = sum(inputs.runner.last_trade_pnls)
+        assert abs(ce["net_pnl"] - trade_sum) <= 1e-9 * max(1.0, abs(trade_sum))
 
     if scenario == "G10":
         # Identity overlay: the mode-on run keeps every mode-off number (the note and

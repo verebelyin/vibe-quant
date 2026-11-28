@@ -18,6 +18,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "121100.0",
+          "net_pnl": "15.0",
+          "commissions": "0.24000000000000002",
+          "slippage": "0.0"
+        },
         "parameters": {},
         "mtm_sharpe_daily": "0.0",
         "mtm_skewness": "0.0",
@@ -43,6 +49,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "121100.0",
+          "net_pnl": "386.878045769399",
+          "commissions": "0.16",
+          "slippage": "12.961954230600922"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "0.28108823314406783",
@@ -119,6 +131,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "121100.0",
+          "net_pnl": "399.84",
+          "commissions": "0.16",
+          "slippage": "0.0"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "5.119300872054389",
@@ -197,6 +215,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "182.46",
+          "net_pnl": "14.494499999999999",
+          "commissions": "0.3055",
+          "slippage": "0.0"
+        },
         "parameters": {},
         "mtm_sharpe_daily": "0.0",
         "mtm_skewness": "0.0",
@@ -222,6 +246,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "182.46",
+          "net_pnl": "-0.7757769783637486",
+          "commissions": "0.3055",
+          "slippage": "0.010276978363748645"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "4.752339583721553",
@@ -280,6 +310,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "182.46",
+          "net_pnl": "-0.7655",
+          "commissions": "0.3055",
+          "slippage": "0.0"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "4.759433756053524",
@@ -340,6 +376,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "80100.0",
+          "net_pnl": "3.000000000000001",
+          "commissions": "0.0",
+          "slippage": "0.0"
+        },
         "parameters": {},
         "mtm_sharpe_daily": "0.0",
         "mtm_skewness": "0.0",
@@ -365,6 +407,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "80100.0",
+          "net_pnl": "78.92903118841025",
+          "commissions": "0.0",
+          "slippage": "9.070968811589744"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "-0.5233085098059292",
@@ -423,6 +471,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "80100.0",
+          "net_pnl": "88.0",
+          "commissions": "0.0",
+          "slippage": "0.0"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "0.4397271155535749",
@@ -483,6 +537,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "0.0",
+          "net_pnl": "15.0",
+          "commissions": "0.0",
+          "slippage": "0.0"
+        },
         "parameters": {},
         "mtm_sharpe_daily": "0.0",
         "mtm_skewness": "0.0",
@@ -508,6 +568,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "0.0",
+          "net_pnl": "0.0",
+          "commissions": "0.0",
+          "slippage": "0.0"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "0.0",
@@ -547,6 +613,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "0.0",
+          "net_pnl": "0.0",
+          "commissions": "0.0",
+          "slippage": "0.0"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "0.0",
@@ -588,6 +660,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "240040.0",
+          "net_pnl": "15.0",
+          "commissions": "0.0",
+          "slippage": "0.0"
+        },
         "parameters": {},
         "mtm_sharpe_daily": "0.0",
         "mtm_skewness": "0.0",
@@ -613,6 +691,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "240040.0",
+          "net_pnl": "12.816537409063649",
+          "commissions": "0.0",
+          "slippage": "27.183462590936358"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "-0.7749483179784166",
@@ -707,6 +791,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "240040.0",
+          "net_pnl": "40.0",
+          "commissions": "0.0",
+          "slippage": "0.0"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "5.119300872054389",
@@ -807,6 +897,12 @@
           "0.1"
         ],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "6300.0",
+          "net_pnl": "15.0",
+          "commissions": "0.0",
+          "slippage": "0.0"
+        },
         "parameters": {},
         "mtm_sharpe_daily": "0.0",
         "mtm_skewness": "0.0",
@@ -832,6 +928,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "6300.0",
+          "net_pnl": "299.28655301481876",
+          "commissions": "0.0",
+          "slippage": "0.713446985181216"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "4.617562581272292",
@@ -944,6 +1046,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "6300.0",
+          "net_pnl": "300.0",
+          "commissions": "0.0",
+          "slippage": "0.0"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "5.119300872054389",
@@ -1063,6 +1171,12 @@
           "-0.001"
         ],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "8000.0",
+          "net_pnl": "15.0",
+          "commissions": "0.0",
+          "slippage": "0.0"
+        },
         "parameters": {},
         "mtm_sharpe_daily": "0.0",
         "mtm_skewness": "0.0",
@@ -1088,6 +1202,12 @@
         "kurtosis": "6.6421",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "8000.0",
+          "net_pnl": "-1.3059644256269407",
+          "commissions": "0.0",
+          "slippage": "0.9059644256269408"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "4.4893104040851055",
@@ -1200,6 +1320,12 @@
         "kurtosis": "6.6421",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "8000.0",
+          "net_pnl": "-0.4",
+          "commissions": "0.0",
+          "slippage": "0.0"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "5.119300872054389",
@@ -1314,6 +1440,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "90400.0",
+          "net_pnl": "15.0",
+          "commissions": "0.0",
+          "slippage": "0.0"
+        },
         "parameters": {},
         "mtm_sharpe_daily": "0.0",
         "mtm_skewness": "0.0",
@@ -1339,6 +1471,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "90400.0",
+          "net_pnl": "589.503250048039",
+          "commissions": "0.0",
+          "slippage": "10.49674995196101"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "0.7274830394572367",
@@ -1415,6 +1553,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "90400.0",
+          "net_pnl": "600.0",
+          "commissions": "0.0",
+          "slippage": "0.0"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "5.119300872054389",
@@ -1493,6 +1637,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "160015.0",
+          "net_pnl": "15.0",
+          "commissions": "0.0",
+          "slippage": "0.0"
+        },
         "parameters": {},
         "mtm_sharpe_daily": null,
         "mtm_skewness": null,
@@ -1518,6 +1668,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "160015.0",
+          "net_pnl": "-3.120987195836868",
+          "commissions": "0.0",
+          "slippage": "18.120987195836868"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "-0.3163532180610562",
@@ -1594,6 +1750,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "160015.0",
+          "net_pnl": "15.0",
+          "commissions": "0.0",
+          "slippage": "0.0"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "5.119300872054389",
@@ -1677,6 +1839,12 @@
           "-0.0025"
         ],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "280600.0",
+          "net_pnl": "-3420.0000000000005",
+          "commissions": "20.0",
+          "slippage": "0.0"
+        },
         "parameters": {},
         "mtm_sharpe_daily": "0.0",
         "mtm_skewness": "0.0",
@@ -1706,6 +1874,12 @@
         "kurtosis": "6.7371",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "280600.0",
+          "net_pnl": "-3451.776702228865",
+          "commissions": "20.0",
+          "slippage": "31.776702228864952"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "-0.9999829615325592",
@@ -1874,6 +2048,12 @@
         "kurtosis": "6.7371",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "280600.0",
+          "net_pnl": "-3420.0",
+          "commissions": "20.0",
+          "slippage": "0.0"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "-0.9999810612478497",
@@ -2044,6 +2224,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "40000.0",
+          "net_pnl": "-4000.0",
+          "commissions": "20.0",
+          "slippage": "0.0"
+        },
         "parameters": {},
         "mtm_sharpe_daily": null,
         "mtm_skewness": null,
@@ -2073,6 +2259,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "40000.0",
+          "net_pnl": "-4000.0",
+          "commissions": "20.0",
+          "slippage": "4.529822128134704"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "-1.0",
@@ -2187,6 +2379,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "40000.0",
+          "net_pnl": "-4000.0",
+          "commissions": "20.0",
+          "slippage": "0.0"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "-1.0",
@@ -2308,6 +2506,12 @@
           "-0.0025"
         ],
         "funding_fallback_settlements": 1,
+        "cost_edge": {
+          "turnover": "318600.0",
+          "net_pnl": "596.0",
+          "commissions": "39.0",
+          "slippage": "0.0"
+        },
         "parameters": {},
         "mtm_sharpe_daily": "0.0",
         "mtm_skewness": "0.0",
@@ -2337,6 +2541,12 @@
         "kurtosis": "6.1228",
         "trade_returns": [],
         "funding_fallback_settlements": 1,
+        "cost_edge": {
+          "turnover": "318600.0",
+          "net_pnl": "-1479.0800332505928",
+          "commissions": "39.0",
+          "slippage": "36.08003325059292"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "4.426422381585667",
@@ -2468,6 +2678,12 @@
         "kurtosis": "6.1228",
         "trade_returns": [],
         "funding_fallback_settlements": 1,
+        "cost_edge": {
+          "turnover": "318600.0",
+          "net_pnl": "-1443.0",
+          "commissions": "39.0",
+          "slippage": "0.0"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "5.0463839502004495",
@@ -2601,6 +2817,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 1,
+        "cost_edge": {
+          "turnover": "120000.0",
+          "net_pnl": "-4064.0",
+          "commissions": "60.0",
+          "slippage": "0.0"
+        },
         "parameters": {},
         "mtm_sharpe_daily": "0.0",
         "mtm_skewness": "0.0",
@@ -2630,6 +2852,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 1,
+        "cost_edge": {
+          "turnover": "120000.0",
+          "net_pnl": "-4077.589466384404",
+          "commissions": "60.0",
+          "slippage": "13.589466384404112"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "-0.999997916308307",
@@ -2762,6 +2990,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 1,
+        "cost_edge": {
+          "turnover": "120000.0",
+          "net_pnl": "-4064.0",
+          "commissions": "60.0",
+          "slippage": "0.0"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "-0.9999978181807836",
@@ -2896,6 +3130,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "40000.0",
+          "net_pnl": "-4000.0",
+          "commissions": "20.0",
+          "slippage": "0.0"
+        },
         "parameters": {},
         "mtm_sharpe_daily": null,
         "mtm_skewness": null,
@@ -2925,6 +3165,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "40000.0",
+          "net_pnl": "-4000.0",
+          "commissions": "20.0",
+          "slippage": "4.529822128134704"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "-1.0",
@@ -3039,6 +3285,12 @@
         "kurtosis": "3.0",
         "trade_returns": [],
         "funding_fallback_settlements": 0,
+        "cost_edge": {
+          "turnover": "40000.0",
+          "net_pnl": "-4000.0",
+          "commissions": "20.0",
+          "slippage": "0.0"
+        },
         "run_id": 1,
         "strategy_name": "golden",
         "cagr": "-1.0",

@@ -13,6 +13,7 @@ import pytest
 import vibe_quant.data.catalog as catalog_mod
 from vibe_quant.data.catalog import CatalogManager
 from vibe_quant.db.state_manager import StateManager
+from vibe_quant.metrics import CostEdge
 from vibe_quant.validation.latency import LatencyPreset
 from vibe_quant.validation.runner import (
     TradeRecord,
@@ -1392,3 +1393,98 @@ def _one_minute_data(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         return _COVERED if interval == "1m" else None
 
     monkeypatch.setattr(CatalogManager, "get_bar_date_range", covered)
+
+
+_WINDOW_EDGE = CostEdge(1234.5, 6.25, 0.5, 0.125)
+
+
+@pytest.mark.parametrize("first_edge", [CostEdge(0.0, 0.0, 0.0, 0.0), None])
+def test_walk_forward_aggregate_sums_the_window_cost_edges(
+    temp_db: Path,
+    temp_logs: Path,
+    state_with_strategy: StateManager,
+    first_edge: CostEdge | None,
+) -> None:
+    """R9b: a zero-trade window adds 0.0 (aggregate == the other window, not n/a); an
+    unrecorded window makes the aggregate unrecorded (no note), never a partial sum."""
+    state_with_strategy.close()
+    runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
+    calls: list[int] = []
+
+    def _fake_backtest(**kwargs: object) -> ValidationResult:
+        calls.append(1)
+        result = _make_mock_result(
+            run_id=int(kwargs["run_id"]),  # type: ignore[call-overload]
+            strategy_name=str(kwargs["strategy_name"]),
+        )
+        if len(calls) == 1:
+            result.total_trades, result.trades = 0, []
+            result.cost_edge = first_edge
+        else:
+            result.cost_edge = _WINDOW_EDGE
+        return result
+
+    runner._run_backtest = _fake_backtest  # type: ignore[assignment]
+    window_results = runner.run_walk_forward(run_id=1, train_days=14, test_days=7, step_days=7)
+    runner.close()
+    assert len(window_results) == 2
+
+    state = StateManager(temp_db)
+    stored = state.get_backtest_result(1)
+    state.close()
+    assert stored is not None
+    notes = json.loads(str(stored["notes"]))
+    if first_edge is None:
+        assert "cost_edge" not in notes
+    else:
+        assert notes["cost_edge"] == _WINDOW_EDGE.to_notes()
+        assert notes["cost_edge"]["turnover"] == 1234.5
+
+
+@pytest.mark.parametrize("edge", [_WINDOW_EDGE, None])
+def test_variant_result_records_the_cost_edge_note(
+    temp_db: Path, temp_logs: Path, edge: CostEdge | None
+) -> None:
+    """The variant path (bankroll seam) adds the same note as ``run()``; none when unrecorded."""
+    from types import SimpleNamespace
+
+    from vibe_quant.fees import FeeSchedule
+    from vibe_quant.validation import variant
+
+    runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
+
+    def _fake_backtest(**kwargs: object) -> ValidationResult:
+        result = _make_mock_result()
+        result.cost_edge = edge
+        return result
+
+    runner._run_backtest = _fake_backtest  # type: ignore[assignment]
+    resolved = SimpleNamespace(
+        dsl=None,
+        run_config={"id": 7},
+        window_note=None,
+        detail=None,
+        latency=None,
+        venue_config=SimpleNamespace(fee_schedule=FeeSchedule()),
+        launch=None,
+        identity={"k": "v"},
+    )
+    try:
+        result = variant._run(
+            runner,
+            resolved,  # type: ignore[arg-type]
+            strategy_name="s",
+            archive_path=temp_logs / "unused.db",
+            mtm_probe=False,
+        )
+    finally:
+        runner.close()
+    if edge is None:
+        assert "cost_edge" not in result.notes
+    else:
+        assert result.notes["cost_edge"] == {
+            "turnover": 1234.5,
+            "gross_edge_bps": (6.25 + 0.5 + 0.125) / 1234.5 * 1e4,
+            "cost_paid_bps": (0.5 + 0.125) / 1234.5 * 1e4,
+            "breakeven_fee_bps": (6.25 + 0.5) / 1234.5 * 1e4,
+        }

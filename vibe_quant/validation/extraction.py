@@ -20,6 +20,7 @@ import numpy as np
 from vibe_quant.liquidation_settings import LIQUIDATION_MODES  # one definition, shared
 from vibe_quant.metrics import (
     BarSeries,
+    CostEdge,
     DailyReturns,
     LedgerEvent,
     daily_balance_returns,
@@ -1342,6 +1343,7 @@ def extract_trades(
         if cost_ledger is not None:
             reconcile(cost_ledger, [])
         result.profit_factor = 0.0
+        result.cost_edge = CostEdge(0.0, 0.0, 0.0, 0.0)  # no fills: turnover 0, bps n/a
         # No trades: 0.0, never NT's stat (bd vibe-quant-neuvu.4). Same rule as
         # the computed path below; this branch returns before it.
         result.win_rate = 0.0
@@ -1569,6 +1571,18 @@ def extract_trades(
         accounting.total_fees,
         accounting.total_slippage,
         accounting.total_funding,
+    )
+    # Edge per unit of tier-fee notional: the clearance fee is not a tier fee (excluded).
+    clearance = (
+        sum(h.clearance_fee for h in overlay.result.hits)
+        if overlay is not None and recomputed
+        else 0.0
+    )
+    result.cost_edge = CostEdge(
+        turnover=accounting.turnover,
+        net_pnl=sum(accounting.net_pnls),
+        commissions=accounting.total_fees - clearance,
+        slippage=accounting.total_slippage,
     )
     if overlay is not None:
         result.notes["liquidation"] = overlay.result.to_notes(len(result.trades))

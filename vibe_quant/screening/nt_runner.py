@@ -25,7 +25,7 @@ from vibe_quant.engine_run import (
 )
 from vibe_quant.errors import DataUnavailableError, LiquidationIntegrityError
 from vibe_quant.launch_settings import RUN_LEVEL_KEYS, LaunchSettings
-from vibe_quant.metrics import fmt_sharpe
+from vibe_quant.metrics import CostEdge, fmt_sharpe
 from vibe_quant.modeled_costs import reconcile
 from vibe_quant.sizing_settings import SIZING_FIELDS, SizingSettings
 from vibe_quant.trade_ledger import (
@@ -1782,6 +1782,16 @@ class NTScreeningRunner:
         # metric are untouched.
         metrics.gross_pnl = gross_pnl(
             metrics.total_return * starting_balance, total_fees, 0.0, total_funding
+        )
+        # Edge per unit of tier-fee notional, built AFTER the liquidation guard (a bug here
+        # is never wrapped as LiquidationIntegrityError). Clearance is not a tier fee and
+        # the slippage sits in the fill prices (0.0), so break-even == gross edge here.
+        metrics.cost_edge = CostEdge(
+            turnover=liquidated.turnover if liquidated is not None else accounting.turnover,
+            net_pnl=metrics.total_return * starting_balance,
+            commissions=total_fees
+            - (metrics.liquidation_forfeited if liquidated is not None else 0.0),
+            slippage=0.0,
         )
         self.last_starting_balance = starting_balance
         days = compute_day_count(self._start_date, self._end_date)

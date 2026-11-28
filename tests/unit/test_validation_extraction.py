@@ -872,3 +872,89 @@ class TestSlippageModelSelection:
         assert len(result.trades) == 1
         assert result.trades[0].slippage_cost > 0.0
         assert result.total_slippage > 0.0
+
+
+def _t3_validation_run(
+    tmp_path: Any, dsl: dict[str, Any], symbols: list[str]
+) -> tuple[ValidationResult, dict[str, Any]]:
+    """A real validation run (production ``run``) on the synthetic two-symbol catalog:
+    ``(result, stored notes)``."""
+    import json
+
+    catalog = _two_symbol_catalog(tmp_path / "cat", 5 * 1440)
+    rows = [(_T3_DAY_MS + t * 3_600_000, 8) for t in range(-24, 24 * 14, 8)]
+    archive = interval_archive(
+        tmp_path / "funding.db", {"BTCUSDT": rows, "ETHUSDT": rows}, rate=_T3_RATE
+    )
+    db = tmp_path / "s.db"
+    state = StateManager(db)
+    strategy_id = state.create_strategy(name=str(dsl["name"]), dsl_config=dsl)
+    run_id = state.create_backtest_run(
+        strategy_id=strategy_id,
+        run_mode="validation",
+        symbols=symbols,
+        timeframe="1h",
+        start_date="2024-01-01",
+        end_date="2024-01-06",
+        parameters={"max_position_pct": 1.0, "risk_per_trade": 0.5},
+    )
+    state.close()
+    runner = ValidationRunner(
+        db_path=db, logs_path=tmp_path / "logs", catalog_path=catalog, funding_archive_path=archive
+    )
+    try:
+        result = runner.run(run_id=run_id)
+    finally:
+        runner.close()
+    state = StateManager(db)
+    try:
+        stored = state.get_backtest_result(run_id)
+    finally:
+        state.close()
+    assert stored is not None
+    return result, json.loads(str(stored["notes"]))
+
+
+@pytest.mark.slow(reason="real NT validation run on a synthetic catalog")
+def test_zero_trade_run_records_zero_cost_edge(tmp_path: Any) -> None:
+    """R6b: the no-trade early return records a zero edge (bps n/a), never no edge."""
+    from vibe_quant.metrics import CostEdge
+
+    dsl = {**_T3_DSL, "name": "never_enters", "entry_conditions": {"long": ["ema < 0"]}}
+    result, stored = _t3_validation_run(tmp_path, dsl, ["BTCUSDT"])
+
+    assert result.total_trades == 0
+    assert result.cost_edge == CostEdge(0.0, 0.0, 0.0, 0.0)
+    zero = {
+        "turnover": 0.0,
+        "gross_edge_bps": None,
+        "cost_paid_bps": None,
+        "breakeven_fee_bps": None,
+    }
+    assert result.notes["cost_edge"] == zero
+    assert stored["cost_edge"] == zero
+
+
+@pytest.mark.slow(reason="real NT validation run on a synthetic catalog")
+def test_cost_edge_notes_match_ledger(tmp_path: Any) -> None:
+    """R9: the stored edge is the run's own ledger: fees, booked slippage, net and fill notional.
+
+    MEASURED on this synthetic catalog (BTC flat 100, ETH 100 -> 120): the turnover pin below.
+    """
+    result, stored = _t3_validation_run(tmp_path, _T3_DSL, ["BTCUSDT", "ETHUSDT"])
+    ce = result.cost_edge
+    assert ce is not None
+    assert result.total_trades >= 3
+
+    assert ce.net_pnl == sum(t.net_pnl for t in result.trades)
+    assert ce.commissions == result.total_fees
+    assert ce.slippage == result.total_slippage and ce.slippage > 0.0
+    assert ce.turnover == TURNOVER_T3
+    assert ce.gross_edge_bps == (ce.net_pnl + ce.commissions + ce.slippage) / ce.turnover * 1e4
+    assert ce.cost_paid_bps == (ce.commissions + ce.slippage) / ce.turnover * 1e4
+    assert ce.breakeven_fee_bps == (ce.net_pnl + ce.commissions) / ce.turnover * 1e4
+    assert result.notes["cost_edge"] == ce.to_notes()
+    assert stored["cost_edge"] == ce.to_notes()
+
+
+TURNOVER_T3 = 6291.92  # MEASURED: the first green run (fill notional + the run-end marks)
