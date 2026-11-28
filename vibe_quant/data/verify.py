@@ -392,3 +392,130 @@ def verify_research_symbol(
         "ticker_reuse": reuse,
         "coverage": _research_coverage(archive, symbol, now or datetime.now(UTC)),
     }
+
+
+class MetricsVerifyResult(TypedDict):
+    """Positioning (Vision ``metrics``) checks of one symbol.
+
+    Only the newest files row of a day counts: an older malformed/drift row a
+    later file superseded is resolved. ``drift``/``malformed``/``same`` are
+    ``(day, detail)`` of newest rows without an ack; ``acked`` is
+    ``(status, day, detail, reason)``.
+    """
+
+    files: int
+    first_day: str | None
+    last_day: str | None
+    missing_days: list[str]
+    missing_rows_by_day: dict[str, int]
+    misaligned: int
+    null_counts: dict[str, int]
+    drift: list[tuple[str, str | None]]
+    malformed: list[tuple[str, str | None]]
+    acked: list[tuple[str, str, str | None, str]]
+    same: int
+
+
+class DvolVerifyResult(TypedDict):
+    """Hourly DVOL candles of one currency; ``gaps`` = ``(first missing open, candles)``."""
+
+    candles: int
+    first: int | None
+    last: int | None
+    gaps: list[tuple[int, int]]
+
+
+METRICS_STEP_MS = 300_000
+METRICS_ROWS_PER_DAY = _DAY_MS // METRICS_STEP_MS
+_METRICS_VALUE_COLUMNS = (
+    "sum_open_interest",
+    "sum_open_interest_value",
+    "count_toptrader_long_short_ratio",
+    "sum_toptrader_long_short_ratio",
+    "count_long_short_ratio",
+    "sum_taker_long_short_vol_ratio",
+)
+
+
+def _day_iso(day_index: int) -> str:
+    return datetime.fromtimestamp(day_index * _DAY_MS / 1000, UTC).date().isoformat()
+
+
+def verify_metrics(archive: RawDataArchive, symbol: str) -> MetricsVerifyResult:
+    """Coverage, holes and file outcomes of *symbol*'s archived metrics.
+
+    Holes (missing days, missing 5-minute rows, off-grid rows, NULL fields)
+    are information: the indicators read them as NaN. A day whose newest file
+    is drift or malformed and has no ack is an issue for the caller.
+    """
+    days = list(
+        archive.conn.execute(
+            f"""SELECT create_time / {_DAY_MS}, COUNT(*), SUM(create_time % {METRICS_STEP_MS} = 0)
+                FROM raw_metrics WHERE symbol = ? GROUP BY 1 ORDER BY 1""",
+            (symbol,),
+        )
+    )
+    nulls = archive.conn.execute(
+        "SELECT "
+        + ", ".join(f"COALESCE(SUM({c} IS NULL), 0)" for c in _METRICS_VALUE_COLUMNS)
+        + " FROM raw_metrics WHERE symbol = ?",
+        (symbol,),
+    ).fetchone()
+    have = {int(d) for d, _n, _on_grid in days}
+    files = archive.get_metrics_files(symbol)
+    newest = {row["day"]: row for row in files}  # ordered by day, id: the last row wins
+    acks = archive.get_metrics_acks(symbol)
+    result: MetricsVerifyResult = {
+        "files": len(files),
+        "first_day": _day_iso(min(have)) if have else None,
+        "last_day": _day_iso(max(have)) if have else None,
+        "missing_days": [_day_iso(d) for d in range(min(have), max(have)) if d not in have]
+        if have
+        else [],
+        "missing_rows_by_day": {
+            _day_iso(int(d)): METRICS_ROWS_PER_DAY - int(g)
+            for d, _n, g in days
+            if int(g) < METRICS_ROWS_PER_DAY
+        },
+        "misaligned": sum(int(n) - int(g) for _d, n, g in days),
+        "null_counts": {c: int(v) for c, v in zip(_METRICS_VALUE_COLUMNS, nulls, strict=True) if v},
+        "drift": [],
+        "malformed": [],
+        "acked": [],
+        "same": 0,
+    }
+    for day, row in newest.items():
+        status, detail = row["status"], row["detail"]
+        if status in ("drift", "malformed"):
+            ack = acks.get(int(row["id"]))
+            if ack is not None:
+                result["acked"].append((status, day, detail, ack["reason"]))
+            elif status == "drift":
+                result["drift"].append((day, detail))
+            else:
+                result["malformed"].append((day, detail))
+        elif status == "same":
+            result["same"] += 1
+    return result
+
+
+def verify_dvol(archive: RawDataArchive, currency: str) -> DvolVerifyResult:
+    """Count, span and interior holes of *currency*'s hourly DVOL candles (information)."""
+    opens = [
+        int(r[0])
+        for r in archive.conn.execute(
+            f"SELECT open_time FROM raw_dvol WHERE currency = ? AND resolution_s = {_HOUR_MS // 1000} "
+            "ORDER BY open_time",
+            (currency,),
+        )
+    ]
+    return {
+        "candles": len(opens),
+        "first": opens[0] if opens else None,
+        "last": opens[-1] if opens else None,
+        "gaps": [
+            (a + _HOUR_MS, (b - a) // _HOUR_MS - 1)
+            for a, b in zip(opens, opens[1:], strict=False)
+            if b - a > _HOUR_MS
+        ],
+    }

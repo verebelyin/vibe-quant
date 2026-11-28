@@ -43,6 +43,8 @@ from vibe_quant.data.downloader import (
 from vibe_quant.data.mark_bars import build_mark_bars
 from vibe_quant.data.verify import (
     interior_missing_days,
+    verify_dvol,
+    verify_metrics,
     verify_research_symbol,
     verify_symbol,
 )
@@ -2665,6 +2667,200 @@ def _print_research_verify(archive: RawDataArchive, symbol: str) -> bool:
     return issues
 
 
+def _print_kline_verify(archive: RawDataArchive, symbol: str) -> bool:
+    """Print the full-tier 1m checks of one symbol; True when an issue was found."""
+    result = verify_symbol(archive, symbol)
+    gaps = result["gaps"]
+    ohlc_errors = result["ohlc_errors"]
+    kline_count = result["kline_count"]
+
+    print(f"\n{symbol}: {kline_count} klines")
+
+    has_issues = False
+    missing = interior_missing_days(archive, symbol)
+    missing_klines = missing["klines"]
+    missing_mark = missing["mark_klines"]
+    if missing_klines or missing_mark:
+        has_issues = True
+        if missing_klines:
+            print(
+                f"  MISSING 1m DAYS (klines): {len(missing_klines)} interior "
+                f"missing day(s): {_format_days(missing_klines)}"
+            )
+        if missing_mark:
+            print(
+                f"  MISSING 1m DAYS (mark klines): {len(missing_mark)} interior "
+                f"missing day(s): {_format_days(missing_mark)}"
+            )
+    else:
+        print("  Missing 1m days: None")
+
+    if kline_count == 0:
+        print("  NO DATA: symbol not found in archive")
+        return True
+
+    if gaps:
+        has_issues = True
+        print(f"  GAPS ({len(gaps)}):")
+        for start_ts, _end_ts, gap_min in gaps[:5]:  # Show first 5
+            start_dt = datetime.fromtimestamp(start_ts / 1000, tz=UTC)
+            print(f"    {start_dt.isoformat()} - {gap_min} min gap")
+        if len(gaps) > 5:
+            print(f"    ... and {len(gaps) - 5} more")
+    else:
+        print("  Gaps: None")
+
+    if ohlc_errors:
+        has_issues = True
+        print(f"  OHLC ERRORS ({len(ohlc_errors)}):")
+        for ts, msg in ohlc_errors[:5]:  # Show first 5
+            err_dt = datetime.fromtimestamp(ts / 1000, tz=UTC)
+            print(f"    {err_dt.isoformat()}: {msg}")
+        if len(ohlc_errors) > 5:
+            print(f"    ... and {len(ohlc_errors) - 5} more")
+    else:
+        print("  OHLC: Valid")
+    return has_issues
+
+
+def _print_positioning_verify(archive: RawDataArchive, symbol: str) -> bool:
+    """Print *symbol*'s metrics block; True when a newest file is unacked drift/malformed.
+
+    Holes are information (the indicators read them as NaN), so only the file
+    outcomes can fail verify.
+    """
+    r = verify_metrics(archive, symbol)
+    span = archive.get_metrics_range(symbol)
+    if span is None:
+        print("  Metrics: none archived (download-metrics)")
+    else:
+        print(
+            f"  Metrics: {span[0]} rows {r['first_day']} to {r['last_day']}, {r['files']} file(s)"
+        )
+    if r["missing_days"]:
+        n = len(r["missing_days"])
+        print(
+            f"  metrics gaps: {n} missing day{'s' if n > 1 else ''} "
+            f"({_format_days(r['missing_days'])})"
+        )
+    if r["missing_rows_by_day"]:
+        print(
+            "  metrics missing rows: "
+            + _format_days([f"{day} {n}" for day, n in r["missing_rows_by_day"].items()])
+        )
+    if r["misaligned"]:
+        print(f"  metrics misaligned: {r['misaligned']} row(s) off the 5-minute grid")
+    if r["null_counts"]:
+        print(
+            "  metrics null values: "
+            + ", ".join(f"{column} {n}" for column, n in r["null_counts"].items())
+        )
+    for status, day, detail, reason in r["acked"]:
+        print(f"  metrics {status} acknowledged: {day} ({detail}; {reason})")
+    if r["same"]:
+        print(f"  metrics: {r['same']} regenerated file(s), values identical")
+    for day, detail in r["drift"]:
+        print(f"  METRICS DRIFT {symbol} {day} ({detail})")
+    for day, detail in r["malformed"]:
+        print(f"  METRICS MALFORMED {symbol} {day} ({detail})")
+    return bool(r["drift"] or r["malformed"])
+
+
+def _print_dvol_verify(archive: RawDataArchive) -> None:
+    """Print each DVOL currency's span and interior holes (information, never an issue)."""
+    print()
+    for currency in DVOL_CURRENCIES:
+        r = verify_dvol(archive, currency)
+        if r["first"] is None or r["last"] is None:
+            print(f"DVOL {currency}: none archived (download-dvol)")
+            continue
+        print(
+            f"DVOL {currency}: {r['candles']} candles {_iso_ms(r['first'])} to {_iso_ms(r['last'])}"
+        )
+        if r["gaps"]:
+            missing = sum(n for _start, n in r["gaps"])
+            print(
+                f"  dvol gaps: {missing} missing candle(s) ("
+                + _format_days([f"{_iso_ms(start)} {n}" for start, n in r["gaps"]])
+                + ")"
+            )
+
+
+def ack_metrics(
+    symbol: str, day_text: str, reason: str, *, client: httpx.Client | None = None
+) -> int:
+    """``ack-metrics``: acknowledge a drift/malformed metrics file, or refuse.
+
+    Acknowledges the day's newest files row (the one ``verify`` judges) when
+    it is drift/malformed, only while Vision lists that exact file or an
+    earlier ok/same file of the day (listing ETag == its md5; recheck skips a
+    re-served known file): any other file must be rechecked first. Records
+    the listed md5. Never automatic.
+
+    Returns:
+        CLI exit code: 0 acknowledged or already acknowledged, 1 refused
+        (nothing written).
+    """
+    from vibe_quant.data import archive as archive_mod
+    from vibe_quant.data.metrics import list_metrics_files
+
+    symbol = symbol.upper()
+    try:
+        day = date.fromisoformat(day_text)
+    except ValueError:
+        print(f"Error: DAY {day_text} is not YYYY-MM-DD", file=sys.stderr)
+        return 1
+    if not reason.strip():
+        print("Error: --reason must not be blank (it is the evidence record)", file=sys.stderr)
+        return 1
+    rows = list(
+        _read_archive(
+            archive_mod.DEFAULT_ARCHIVE_PATH,
+            "raw_metrics_files",
+            "SELECT f.id, f.status, f.md5, f.detail, a.id FROM raw_metrics_files f "
+            "LEFT JOIN raw_metrics_acks a ON a.file_id = f.id "
+            "WHERE f.symbol = ? AND f.day = ? ORDER BY f.id DESC",
+            (symbol, day.isoformat()),
+        )
+    )
+    if not rows or rows[0][1] not in ("drift", "malformed"):
+        print(
+            f"Error: no unacknowledged drift or malformed metrics file for {symbol} {day}",
+            file=sys.stderr,
+        )
+        return 1
+    file_id, status, md5, detail, ack_id = rows[0]
+    label = f"METRICS {status.upper()} {symbol} {day} file #{file_id} ({detail})"
+    if ack_id is not None:
+        print(f"already acknowledged: {label}")
+        return 0
+    accepted = {md5} | {r[2] for r in rows[1:] if r[1] in ("ok", "same")}
+    try:
+        if client is None:
+            with httpx.Client(timeout=60.0) as own:
+                listed = list_metrics_files(symbol, own)
+        else:
+            listed = list_metrics_files(symbol, client)
+    except (DownloadError, httpx.HTTPError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    listed_md5 = next((f.md5 for f in listed if f.day == day and f.md5 in accepted), None)
+    if listed_md5 is None:
+        print(
+            f"Error: {symbol} {day} changed again since it was recorded; "
+            "run download-metrics --recheck first",
+            file=sys.stderr,
+        )
+        return 1
+    archive = RawDataArchive(archive_mod.DEFAULT_ARCHIVE_PATH)
+    try:
+        inserted = archive.insert_metrics_ack(file_id, listed_md5, detail, reason)
+    finally:
+        archive.close()
+    print(f"ACKNOWLEDGED {label} ({reason})" if inserted else f"already acknowledged: {label}")
+    return 0
+
+
 def _positive_int(text: str) -> int:
     value = int(text)
     if value <= 0:
@@ -2983,6 +3179,14 @@ def main(argv: list[str] | None = None) -> int:
     dvol_parser.add_argument(
         "--yes", action="store_true", help="Proceed without the confirmation prompt"
     )
+    ack_metrics_parser = subparsers.add_parser(
+        "ack-metrics",
+        help="Acknowledge a drifted or malformed metrics file so verify stops failing on it "
+        "(refuses when Vision now lists a different file)",
+    )
+    ack_metrics_parser.add_argument("symbol", help="Trading symbol (e.g. BTCUSDT)")
+    ack_metrics_parser.add_argument("day", metavar="DAY", help="UTC day YYYY-MM-DD")
+    ack_metrics_parser.add_argument("--reason", required=True, help="Evidence record (non-blank)")
 
     # Verify command
     verify_parser = subparsers.add_parser("verify", help="Verify data quality")
@@ -3215,6 +3419,8 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "download-dvol":
         currencies = [c.strip().upper() for c in args.currencies.split(",")]
         return download_dvol(currencies, args.start, yes=args.yes)
+    elif args.command == "ack-metrics":
+        return ack_metrics(args.symbol, args.day, args.reason)
     elif args.command == "accept-gap":
         return accept_gap(args.symbol, args.interval, args.from_time, args.to_time, args.reason)
     elif args.command == "rebuild":
@@ -3241,58 +3447,10 @@ def main(argv: list[str] | None = None) -> int:
                 archive.get_kline_count(symbol, "1h") or archive.get_kline_count(symbol, "1d")
             ):
                 has_issues |= _print_research_verify(archive, symbol)
-                continue
-            result = verify_symbol(archive, symbol)
-            gaps = result["gaps"]
-            ohlc_errors = result["ohlc_errors"]
-            kline_count = result["kline_count"]
-
-            print(f"\n{symbol}: {kline_count} klines")
-
-            missing = interior_missing_days(archive, symbol)
-            missing_klines = missing["klines"]
-            missing_mark = missing["mark_klines"]
-            if missing_klines or missing_mark:
-                has_issues = True
-                if missing_klines:
-                    print(
-                        f"  MISSING 1m DAYS (klines): {len(missing_klines)} interior "
-                        f"missing day(s): {_format_days(missing_klines)}"
-                    )
-                if missing_mark:
-                    print(
-                        f"  MISSING 1m DAYS (mark klines): {len(missing_mark)} interior "
-                        f"missing day(s): {_format_days(missing_mark)}"
-                    )
             else:
-                print("  Missing 1m days: None")
-
-            if kline_count == 0:
-                has_issues = True
-                print("  NO DATA: symbol not found in archive")
-                continue
-
-            if gaps:
-                has_issues = True
-                print(f"  GAPS ({len(gaps)}):")
-                for start_ts, _end_ts, gap_min in gaps[:5]:  # Show first 5
-                    start_dt = datetime.fromtimestamp(start_ts / 1000, tz=UTC)
-                    print(f"    {start_dt.isoformat()} - {gap_min} min gap")
-                if len(gaps) > 5:
-                    print(f"    ... and {len(gaps) - 5} more")
-            else:
-                print("  Gaps: None")
-
-            if ohlc_errors:
-                has_issues = True
-                print(f"  OHLC ERRORS ({len(ohlc_errors)}):")
-                for ts, msg in ohlc_errors[:5]:  # Show first 5
-                    err_dt = datetime.fromtimestamp(ts / 1000, tz=UTC)
-                    print(f"    {err_dt.isoformat()}: {msg}")
-                if len(ohlc_errors) > 5:
-                    print(f"    ... and {len(ohlc_errors) - 5} more")
-            else:
-                print("  OHLC: Valid")
+                has_issues |= _print_kline_verify(archive, symbol)
+            has_issues |= _print_positioning_verify(archive, symbol)
+        _print_dvol_verify(archive)
 
         archive.close()
 
