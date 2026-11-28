@@ -33,6 +33,7 @@ from vibe_quant.api.schemas.result import (
     RunSummaryResponse,
     SweepResultResponse,
     TradeResponse,
+    sweep_cells,
 )
 from vibe_quant.balance_settings import recorded_balance
 from vibe_quant.bankroll.report import default_scratch_base, dsl_hasher
@@ -555,7 +556,8 @@ def _reconcile_bankroll(mgr: StateManager, jobs: BacktestJobManager) -> None:
 
 
 def _estimated_seconds(mgr: StateManager, run_id: int, body: BankrollReportRequest) -> int | None:
-    """Upper estimate: the baseline plus every cell, in waves of ``workers`` engines.
+    """Upper estimate: the baseline plus every cell, in waves of ``workers`` engines; the
+    margin cells (when ``margin_sweep``) are their own waves after the size cells.
 
     Scaled by the parent's own validation time; None when it recorded none.
     """
@@ -564,7 +566,10 @@ def _estimated_seconds(mgr: StateManager, run_id: int, body: BankrollReportReque
     if not isinstance(seconds, (int, float)) or not math.isfinite(seconds):
         return None
     cells = len({*body.multiples, 1.0})
-    return round(seconds * (1 + math.ceil(cells / body.workers)))
+    waves = 1 + math.ceil(cells / body.workers)
+    if body.margin_sweep:
+        waves += math.ceil(sweep_cells(body) / body.workers)
+    return round(seconds * waves)
 
 
 @router.post(

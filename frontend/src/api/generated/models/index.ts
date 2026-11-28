@@ -18,6 +18,7 @@ export * from './bankrollGridRequest';
 export * from './bankrollReportLaunchResponse';
 export * from './bankrollReportRequest';
 export * from './bankrollReportRequestLiquidationMode';
+export * from './bankrollReportRequestSweepModesItem';
 export * from './bankrollReportResponse';
 export * from './bankrollReportResponseFreshness';
 export * from './bankrollReportResponseReport';

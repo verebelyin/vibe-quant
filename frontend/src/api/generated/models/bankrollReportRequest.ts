@@ -5,13 +5,16 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { BankrollReportRequestLiquidationMode } from './bankrollReportRequestLiquidationMode';
+import type { BankrollReportRequestSweepModesItem } from './bankrollReportRequestSweepModesItem';
 
 /**
  * Launch a bankroll sizing report on a completed validation run.
  *
  * ``strict`` keeps a bool or a numeric string out of every number, and non-finite
  * floats are refused. ``multiples`` are the requested size multiples k of the run's
- * validated exposure cap (1.0 is always added by the report).
+ * validated exposure cap (1.0 is always added by the report). ``margin_sweep`` (off by
+ * default) also runs the margin cells ``sweep_modes`` x ``sweep_leverages`` x
+ * ``sweep_margin_limits`` at the recommended size; that grid is checked either way.
  */
 export interface BankrollReportRequest {
   /**
@@ -40,4 +43,8 @@ export interface BankrollReportRequest {
      * @maximum 4
      */
   workers?: number;
+  margin_sweep?: boolean;
+  sweep_modes?: BankrollReportRequestSweepModesItem[];
+  sweep_leverages?: number[];
+  sweep_margin_limits?: number[];
 }

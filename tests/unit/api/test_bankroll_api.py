@@ -49,6 +49,14 @@ DEFAULT_REQUEST: dict[str, object] = {
     "multiples": [0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 5.0, 10.0],
     "liquidation_mode": None,
     "workers": default_workers(),
+    "margin_sweep": False,
+    "sweep_modes": ["isolated", "cross"],
+    "sweep_leverages": [3, 5, 10],
+    "sweep_margin_limits": [0.5, 1.0],
+}
+SWEEP_DEFAULTS = {
+    k: DEFAULT_REQUEST[k]
+    for k in ("margin_sweep", "sweep_modes", "sweep_leverages", "sweep_margin_limits")
 }
 
 
@@ -186,7 +194,28 @@ REJECTED: list[tuple[str, object]] = [
     ("workers bool", {"workers": True}),
     ("liquidation_mode off", {"liquidation_mode": "off"}),
     ("extra field", {"user_capp": 1.0}),
+    ("margin_sweep string", {"margin_sweep": "true"}),
+    ("margin_sweep int", {"margin_sweep": 1}),
 ]
+# The margin grid is checked whether the sweep is on or off.
+GRID_REJECTED: list[tuple[str, dict[str, object], str]] = [
+    ("sweep_leverages float", {"sweep_leverages": [3.0]}, "int_type"),
+    ("sweep_leverages bool", {"sweep_leverages": [True]}, "int_type"),
+    ("sweep_leverages empty", {"sweep_leverages": []}, "bankroll grid leverages must not be empty"),
+    ("sweep_leverages zero", {"sweep_leverages": [0]}, "bankroll leverage"),
+    ("sweep_modes off", {"sweep_modes": ["off"]}, "literal_error"),
+    ("sweep_modes empty", {"sweep_modes": []}, "bankroll grid modes must not be empty"),
+    ("sweep_margin_limits zero", {"sweep_margin_limits": [0]}, "bankroll max_margin_pct"),
+    ("sweep_margin_limits above one", {"sweep_margin_limits": [1.0000001]}, "bankroll max_margin_pct"),
+    ("sweep_margin_limits bool", {"sweep_margin_limits": [True]}, "float_type"),
+    ("18 cells",
+     {"sweep_leverages": [3, 5, 10], "sweep_margin_limits": [0.25, 0.5, 1.0]},
+     "bankroll grid has 18 cells; at most 12 are allowed"),
+    ("extra sweep field", {"sweep_cushions": [0.5]}, "extra_forbidden"),
+]  # fmt: skip
+for _case, _body, _ in GRID_REJECTED:
+    for _on in (True, False):
+        REJECTED.append((f"{_case} sweep {_on}", {**_body, "margin_sweep": _on}))
 
 
 @pytest.mark.parametrize(("case", "body"), REJECTED, ids=[c for c, _ in REJECTED])
@@ -196,6 +225,17 @@ async def test_request_domain(api: Api, case: str, body: object) -> None:
     assert resp.status_code == 422, (case, resp.text)
     assert api.reports() == []
     assert api.commands == []
+
+
+@pytest.mark.parametrize(
+    ("case", "body", "text"), GRID_REJECTED, ids=[c for c, _, _ in GRID_REJECTED]
+)
+async def test_request_domain_grid_text(
+    api: Api, case: str, body: dict[str, object], text: str
+) -> None:
+    resp = await api.post(api.parent(), body)
+    assert resp.status_code == 422, (case, resp.text)
+    assert text in resp.text, (case, resp.text)
 
 
 @pytest.mark.parametrize(
@@ -224,12 +264,23 @@ ACCEPTED: list[tuple[str, dict[str, object], dict[str, object]]] = [
      {"user_cap": 10, "dd_limit": 0.999, "target_vol": 5, "multiples": [10], "workers": 4,
       "liquidation_mode": "isolated"},
      {"user_cap": 10.0, "dd_limit": 0.999, "target_vol": 5.0, "multiples": [10.0],
-      "workers": 4, "liquidation_mode": "isolated"}),
+      "workers": 4, "liquidation_mode": "isolated", **SWEEP_DEFAULTS}),
     ("lower edges",
      {"user_cap": 1e-9, "dd_limit": 1e-9, "target_vol": 1e-9, "workers": 1,
       "multiples": [1e-9, 0.5, 1, 2, 3, 4, 5, 6, 7], "liquidation_mode": "cross"},
      {"user_cap": 1e-9, "dd_limit": 1e-9, "target_vol": 1e-9, "workers": 1,
-      "multiples": [1e-9, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0], "liquidation_mode": "cross"}),
+      "multiples": [1e-9, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0], "liquidation_mode": "cross",
+      **SWEEP_DEFAULTS}),
+    ("sweep on, 12 cells, mode edge",
+     {"margin_sweep": True, "sweep_modes": ["cross", "isolated", "cross"],
+      "sweep_leverages": [10, 3, 5, 3], "sweep_margin_limits": [1, 0.5], "workers": 1},
+     {**DEFAULT_REQUEST, "workers": 1, "margin_sweep": True,
+      "sweep_modes": ["cross", "isolated", "cross"], "sweep_leverages": [10, 3, 5, 3],
+      "sweep_margin_limits": [1.0, 0.5]}),
+    ("sweep off, one cell, limit edges",
+     {"sweep_modes": ["cross"], "sweep_leverages": [1], "sweep_margin_limits": [1.0]},
+     {**DEFAULT_REQUEST, "sweep_modes": ["cross"], "sweep_leverages": [1],
+      "sweep_margin_limits": [1.0]}),
 ]  # fmt: skip
 
 
@@ -347,6 +398,30 @@ async def test_lifecycle_api_estimate_small(api: Api) -> None:
     resp = await api.post(api.parent(execution_time=10.0), {"multiples": [0.5, 2], "workers": 2})
     assert resp.status_code == 202
     assert resp.json()["estimated_seconds"] == 30  # 10 s x (1 + ceil(3 cells / 2))
+
+
+NINE = [0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0, 5.0, 10.0]
+
+
+@pytest.mark.parametrize(
+    ("sweep", "seconds"),
+    [
+        ({"margin_sweep": True}, 700),  # 100 s x (1 + ceil(9/4) + ceil(12/4))
+        ({"margin_sweep": True, "sweep_leverages": [3], "sweep_margin_limits": [0.5]}, 500),
+        ({"margin_sweep": True, "sweep_modes": ["cross"], "sweep_margin_limits": [0.5]}, 500),
+        ({"margin_sweep": True, "sweep_modes": ["cross"], "sweep_leverages": [3, 3, 5, 10, 20],
+          "sweep_margin_limits": [0.5]}, 500),  # dedup: 4 cells, one wave
+        ({"margin_sweep": True, "sweep_modes": ["cross"], "sweep_leverages": [3, 5, 10, 20],
+          "sweep_margin_limits": [0.25, 0.5]}, 600),  # 8 cells, two waves
+        ({"margin_sweep": False}, 400),
+        ({}, 400),
+    ],
+)  # fmt: skip
+async def test_estimate_counts_sweep(api: Api, sweep: dict[str, object], seconds: int) -> None:
+    run_id = api.parent(execution_time=100.0)
+    resp = await api.post(run_id, {"multiples": NINE, "workers": 4, **sweep})
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["estimated_seconds"] == seconds
 
 
 async def test_lifecycle_api_dead_child(api: Api) -> None:

@@ -4,16 +4,19 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 from vibe_quant.api.schemas.backtest import BacktestRunResponse  # noqa: TCH001
 from vibe_quant.bankroll.kelly import DEFAULT_TARGET_VOL
 from vibe_quant.bankroll.report import (
     DEFAULT_DD_LIMIT,
     DEFAULT_MULTIPLES,
+    DEFAULT_SWEEP_LEVERAGES,
+    DEFAULT_SWEEP_MARGIN_LIMITS,
     DEFAULT_USER_CAP,
     default_workers,
 )
+from vibe_quant.bankroll_grid import build_cells
 from vibe_quant.metrics import SHARPE_DISPLAY_DESCRIPTION, sharpe_to_display
 
 
@@ -246,7 +249,9 @@ class BankrollReportRequest(BaseModel):
 
     ``strict`` keeps a bool or a numeric string out of every number, and non-finite
     floats are refused. ``multiples`` are the requested size multiples k of the run's
-    validated exposure cap (1.0 is always added by the report).
+    validated exposure cap (1.0 is always added by the report). ``margin_sweep`` (off by
+    default) also runs the margin cells ``sweep_modes`` x ``sweep_leverages`` x
+    ``sweep_margin_limits`` at the recommended size; that grid is checked either way.
     """
 
     model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
@@ -260,6 +265,20 @@ class BankrollReportRequest(BaseModel):
     # None = the parent's own liquidation mode when it is on, otherwise cross.
     liquidation_mode: Literal["isolated", "cross"] | None = None
     workers: int = Field(default_factory=default_workers, ge=1, le=4)
+    margin_sweep: bool = False
+    # = report.DEFAULT_SWEEP_MODES (pydantic copies a mutable default per instance)
+    sweep_modes: list[Literal["isolated", "cross"]] = ["isolated", "cross"]
+    sweep_leverages: list[int] = Field(
+        default_factory=lambda: [int(lev) for lev in DEFAULT_SWEEP_LEVERAGES]
+    )
+    sweep_margin_limits: list[float] = Field(
+        default_factory=lambda: list(DEFAULT_SWEEP_MARGIN_LIMITS)
+    )
+
+    @model_validator(mode="after")
+    def _sweep_grid(self) -> BankrollReportRequest:
+        sweep_cells(self)  # BankrollGridError is a ValueError: 422 with its text
+        return self
 
     @field_validator("multiples")
     @classmethod
@@ -269,6 +288,11 @@ class BankrollReportRequest(BaseModel):
         if len(set(value)) != len(value):
             raise ValueError("multiples must be unique")
         return value
+
+
+def sweep_cells(body: BankrollReportRequest) -> int:
+    """How many margin cells the request's sweep grid holds (raises on an invalid grid)."""
+    return len(build_cells(body.sweep_modes, body.sweep_leverages, body.sweep_margin_limits))
 
 
 class BankrollReportLaunchResponse(BaseModel):

@@ -5852,12 +5852,46 @@
             "maximum": 4.0,
             "minimum": 1.0,
             "title": "Workers"
+          },
+          "margin_sweep": {
+            "type": "boolean",
+            "title": "Margin Sweep",
+            "default": false
+          },
+          "sweep_modes": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "isolated",
+                "cross"
+              ]
+            },
+            "type": "array",
+            "title": "Sweep Modes",
+            "default": [
+              "isolated",
+              "cross"
+            ]
+          },
+          "sweep_leverages": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Sweep Leverages"
+          },
+          "sweep_margin_limits": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Sweep Margin Limits"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "title": "BankrollReportRequest",
-        "description": "Launch a bankroll sizing report on a completed validation run.\n\n``strict`` keeps a bool or a numeric string out of every number, and non-finite\nfloats are refused. ``multiples`` are the requested size multiples k of the run's\nvalidated exposure cap (1.0 is always added by the report)."
+        "description": "Launch a bankroll sizing report on a completed validation run.\n\n``strict`` keeps a bool or a numeric string out of every number, and non-finite\nfloats are refused. ``multiples`` are the requested size multiples k of the run's\nvalidated exposure cap (1.0 is always added by the report). ``margin_sweep`` (off by\ndefault) also runs the margin cells ``sweep_modes`` x ``sweep_leverages`` x\n``sweep_margin_limits`` at the recommended size; that grid is checked either way."
       },
       "BankrollReportResponse": {
         "properties": {
