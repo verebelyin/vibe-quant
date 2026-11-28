@@ -8,7 +8,7 @@ import shutil
 import sys
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path  # noqa: TC003 (used at runtime in rebuild_from_archive)
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -47,6 +47,9 @@ from vibe_quant.data.verify import (
     verify_symbol,
 )
 from vibe_quant.utils import generate_month_range
+
+if TYPE_CHECKING:
+    from vibe_quant.data.metrics import VisionFile
 
 logger = logging.getLogger(__name__)
 
@@ -1595,7 +1598,10 @@ def get_status(
 
     status: dict[str, Any] = {"symbols": {}}
 
-    for symbol in archive.get_symbols():
+    metrics_symbols = [
+        r[0] for r in archive.conn.execute("SELECT DISTINCT symbol FROM raw_metrics_files")
+    ]
+    for symbol in sorted({*archive.get_symbols(), *metrics_symbols}):
         sym_status: dict[str, Any] = {}
 
         # Archive info
@@ -1637,8 +1643,26 @@ def get_status(
                     sym_status["catalog"] = {}
                 sym_status["catalog"][f"bars_{interval}"] = bar_count
 
+        metrics = archive.get_metrics_range(symbol)
+        if metrics:
+            sym_status["metrics"] = {
+                "rows": metrics[0],
+                "start": _iso_ms(metrics[1]),
+                "end": _iso_ms(metrics[2]),
+            }
+
         status["symbols"][symbol] = sym_status
 
+    from vibe_quant.data.dvol import DVOL_RESOLUTION_S
+
+    status["dvol"] = {
+        currency: {"candles": count, "start": _iso_ms(lo), "end": _iso_ms(hi)}
+        for currency, count, lo, hi in archive.conn.execute(
+            "SELECT currency, COUNT(*), MIN(open_time), MAX(open_time) FROM raw_dvol"
+            " WHERE resolution_s = ? GROUP BY currency ORDER BY currency",
+            (DVOL_RESOLUTION_S,),
+        )
+    }
     archive.close()
     return status
 
@@ -2389,6 +2413,211 @@ def download_research_tier(*, yes: bool, dry_run: bool, include_full: bool = Fal
     return 0
 
 
+# Positioning data (design arch-posdata-1): Vision daily metrics files hold 288
+# five-minute rows; MEASURED 77.1 B/row WITHOUT ROWID, estimated at 80 B (DVOL too).
+_METRICS_ROWS_PER_FILE = 288
+_EST_POSITIONING_ROW_BYTES = 80
+DVOL_CURRENCIES = ("BTC", "ETH")
+DVOL_FIRST_DAY = date(2021, 3, 24)  # Deribit's first BTC/ETH DVOL candle
+
+
+def _read_archive(archive_path: Path, table: str, sql: str, params: tuple[Any, ...]) -> list[Any]:
+    """Rows of *sql* on the archive opened read-only; [] when the file or *table* is absent."""
+    import sqlite3
+
+    if not archive_path.exists():
+        return []
+    con = sqlite3.connect(f"file:{archive_path}?mode=ro", uri=True)
+    try:
+        if con.execute("SELECT 1 FROM sqlite_master WHERE name = ?", (table,)).fetchone() is None:
+            return []
+        return list(con.execute(sql, params))
+    finally:
+        con.close()
+
+
+def _metrics_days_to_fetch(
+    archive_path: Path, symbol: str, listed: list[VisionFile], recheck: bool
+) -> int:
+    """Listed days ``ingest_metrics`` will GET (its rule, read from the archive read-only)."""
+    recorded: dict[str, list[tuple[str, str]]] = {}
+    for day, status, md5 in _read_archive(
+        archive_path,
+        "raw_metrics_files",
+        "SELECT day, status, md5 FROM raw_metrics_files WHERE symbol = ?",
+        (symbol,),
+    ):
+        recorded.setdefault(day, []).append((status, md5))
+    todo = 0
+    for vision_file in listed:
+        files = recorded.get(vision_file.day.isoformat(), [])
+        has_ok = any(status == "ok" for status, _ in files)
+        todo += int(not any(md5 == vision_file.md5 for _, md5 in files) and has_ok == recheck)
+    return todo
+
+
+def _disk_gate(archive_path: Path, estimate: int, *, yes: bool, dry_run: bool) -> int | None:
+    """Free-disk refusal, dry run and confirmation; None to proceed, else the exit code."""
+    _total, _used, free = shutil.disk_usage(_existing_dir(archive_path))
+    print(f"free disk: {_format_size(free)} (needs estimate + {_format_size(DISK_HEADROOM_BYTES)})")
+    if free < estimate + DISK_HEADROOM_BYTES:
+        print(
+            "Error: refusing to download: free disk is below estimate + 5 GB headroom",
+            file=sys.stderr,
+        )
+        return 1
+    if dry_run:
+        print("Dry run: nothing written.")
+        return 0
+    if not yes and not _confirm():
+        print("aborted: nothing written")
+        return 0
+    return None
+
+
+def download_metrics(
+    symbols: list[str],
+    start: date | None,
+    end: date,
+    *,
+    recheck: bool,
+    yes: bool,
+    dry_run: bool,
+) -> int:
+    """``download-metrics``: list, estimate, size check, confirm, then download.
+
+    The listings and the estimate read the archive read-only, so a listing
+    failure, a refusal, a dry run or a "no" leaves it unchanged (not even created).
+
+    Returns:
+        CLI exit code: 0 done/aborted/dry run (malformed or drift files are
+        recorded and printed), 1 refused, listing failed or a day failed.
+    """
+    from vibe_quant.data import archive as archive_mod
+    from vibe_quant.data.metrics import ingest_metrics, list_metrics_files
+
+    archive_path = archive_mod.DEFAULT_ARCHIVE_PATH
+    with httpx.Client(timeout=60.0) as client:
+        todo: dict[str, int] = {}
+        try:
+            for symbol in symbols:
+                listed = [
+                    f
+                    for f in list_metrics_files(symbol, client)
+                    if (start is None or f.day >= start) and f.day <= end
+                ]
+                todo[symbol] = _metrics_days_to_fetch(archive_path, symbol, listed, recheck)
+        except DownloadError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+        print(f"\nBinance Vision metrics{' recheck' if recheck else ''}: files, rows, est bytes")
+        for symbol, files in todo.items():
+            rows = files * _METRICS_ROWS_PER_FILE
+            size = _format_size(rows * _EST_POSITIONING_ROW_BYTES)
+            print(f"  {symbol:<16} {files} file(s), {rows:,} rows, {size}")
+        estimate = sum(todo.values()) * _METRICS_ROWS_PER_FILE * _EST_POSITIONING_ROW_BYTES
+        print(f"Estimate: {_format_size(estimate)} for {sum(todo.values())} file(s)")
+        gate = _disk_gate(archive_path, estimate, yes=yes, dry_run=dry_run)
+        if gate is not None:
+            return gate
+
+        failures: list[str] = []
+        flagged = False
+        archive = RawDataArchive(archive_path)
+        try:
+            for symbol in symbols:
+                seen = {row["id"] for row in archive.get_metrics_files(symbol)}
+                try:
+                    counts = ingest_metrics(
+                        symbol, archive, start=start, end=end, recheck=recheck, client=client
+                    )
+                except DownloadError as e:
+                    failures.append(f"{symbol}: {e}")
+                    continue
+                print(
+                    f"{symbol}: {counts['files_ok']} file(s) ok, {counts['rows_inserted']:,} rows "
+                    f"inserted, {counts['skipped']} skipped, {counts['same']} same, "
+                    f"{counts['drift']} drift, {counts['malformed']} malformed, "
+                    f"{counts['failed']} failed"
+                )
+                for row in archive.get_metrics_files(symbol):
+                    if row["id"] not in seen and row["status"] in ("malformed", "drift"):
+                        flagged = True
+                        print(f"  {row['status'].upper()} {symbol} {row['day']} ({row['detail']})")
+                if counts["failed"]:
+                    failures.append(f"{symbol}: {counts['failed']} day(s) failed")
+        finally:
+            archive.close()
+    if flagged:
+        print("Malformed or drifted metrics files recorded: run verify")
+    if failures:
+        print("\nERROR: metrics downloads failed (re-run download-metrics):", file=sys.stderr)
+        for line in failures:
+            print(f"  {line}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def download_dvol(currencies: list[str], start: date, *, yes: bool) -> int:
+    """``download-dvol``: estimate, size check, confirm, then download each currency.
+
+    Returns:
+        CLI exit code: 0 done/aborted, 1 refused or any currency failed (its
+        earlier pages stay archived; a re-run resumes).
+    """
+    from vibe_quant.data import archive as archive_mod
+    from vibe_quant.data.dvol import DVOL_RESOLUTION_S, DvolDownloadError, ingest_dvol
+
+    archive_path = archive_mod.DEFAULT_ARCHIVE_PATH
+    start_dt = datetime(start.year, start.month, start.day, tzinfo=UTC)
+    hours = max(0, int((datetime.now(UTC) - start_dt).total_seconds()) // DVOL_RESOLUTION_S)
+    archived = dict(
+        _read_archive(
+            archive_path,
+            "raw_dvol",
+            "SELECT currency, COUNT(*) FROM raw_dvol WHERE resolution_s = ? GROUP BY currency",
+            (DVOL_RESOLUTION_S,),
+        )
+    )
+    print(f"\nDeribit DVOL hourly candles from {start}: candles, est bytes")
+    estimate = 0
+    for currency in currencies:
+        candles = max(0, hours - archived.get(currency, 0))
+        estimate += candles * _EST_POSITIONING_ROW_BYTES
+        print(
+            f"  {currency:<16} {candles:,} candles, {_format_size(candles * _EST_POSITIONING_ROW_BYTES)}"
+        )
+    print(f"Estimate: {_format_size(estimate)}")
+    gate = _disk_gate(archive_path, estimate, yes=yes, dry_run=False)
+    if gate is not None:
+        return gate
+
+    failures: list[str] = []
+    archive = RawDataArchive(archive_path)
+    try:
+        for currency in currencies:
+            try:
+                result = ingest_dvol(currency, archive, start=start)
+            except DvolDownloadError as e:
+                failures.append(str(e))
+                continue
+            first, last = result["first"], result["last"]
+            span = (
+                f"{_iso_ms(first)} to {_iso_ms(last)}"
+                if first is not None and last is not None
+                else "nothing"
+            )
+            print(f"DVOL {currency}: {result['inserted']:,} new candle(s), archived {span}")
+    finally:
+        archive.close()
+    if failures:
+        print("\nERROR: DVOL downloads failed:", file=sys.stderr)
+        for line in failures:
+            print(f"  {line}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def _print_research_verify(archive: RawDataArchive, symbol: str) -> bool:
     """Print the research-tier checks of one symbol; True when an issue was found."""
     r = verify_research_symbol(archive, symbol)
@@ -2701,6 +2930,60 @@ def main(argv: list[str] | None = None) -> int:
     )
     accept_parser.add_argument("--reason", required=True, help="Evidence record (non-blank)")
 
+    # Positioning data: Binance Vision daily metrics + Deribit DVOL (archive only)
+    metrics_parser = subparsers.add_parser(
+        "download-metrics",
+        help="Download Binance Vision daily metrics (open interest, long/short ratios) "
+        "into the archive; prints the estimate and free disk and asks before writing",
+    )
+    metrics_parser.add_argument(
+        "--symbols",
+        type=str,
+        default=None,
+        help="Comma-separated symbols (default: SUPPORTED_SYMBOLS + the universe file)",
+    )
+    metrics_parser.add_argument(
+        "--start",
+        type=date.fromisoformat,
+        default=None,
+        help="First day YYYY-MM-DD (default: the first listed file)",
+    )
+    metrics_parser.add_argument(
+        "--end",
+        type=date.fromisoformat,
+        default=None,
+        help="Last day YYYY-MM-DD (default: yesterday UTC)",
+    )
+    metrics_parser.add_argument(
+        "--yes", action="store_true", help="Proceed without the confirmation prompt"
+    )
+    metrics_parser.add_argument("--dry-run", action="store_true", help="Print the estimate only")
+    metrics_parser.add_argument(
+        "--recheck",
+        action="store_true",
+        help="Re-fetch archived days whose listed file changed; records same/drift, "
+        "never overwrites archived rows",
+    )
+    dvol_parser = subparsers.add_parser(
+        "download-dvol",
+        help="Download Deribit DVOL hourly candles into the archive (resumable)",
+    )
+    dvol_parser.add_argument(
+        "--currencies",
+        type=str,
+        default=",".join(DVOL_CURRENCIES),
+        help="Comma-separated currencies (default: BTC,ETH)",
+    )
+    dvol_parser.add_argument(
+        "--start",
+        type=date.fromisoformat,
+        default=DVOL_FIRST_DAY,
+        help=f"First day YYYY-MM-DD (default: {DVOL_FIRST_DAY})",
+    )
+    dvol_parser.add_argument(
+        "--yes", action="store_true", help="Proceed without the confirmation prompt"
+    )
+
     # Verify command
     verify_parser = subparsers.add_parser("verify", help="Verify data quality")
     verify_parser.add_argument(
@@ -2774,6 +3057,11 @@ def main(argv: list[str] | None = None) -> int:
             if "catalog" in info:
                 for key, count in info["catalog"].items():
                     print(f"  Catalog {key}: {count}")
+            if "metrics" in info:
+                m = info["metrics"]
+                print(f"  Metrics: {m['rows']:,} rows {m['start']} to {m['end']}")
+        for currency, d in status["dvol"].items():
+            print(f"\nDVOL {currency}: {d['candles']:,} candles {d['start']} to {d['end']}")
     elif args.command == "detail":
         symbols = [s.strip() for s in args.symbols.split(",")]
         try:
@@ -2908,6 +3196,25 @@ def main(argv: list[str] | None = None) -> int:
         return download_research_tier(
             yes=args.yes, dry_run=args.dry_run, include_full=args.include_full
         )
+    elif args.command == "download-metrics":
+        if args.symbols:
+            metric_symbols = [s.strip() for s in args.symbols.split(",")]
+        else:
+            from vibe_quant.data import universe
+
+            universe_symbols, _as_of = universe.read_universe(universe.UNIVERSE_FILE)
+            metric_symbols = list(dict.fromkeys([*SUPPORTED_SYMBOLS, *universe_symbols]))
+        return download_metrics(
+            metric_symbols,
+            args.start,
+            args.end or datetime.now(UTC).date() - timedelta(days=1),
+            recheck=args.recheck,
+            yes=args.yes,
+            dry_run=args.dry_run,
+        )
+    elif args.command == "download-dvol":
+        currencies = [c.strip().upper() for c in args.currencies.split(",")]
+        return download_dvol(currencies, args.start, yes=args.yes)
     elif args.command == "accept-gap":
         return accept_gap(args.symbol, args.interval, args.from_time, args.to_time, args.reason)
     elif args.command == "rebuild":
