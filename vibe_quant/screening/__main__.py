@@ -11,12 +11,12 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from vibe_quant.metrics import fmt_sharpe
+from vibe_quant.metrics import cost_edge_columns, fmt_sharpe
 
 if TYPE_CHECKING:
     from vibe_quant.fees import FeeSchedule
     from vibe_quant.liquidation_settings import LiquidationSettings
-    from vibe_quant.metrics import DailyReturns
+    from vibe_quant.metrics import CostEdge, DailyReturns
     from vibe_quant.sizing_settings import SizingSettings
 
 logger = logging.getLogger(__name__)
@@ -129,6 +129,7 @@ def _run_pooled_child(
     if "liquidation_count" in bt:
         row["liquidation_count"] = int(bt["liquidation_count"])
         row["liquidation_forfeited"] = _num("liquidation_forfeited")
+    row.update(cost_edge_columns(cast("CostEdge | None", bt.get("cost_edge"))))
     state.save_sweep_results_batch(run_id, [row])  # type: ignore[attr-defined]
     print(
         f"Pooled screening child: {len(symbols)} symbols sharpe365={fmt_sharpe(bt['sharpe_ratio'])} "

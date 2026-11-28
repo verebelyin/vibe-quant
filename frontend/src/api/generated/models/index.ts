@@ -33,6 +33,7 @@ export * from './closeAllPositionsApiPaperCloseAllPositionsPost200';
 export * from './compareRunsApiResultsCompareGetParams';
 export * from './comparisonResponse';
 export * from './computeIndicatorsEndpointApiDataIndicatorsSymbolGetParams';
+export * from './costEdgeSummary';
 export * from './coverageCheckRequest';
 export * from './coverageCheckResponse';
 export * from './coverageCheckResponseCoverage';

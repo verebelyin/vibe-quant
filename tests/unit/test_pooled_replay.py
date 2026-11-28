@@ -31,6 +31,7 @@ pytestmark = pytest.mark.skipif(
 
 SYMBOLS = ["ETHUSDT", "BTCUSDT"]  # launch order is not sorted on purpose
 START, END = "2024-01-01", "2024-04-01"
+COST_EDGE_KEYS = ("turnover", "gross_edge_bps", "cost_paid_bps", "breakeven_fee_bps")
 CELL = {"liquidation_mode": "isolated", "leverage": 5.0, "max_margin_pct": 0.5}
 
 
@@ -49,8 +50,9 @@ def _chrom() -> Any:
     )  # fmt: skip
 
 
-def _headline(chrom: Any, cell: dict[str, Any] | None) -> dict[str, Any]:
-    """The discovery full-range headline, built as run.py builds it (one pooled fn per cell)."""
+def _headline(chrom: Any, cell: dict[str, Any] | None) -> tuple[dict[str, Any], Any]:
+    """The discovery full-range headline, built as run.py builds it (one pooled fn per cell),
+    and the pooled evaluation's ``cost_edge``."""
     from vibe_quant.bankroll_grid import BankrollCell
     from vibe_quant.discovery.backtest_fn import NTBacktestFn, full_range_headline
     from vibe_quant.sizing_settings import SizingSettings
@@ -61,10 +63,11 @@ def _headline(chrom: Any, cell: dict[str, Any] | None) -> dict[str, Any]:
         kw = {"liquidation": c.liquidation, "sizing": c.sizing(SizingSettings())}
     bt = NTBacktestFn(SYMBOLS, "4h", START, END, symbol_agg="pooled", **kw)(chrom)
     assert "error" not in bt
-    return full_range_headline(
+    head = full_range_headline(
         bt, fallback_sharpe=0.0, fallback_trades=0, fallback_max_dd=0.0, fallback_pf=0.0,
         fallback_return=0.0,
     )  # fmt: skip
+    return head, bt.get("cost_edge")
 
 
 def _discovery_run(state: StateManager, entries: list[dict[str, Any]], grid: bool) -> int:
@@ -151,7 +154,7 @@ async def test_pooled_children_replay_the_headline_exactly(tmp_path: Path, grid:
     drift check is clean; a grid champion's child runs at its own (non-default) cell."""
     cell = CELL if grid else None
     chrom = _chrom()
-    head = _headline(chrom, cell)
+    head, cost_edge = _headline(chrom, cell)
     assert head["full_range_trades"] == head["full_range_trades_sum"] > 0
     other = _entry(_chrom(), {"full_range_sharpe": 9.0, "full_range_trades": 1}, cell)
     db = tmp_path / "state.db"
@@ -180,6 +183,12 @@ async def test_pooled_children_replay_the_headline_exactly(tmp_path: Path, grid:
         assert row["total_return"] == head["full_range_return_pct"]
         assert row["max_drawdown"] == head["full_range_max_dd"]
         assert row["profit_factor"] == head["full_range_pf"]
+        # R26: the child's row records the pooled evaluation's cost edge, every column set.
+        from vibe_quant.metrics import cost_edge_columns
+
+        columns = {k: row[k] for k in COST_EDGE_KEYS}
+        assert columns == cost_edge_columns(cost_edge)
+        assert None not in columns.values()
     _rows, promoted = _row(db, promote_id)
     drift = promoted["parameters"].get("replay_drift")
     if drift is None:

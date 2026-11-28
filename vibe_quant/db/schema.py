@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 # Bump when adding new migrations to _migrate_add_columns. One-time data
 # migrations are additionally gated by ``PRAGMA user_version`` markers.
-SCHEMA_VERSION: int = 22
+SCHEMA_VERSION: int = 23
 
 SCHEMA_SQL = """
 -- Strategy definitions (DSL configs)
@@ -162,7 +162,15 @@ CREATE TABLE IF NOT EXISTS sweep_results (
     -- run's liquidation_mode is on; NULL on mode-off and older rows (D1).
     liquidation_count INTEGER,
     liquidation_forfeited REAL,
-    exit_timing TEXT  -- refined-exit counts JSON; NULL on mode-off (bead vibe-quant-3r9wj, D1b)
+    -- Refined-exit counts JSON; NULL on mode-off (bead vibe-quant-3r9wj, D1b).
+    exit_timing TEXT,
+    -- Cost edge per unit of tier-fee notional (bead vibe-quant-clmmc.11): every new row
+    -- writes all four (a -999 sentinel NULLs; no fills = turnover 0.0 + NULL bps); older
+    -- rows are NULL ("not recorded").
+    turnover REAL,
+    gross_edge_bps REAL,
+    cost_paid_bps REAL,
+    breakeven_fee_bps REAL
 );
 
 -- Background job tracking for process management
@@ -506,6 +514,11 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         # Refined-exit counts per mode-on sweep row (bead vibe-quant-3r9wj, D1b):
         # NULL on mode-off and rows written before the column (D1).
         ("sweep_results", "exit_timing", "TEXT"),
+        # Cost edge per sweep row (bead vibe-quant-clmmc.11): NULL on older rows.
+        ("sweep_results", "turnover", "REAL"),
+        ("sweep_results", "gross_edge_bps", "REAL"),
+        ("sweep_results", "cost_paid_bps", "REAL"),
+        ("sweep_results", "breakeven_fee_bps", "REAL"),
     ]
     applied = 0
     present_columns: dict[str, set[str]] = {}

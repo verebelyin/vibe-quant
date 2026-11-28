@@ -6,6 +6,7 @@
  */
 import type { BacktestResultResponseCrossRegimeResults } from './backtestResultResponseCrossRegimeResults';
 import type { BacktestResultResponseCrossWindowResults } from './backtestResultResponseCrossWindowResults';
+import type { CostEdgeSummary } from './costEdgeSummary';
 
 export interface BacktestResultResponse {
   id: number;
@@ -55,6 +56,7 @@ export interface BacktestResultResponse {
   cross_regime_results?: BacktestResultResponseCrossRegimeResults;
   random_short_baseline_pct?: number | null;
   cross_window_min_sharpe?: number | null;
+  cost_edge?: CostEdgeSummary | null;
   /** Sharpe annualised with √365 = stored × √(365/252); null when the stored value is null or not finite */
   readonly sharpe_display: number | null;
   /** Sharpe annualised with √365 = stored × √(365/252); null when the stored value is null or not finite */

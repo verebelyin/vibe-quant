@@ -120,6 +120,11 @@ def test_fast_evaluator_ends_with_the_production_nt_outcome() -> None:
         k: _fit(v) for k, v in nt_pipe.fitness_cache.items()
     }
     assert nt.fast_tier_confirm is None
+    traded = {k: fr for k, fr in fast_pipe.fitness_cache.items() if fr.total_trades > 0}
+    assert traded
+    for k, fr in traded.items():  # R23: both tiers report the same recorded cost edge
+        assert fr.cost_edge is not None
+        assert fr.cost_edge == nt_pipe.fitness_cache[k].cost_edge
     series_keys = {
         k for k, fr in fast_pipe.fitness_cache.items() if fr.mtm_daily_returns is not None
     }
@@ -255,6 +260,10 @@ class _WrongFast(FastBacktestFn):
         out = super()._run_fast(*a, **k)
         if self.field == "sharpe_ratio":
             out["sharpe_ratio"] = float(out["sharpe_ratio"]) + 1e-9
+        elif self.field == "cost_edge":  # a report-only field: turnover nudged
+            ce = out["cost_edge"]
+            if ce is not None:
+                out["cost_edge"] = dataclasses.replace(ce, turnover=ce.turnover + 1e-9)  # type: ignore[arg-type,type-var]
         else:  # a bootstrap-only input: one trade return nudged
             rets = list(out["trade_returns"])  # type: ignore[call-overload]
             if rets:
@@ -264,7 +273,7 @@ class _WrongFast(FastBacktestFn):
 
 
 @needs_catalog
-@pytest.mark.parametrize("field", ["sharpe_ratio", "trade_returns"])
+@pytest.mark.parametrize("field", ["sharpe_ratio", "trade_returns", "cost_edge"])
 def test_a_wrong_fast_tier_fails_the_run_before_any_gate(field: str) -> None:
     from vibe_quant.discovery.pipeline import FastTierParityError
 

@@ -180,7 +180,15 @@ def test_absent_tables_are_skipped_without_error() -> None:
 
     sweep_columns = _columns(conn, "sweep_results")
     conn.close()
-    assert {_DROPPED_COLUMN, "exit_timing", "starting_balance"} <= sweep_columns
+    assert {
+        _DROPPED_COLUMN,
+        "exit_timing",
+        "starting_balance",
+        "turnover",
+        "gross_edge_bps",
+        "cost_paid_bps",
+        "breakeven_fee_bps",
+    } <= sweep_columns
 
 
 def test_missing_column_is_added_and_logged(

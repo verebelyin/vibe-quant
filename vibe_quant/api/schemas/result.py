@@ -20,6 +20,18 @@ from vibe_quant.bankroll_grid import build_cells
 from vibe_quant.metrics import SHARPE_DISPLAY_DESCRIPTION, sharpe_to_display
 
 
+class CostEdgeSummary(BaseModel):
+    """A run's edge and costs per unit of tier-fee notional, bps per side (clmmc.11).
+
+    ``turnover`` 0 = no fills (every bps null); a null field was not recorded or unreadable.
+    """
+
+    turnover: float | None = None
+    gross_edge_bps: float | None = None
+    cost_paid_bps: float | None = None
+    breakeven_fee_bps: float | None = None
+
+
 class BacktestResultResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -73,6 +85,9 @@ class BacktestResultResponse(BaseModel):
     # The effective cross-window Sharpe limit the run was gated with, in the STORED
     # (√252) unit ``cross_window_results[*].passed`` was computed from (R8).
     cross_window_min_sharpe: float | None = None
+    # Validation: ``notes.cost_edge``; screening: the best sweep row's four columns.
+    # Null when not recorded (older runs) -- never 0 bps.
+    cost_edge: CostEdgeSummary | None = None
 
     @computed_field(description=SHARPE_DISPLAY_DESCRIPTION)  # type: ignore[prop-decorator]
     @property
@@ -153,6 +168,12 @@ class SweepResultResponse(BaseModel):
     # Refined-exit counts, written by the screening sweep only when the run's
     # liquidation mode is on; NULL on mode-off and older rows (D1b).
     exit_timing: ExitTimingSummary | None = None
+    # Cost edge of the row (bead vibe-quant-clmmc.11); NULL on older and sentinel rows,
+    # turnover 0.0 with NULL bps when the combo never filled.
+    turnover: float | None = None
+    gross_edge_bps: float | None = None
+    cost_paid_bps: float | None = None
+    breakeven_fee_bps: float | None = None
 
     @computed_field(description=SHARPE_DISPLAY_DESCRIPTION)  # type: ignore[prop-decorator]
     @property

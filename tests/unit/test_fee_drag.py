@@ -30,7 +30,7 @@ from vibe_quant.discovery.operators import (
 )
 from vibe_quant.discovery.pipeline import DiscoveryConfig, DiscoveryPipeline
 from vibe_quant.launch_settings import LaunchSettings
-from vibe_quant.metrics import fee_drag, fees_pct_equity_per_year, gross_pnl
+from vibe_quant.metrics import CostEdge, fee_drag, fees_pct_equity_per_year, gross_pnl
 from vibe_quant.screening.nt_runner import NTScreeningRunner
 
 if TYPE_CHECKING:
@@ -72,9 +72,12 @@ def _m(
     gross: float = 0.0,
     balance: float = 1000.0,
     days: float = 30.0,
+    ce: CostEdge | None = None,
 ) -> dict[str, Any]:
-    """Per-window/per-symbol bt dict with the new raw fee fields."""
+    """Per-window/per-symbol bt dict with the new raw fee fields (+ ``cost_edge`` if given)."""
+    extra: dict[str, Any] = {} if ce is None else {"cost_edge": ce}
     return {
+        **extra,
         "sharpe_ratio": 1.0,
         "max_drawdown": 0.1,
         "profit_factor": 1.5,
@@ -90,12 +93,14 @@ def _m(
     }
 
 
-def _fit(fee_drag: float | None = None, fees_pct: float | None = None) -> FitnessResult:
+def _fit(
+    fee_drag: float | None = None, fees_pct: float | None = None, ce: CostEdge | None = None
+) -> FitnessResult:
     return FitnessResult(
         sharpe_ratio=2.0, max_drawdown=0.1, profit_factor=1.8, total_trades=150,
         total_return=0.4, complexity_penalty=0.0, overtrade_penalty=0.0, sl_tp_penalty=0.0,
         raw_score=0.6, adjusted_score=0.55, passed_filters=True, filter_results={},
-        fee_drag=fee_drag, fees_pct_equity_yr=fees_pct,
+        fee_drag=fee_drag, fees_pct_equity_yr=fees_pct, cost_edge=ce,
     )  # fmt: skip
 
 
@@ -225,6 +230,51 @@ def test_worst_mode_sums_fees_over_symbols() -> None:
     assert fit.fees_pct_equity_yr == pytest.approx(250.0 / 2000.0 * 365.0 / 90.0)
 
 
+def _windows_by_symbol(missing: bool = False) -> dict[str, Any]:
+    """Worst mode, 2 symbols x eval_windows=3: window sums per symbol, then the symbol sum."""
+    a = [
+        _m(0.1, ce=CostEdge(100.0, 1.0, 0.5, 0.0)),
+        _m(0.2, ce=CostEdge(200.0, 2.0, 0.25, 0.5)),
+        _m(0.3, ce=CostEdge(300.0, -1.0, 0.25, 0.0)),
+    ]
+    b = [
+        _m(0.1, ce=CostEdge(50.0, 0.5, 0.125, 0.0)),
+        _m(0.2, ce=CostEdge(150.0, 1.5, 0.375, 0.25)),
+        _m(0.3, ce=None if missing else CostEdge(0.0, 0.0, 0.0, 0.0)),
+    ]
+    per_symbol = [NTBacktestFn._aggregate_multi_window(w, 0) for w in (a, b)]
+    return NTBacktestFn._aggregate_symbols(per_symbol, ["A", "B"])
+
+
+def test_cost_edge_sums_over_windows_then_symbols() -> None:
+    """R16: the run's cost edge is the field sum of its 6 per-run results."""
+    out = _windows_by_symbol()
+    fit = _evaluate_single(_chromosome(), lambda c: dict(out), min_trades=0, timeframe="1h")
+    assert fit.cost_edge == CostEdge(800.0, 4.0, 1.5, 0.75)
+    assert fit.cost_edge.to_notes() == {
+        "turnover": 800.0,
+        "gross_edge_bps": 78.125,
+        "cost_paid_bps": 28.125,
+        "breakeven_fee_bps": 68.75,
+    }
+
+
+def test_cost_edge_with_one_unrecorded_window_is_none() -> None:
+    """R16: one window without a cost edge voids the run's (never a partial sum)."""
+    out = _windows_by_symbol(missing=True)
+    fit = _evaluate_single(_chromosome(), lambda c: dict(out), min_trades=0, timeframe="1h")
+    assert fit.cost_edge is None
+
+
+def test_cost_edge_of_an_early_exit_sums_the_windows_that_ran() -> None:
+    results = [
+        _m(0.1, ce=CostEdge(100.0, 1.0, 0.5, 0.0)),
+        _m(-0.05, ce=CostEdge(60.0, -2.0, 0.25, 0.0)),
+    ]
+    out = NTBacktestFn._early_exit_result(results, 1, low_trades=False)
+    assert out["cost_edge"] == CostEdge(160.0, -1.0, 0.75, 0.0)
+
+
 def test_worst_mode_annualizes_fees_over_summed_symbol_equity() -> None:
     """Each worst-mode symbol runs on its OWN account, so the annual fee rate
     divides the summed fees by the SUMMED starting balances (N x balance)."""
@@ -300,6 +350,42 @@ def test_champion_entry_carries_fee_drag() -> None:
     assert entry["fee_drag"] == 0.2
     assert entry["fees_pct_equity_yr"] == 0.05
     assert entry["return_pct"] == fitness.total_return
+
+
+def test_entries_carry_cost_edge_only_when_recorded() -> None:
+    """R17: champion and rejection entries write ``cost_edge`` = ``to_notes()`` (after the
+    fee drag keys) when the FitnessResult has one, and no key at all when it has none."""
+    from vibe_quant.discovery.record import champion_entry
+
+    ce = CostEdge(1250.0, 4.0, 0.75, 0.25)
+    notes = {
+        "turnover": 1250.0,
+        "gross_edge_bps": 40.0,
+        "cost_paid_bps": 8.0,
+        "breakeven_fee_bps": 38.0,
+    }
+    with_ce = champion_entry(_chromosome(), _fit(ce=ce), timeframe="1h", dsr=None, buy_hold=None)
+    assert json.loads(json.dumps(with_ce["cost_edge"])) == notes
+    bare = champion_entry(_chromosome(), _fit(), timeframe="1h", dsr=None, buy_hold=None)
+    assert "cost_edge" not in bare
+
+    cfg = DiscoveryConfig(
+        population_size=4, max_generations=2, elite_count=1, top_k=2,
+        min_trades=1, symbols=["BTC/USDT"], timeframe="1h",
+        start_date="2024-01-01", end_date="2024-02-01", max_workers=1,
+    )  # fmt: skip
+    pipe = DiscoveryPipeline(cfg, lambda chrom: {})
+    zero = CostEdge(0.0, 0.0, 0.0, 0.0)
+    pipe.gates.reject(_chromosome(), _fit(ce=zero), "guardrails", ["nope"])
+    pipe.gates.reject(_chromosome(), _fit(), "guardrails", ["nope"])
+    rejected, unrecorded = pipe.gates.rejections
+    assert rejected["cost_edge"] == {
+        "turnover": 0.0,
+        "gross_edge_bps": None,
+        "cost_paid_bps": None,
+        "breakeven_fee_bps": None,
+    }
+    assert "cost_edge" not in unrecorded
 
 
 # ---------------------------------------------------------------------------
@@ -501,6 +587,8 @@ def test_run_single_carries_fee_inputs(catalog: Path, always_long: None) -> None
     assert out["gross_pnl"] == truth.gross_pnl
     assert out["starting_balance"] == 1000.0
     assert out["days"] == 4
+    assert out["cost_edge"] == truth.cost_edge
+    assert truth.cost_edge is not None and truth.cost_edge.turnover > 0.0
 
 
 def test_discovery_fitness_from_real_screening_run_and_trade_gate(

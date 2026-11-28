@@ -23,6 +23,7 @@ from vibe_quant.api.schemas.result import (
     BankrollReportRequest,
     BankrollReportResponse,
     ComparisonResponse,
+    CostEdgeSummary,
     DrawdownPoint,
     EquityCurvePoint,
     FrozenDslResponse,
@@ -53,6 +54,34 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_COST_EDGE_KEYS = ("turnover", "gross_edge_bps", "cost_paid_bps", "breakeven_fee_bps")
+
+
+def _finite_number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        number = float(value)
+    except OverflowError:  # an int beyond float range
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _cost_edge_summary(value: object) -> CostEdgeSummary | None:
+    """A stored cost edge: a non-object is None; a field that is not a finite number is
+    that field None (a NaN never reaches the response)."""
+    if not isinstance(value, dict):
+        return None
+    return CostEdgeSummary(**{key: _finite_number(value.get(key)) for key in _COST_EDGE_KEYS})
+
+
+def _sweep_cost_edge(row: dict[str, Any]) -> CostEdgeSummary | None:
+    """A sweep row's four columns; all NULL (a row from before the columns) -> None."""
+    columns = {key: row.get(key) for key in _COST_EDGE_KEYS}
+    if all(v is None for v in columns.values()):
+        return None
+    return _cost_edge_summary(columns)
+
 
 def _enrich_result_with_notes(row: dict[str, Any]) -> dict[str, Any]:
     """Parse `notes` JSON and merge overfitting/cross-window fields into row.
@@ -74,6 +103,9 @@ def _enrich_result_with_notes(row: dict[str, Any]) -> dict[str, Any]:
         return enriched
     if not isinstance(payload, dict):
         return enriched
+    # Validation notes (read before the discovery-only early return below).
+    if "cost_edge" in payload:
+        enriched["cost_edge"] = _cost_edge_summary(payload["cost_edge"])
 
     top = payload.get("top_strategies")
     if not isinstance(top, list) or not top or not isinstance(top[0], dict):
@@ -356,6 +388,7 @@ async def get_run_summary(run_id: int, mgr: StateMgr) -> BacktestResultResponse:
         starting_balance=recorded_balance(best.get("starting_balance")),
         notes=None,
         created_at=None,
+        cost_edge=_sweep_cost_edge(best),
     )
 
 

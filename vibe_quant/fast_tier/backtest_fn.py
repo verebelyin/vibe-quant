@@ -14,7 +14,7 @@ import time
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
-from vibe_quant.discovery.backtest_fn import NTBacktestFn
+from vibe_quant.discovery.backtest_fn import NTBacktestFn, _result_cost_fields
 from vibe_quant.discovery.fitness import preserve_global_random
 from vibe_quant.fast_tier import fallbacks
 from vibe_quant.fast_tier.errors import FastTierUnsupported
@@ -270,10 +270,7 @@ class FastBacktestFn(NTBacktestFn):
         }
         if self.collect_daily_returns:
             out["mtm_daily_returns"] = runner.last_mtm_daily_returns  # type: ignore[assignment]
-        out["total_fees"] = float(getattr(result, "total_fees", 0.0))
-        out["gross_pnl"] = float(getattr(result, "gross_pnl", 0.0))
-        out["starting_balance"] = float(runner.last_starting_balance)
-        out["days"] = int(runner.last_days)
+        out.update(_result_cost_fields(result, runner))
         if self.liquidation.on:
             out["liquidation_count"] = int(getattr(result, "liquidation_count", 0))
             out["liquidation_forfeited"] = float(getattr(result, "liquidation_forfeited", 0.0))

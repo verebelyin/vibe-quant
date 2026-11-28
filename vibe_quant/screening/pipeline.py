@@ -31,6 +31,7 @@ from vibe_quant.dsl.indicators import IndicatorParamError
 from vibe_quant.errors import DataUnavailableError
 from vibe_quant.launch_settings import PARSE_ORDER, LaunchSettings, iter_fields
 from vibe_quant.liquidation_settings import LiquidationSettings
+from vibe_quant.metrics import cost_edge_columns
 from vibe_quant.overfitting.dsr import DeflatedSharpeRatio, mtm_dsr_calculate
 from vibe_quant.screening.grid import (
     build_parameter_grid,
@@ -504,6 +505,11 @@ class ScreeningPipeline:
                 # the -999 sentinel rows included, so the batch has one key set and a
                 # later overfitting rerun reads the same account size (R11).
                 "starting_balance": float(self._starting_balance),
+                # Cost edge (clmmc.11): the four keys on EVERY row, in one fixed order (the
+                # batch binds positionally); a sentinel never ran the engine -> NULLs.
+                **cost_edge_columns(
+                    None if metrics.sharpe_ratio == FAILED_BACKTEST_SHARPE else metrics.cost_edge
+                ),
                 "is_pareto_optimal": is_pareto,
             }
             # D1: the liquidation summary is written ONLY when the mode is on, so

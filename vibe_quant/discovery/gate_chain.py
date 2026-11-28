@@ -361,6 +361,8 @@ def rejection_record(
     # (JSON null when unavailable).
     entry["fee_drag"] = fitness.fee_drag
     entry["fees_pct_equity_yr"] = fitness.fees_pct_equity_yr
+    if fitness.cost_edge is not None:  # clmmc.11: absent when not recorded (mock runs)
+        entry["cost_edge"] = fitness.cost_edge.to_notes()
     # Report-only liquidation counts (bead vibe-quant-2gyk1.1.9, R1): written
     # only when the mode is on, so rejection rows stay unchanged off (R4).
     if fitness.liquidation_count is not None:

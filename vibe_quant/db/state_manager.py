@@ -556,6 +556,10 @@ _SWEEP_RESULTS_COLUMNS: frozenset[str] = frozenset(
         "liquidation_count",
         "liquidation_forfeited",
         "exit_timing",
+        "turnover",
+        "gross_edge_bps",
+        "cost_paid_bps",
+        "breakeven_fee_bps",
     }
 )
 

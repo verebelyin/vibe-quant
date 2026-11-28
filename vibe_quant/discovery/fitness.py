@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
     from vibe_quant.discovery.backtest_fn import NTBacktestFn
     from vibe_quant.discovery.operators import StrategyChromosome
-    from vibe_quant.metrics import DailyReturns
+    from vibe_quant.metrics import CostEdge, DailyReturns
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -203,6 +203,10 @@ class FitnessResult:
     pooled_symbol_stats: dict[str, tuple[float, int]] | None = None
     # ``fitness="v2"`` only (bead vibe-quant-clmmc.3); None under v1.
     fitness_v2: FitnessV2 | None = None
+    # Edge and costs per unit of tier-fee notional (bead vibe-quant-clmmc.11): reporting
+    # only, never read by the score. The field sum over the run's windows and symbols;
+    # None when any part was not recorded (an error result) or the bt dict has none.
+    cost_edge: CostEdge | None = None
 
 
 def _fee_drag_fields(bt: dict[str, float | int]) -> tuple[float | None, float | None]:
@@ -857,6 +861,7 @@ def _evaluate_single(
         liquidation_forfeited=liquidation_forfeited_val,
         pooled_symbol_stats=pooled_symbol_stats,
         fitness_v2=fitness_v2,
+        cost_edge=cast("CostEdge | None", bt.get("cost_edge")),
     )
 
 

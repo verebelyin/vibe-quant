@@ -5523,6 +5523,16 @@
             ],
             "title": "Cross Window Min Sharpe"
           },
+          "cost_edge": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CostEdgeSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "sharpe_display": {
             "anyOf": [
               {
@@ -6075,6 +6085,57 @@
           "runs"
         ],
         "title": "ComparisonResponse"
+      },
+      "CostEdgeSummary": {
+        "properties": {
+          "turnover": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turnover"
+          },
+          "gross_edge_bps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gross Edge Bps"
+          },
+          "cost_paid_bps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Paid Bps"
+          },
+          "breakeven_fee_bps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Breakeven Fee Bps"
+          }
+        },
+        "type": "object",
+        "title": "CostEdgeSummary",
+        "description": "A run's edge and costs per unit of tier-fee notional, bps per side (clmmc.11).\n\n``turnover`` 0 = no fills (every bps null); a null field was not recorded or unreadable."
       },
       "CoverageCheckRequest": {
         "properties": {
@@ -11576,6 +11637,50 @@
                 "type": "null"
               }
             ]
+          },
+          "turnover": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turnover"
+          },
+          "gross_edge_bps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gross Edge Bps"
+          },
+          "cost_paid_bps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Paid Bps"
+          },
+          "breakeven_fee_bps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Breakeven Fee Bps"
           },
           "sharpe_display": {
             "anyOf": [

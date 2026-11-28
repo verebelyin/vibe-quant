@@ -54,15 +54,35 @@ def _finite_or_none(value: float | int) -> float | None:
     return v if v == v and v not in (float("inf"), float("-inf")) else None
 
 
-def _sum_fee_fields(results: list[dict[str, float | int]]) -> dict[str, float]:
+def _sum_fee_fields(results: list[dict[str, float | int]]) -> dict[str, Any]:
     """Summed fee-drag inputs over windows/symbols (bd vibe-quant-2gyk1.4).
 
     ``total_fees`` and ``gross_pnl`` are SUMMED so fitness derives the drag
     from the totals, never as an average of per-window/per-symbol ratios.
+    ``cost_edge`` is the field sum in ``results`` order (clmmc.11); one result
+    without it (an error result) makes it ``None``, never a partial sum.
     """
+    from vibe_quant.metrics import CostEdge
+
     return {
         "total_fees": sum(float(r.get("total_fees", 0.0)) for r in results),
         "gross_pnl": sum(float(r.get("gross_pnl", 0.0)) for r in results),
+        "cost_edge": CostEdge.total([cast("CostEdge | None", r.get("cost_edge")) for r in results]),
+    }
+
+
+def _result_cost_fields(result: Any, runner: NTScreeningRunner) -> dict[str, Any]:
+    """One run's fee-drag inputs and cost edge, for the NT and the fast tier alike.
+
+    Raw cost-free PnL and fees plus the annualization inputs (bd vibe-quant-2gyk1.4): the
+    aggregates sum fees/gross and fitness derives the ratios, never an averaged ratio.
+    """
+    return {
+        "total_fees": float(getattr(result, "total_fees", 0.0)),
+        "gross_pnl": float(getattr(result, "gross_pnl", 0.0)),
+        "starting_balance": float(runner.last_starting_balance),
+        "days": int(runner.last_days),
+        "cost_edge": getattr(result, "cost_edge", None),
     }
 
 
@@ -332,13 +352,7 @@ class NTBacktestFn:
         if self.symbol_agg == "pooled":
             # The pooled profit factor's input (one PF over every coin's trades).
             out["trade_pnls"] = tuple(runner.last_trade_pnls)  # type: ignore[assignment]
-        # Fee-drag inputs (bd vibe-quant-2gyk1.4): raw cost-free PnL and fees,
-        # plus the annualization inputs. The aggregates sum fees/gross and
-        # fitness derives the ratios -- never an averaged ratio.
-        out["total_fees"] = float(getattr(result, "total_fees", 0.0))
-        out["gross_pnl"] = float(getattr(result, "gross_pnl", 0.0))
-        out["starting_balance"] = float(runner.last_starting_balance)
-        out["days"] = int(runner.last_days)
+        out.update(_result_cost_fields(result, runner))
         if self.liquidation.on:
             # Report-only liquidation accounting (bead vibe-quant-2gyk1.1.9): the
             # keys exist ONLY when the mode is on (R4); the aggregates sum them.
