@@ -136,6 +136,28 @@ async def test_enrol_refuses_history_text(ctx: dict[str, object]) -> None:
     assert sm.list_shadow_strategies() == []
 
 
+async def test_enrol_refuses_positioning_indicators(ctx: dict[str, object]) -> None:
+    """R37 through the API: every positioning type the DSL names, sorted, in the 422 text."""
+    client, sm = ctx["client"], ctx["sm"]
+    assert isinstance(client, AsyncClient) and isinstance(sm, StateManager)
+    dsl = {
+        **DSL,
+        "indicators": {
+            "rsi": {"type": "RSI", "period": 14},
+            "vol": {"type": "dvol_z", "period": 168},
+            "crowd": {"type": "LS_RATIO_Z", "period": 288},
+        },
+        "entry_conditions": {"long": ["rsi < 45", "vol > 1", "crowd < -1"], "short": ["rsi > 60"]},
+    }
+    r = await client.post("/api/shadow/enrol", json=_body(dsl_json=json.dumps(dsl)))
+    assert r.status_code == 422
+    assert r.json()["detail"] == (
+        "Shadow tracking does not support positioning indicators (DVOL_Z, LS_RATIO_Z): "
+        "the daily update has no metrics or DVOL feed"
+    )
+    assert sm.list_shadow_strategies() == []
+
+
 async def test_enrol_creates_rows(ctx: dict[str, object]) -> None:
     client, sm = ctx["client"], ctx["sm"]
     assert isinstance(client, AsyncClient) and isinstance(sm, StateManager)

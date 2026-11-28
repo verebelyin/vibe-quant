@@ -16,7 +16,7 @@ Read before running, interpreting or changing discovery, fitness or gates.
   - A champion records `top_strategies[i].bankroll = {liquidation_mode, leverage, max_margin_pct}`. Promote/replay inherit the cell (missing or invalid: 422).
 - **`--exit-genes extended` (opt-in):** GA draws ATR/trailing/safety stops, ATR/R:R targets, time exits. Needs `--sizing-mode atr`; `--leverage 1` if liquidation off.
 - **`--indicator-pool` also bounds MA genes:** an MA name in an explicit pool enables it, else none (`None` = all).
-- **`TAKER_IMBALANCE` needs an explicit `--indicator-pool`** (context indicator); no NaN hold over a gap, paper refuses it, the fast tier replays it as-of.
+- **`TAKER_IMBALANCE`, `OI_CHANGE`, `LS_RATIO_Z`, `DVOL_Z` need an explicit `--indicator-pool`** (context indicators; `None` excludes them): no NaN hold over a gap, paper refuses them, the fast tier replays them as-of. The positioning three preflight the archive: run `download-metrics` / `download-dvol` first.
 - **Budget and power:** CLI/API default 50×20 (was 20×15). `notes.power_preflight` (form too): DSR Sharpe bars (√252) at N = prior+1, prior+pop×gen; reporting only, uncomputable = `status: unavailable`.
 - **Tiny runs produce no rows:** fitness is 0 below 50 trades or at return <= 0 (`fitness.py:573`), so a pop 8–12, 2-generation, 2–3 month run ends `no_viable_strategies`. Prove row-level behaviour with a pipeline test.
 - **Fitness** = 35% Sharpe + 25% (1 − MaxDD) + 20% PF + 20% Return.

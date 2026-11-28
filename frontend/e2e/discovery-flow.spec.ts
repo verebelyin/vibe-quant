@@ -27,11 +27,14 @@ const GA_INDICATOR_POOL = [
   "BTC_TREND",
   "CCI",
   "DONCHIAN",
+  "DVOL_Z",
   "FUNDING",
   "FUNDING_Z",
+  "LS_RATIO_Z",
   "MACD",
   "MFI",
   "NATR",
+  "OI_CHANGE",
   "OWN_TREND",
   "PRICE_POSITION",
   "RAMS",
@@ -44,6 +47,12 @@ const GA_INDICATOR_POOL = [
   "TREND_ENSEMBLE",
   "WILLR",
 ];
+
+/**
+ * Positioning indicators read Binance metrics / Deribit DVOL rows the ui-check archive
+ * does not hold, so a run naming them fails its launch preflight; the launch unticks them.
+ */
+const POSITIONING_INDICATORS = ["OI_CHANGE", "LS_RATIO_Z", "DVOL_Z"];
 
 /** Discovery: how long a launched run must survive (a bad pool name failed within ~8 s). */
 const DISCOVERY_MIN_ALIVE_MS = 20_000;
@@ -169,6 +178,12 @@ test.describe("discovery flow: launch -> export -> validation -> results", () =>
       page.getByText(`${GA_INDICATOR_POOL.length}/${GA_INDICATOR_POOL.length}`),
     ).toBeVisible();
     await expect(page.locator("#ind-STOCH")).toHaveAttribute("data-state", "checked");
+    for (const name of POSITIONING_INDICATORS) {
+      await page.locator(`#ind-${name}`).click();
+      await expect(page.locator(`#ind-${name}`)).toHaveAttribute("data-state", "unchecked");
+    }
+    const launched = GA_INDICATOR_POOL.length - POSITIONING_INDICATORS.length;
+    await expect(page.getByText(`${launched}/${GA_INDICATOR_POOL.length}`)).toBeVisible();
 
     // TINY config: 1 symbol BTCUSDT, 4h, pop 4, 1 generation, ~3-month window
     await page.locator("#population").fill("4");

@@ -319,6 +319,63 @@ CREATE TABLE raw_accepted_gaps (
     UNIQUE(symbol, interval, from_open_time, to_open_time)
 );
 
+-- Binance Vision daily `metrics` files (only `download-metrics` writes here); append-only:
+-- a re-served file with a new md5 adds a row, never an UPDATE
+CREATE TABLE raw_metrics_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    day TEXT NOT NULL,                 -- UTC day YYYY-MM-DD
+    filename TEXT,
+    sha256 TEXT,
+    md5 TEXT NOT NULL,                 -- equals the Vision listing ETag
+    size INTEGER,
+    vision_last_modified TEXT,
+    csv_rows INTEGER NOT NULL,         -- parsed CSV body rows
+    rows INTEGER NOT NULL,             -- rows this file stored in raw_metrics (0 unless 'ok')
+    status TEXT NOT NULL CHECK(status IN ('ok', 'same', 'drift', 'malformed')),
+    detail TEXT,                       -- e.g. '<n> rows differ', the malformed reason
+    downloaded_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(symbol, day, md5)
+);
+
+-- 5-minute positioning rows from 'ok' files (a blank CSV field is NULL); never updated
+CREATE TABLE raw_metrics (
+    symbol TEXT NOT NULL,
+    create_time INTEGER NOT NULL,      -- Unix timestamp ms
+    sum_open_interest REAL,            -- contracts (OI_CHANGE)
+    sum_open_interest_value REAL,
+    count_toptrader_long_short_ratio REAL,
+    sum_toptrader_long_short_ratio REAL,  -- LS_RATIO_Z
+    count_long_short_ratio REAL,
+    sum_taker_long_short_vol_ratio REAL,
+    file_id INTEGER NOT NULL REFERENCES raw_metrics_files(id),
+    PRIMARY KEY(symbol, create_time)
+) WITHOUT ROWID;
+
+-- Operator acknowledgements of a drift/malformed metrics file (only `ack-metrics` writes here)
+CREATE TABLE raw_metrics_acks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id INTEGER NOT NULL UNIQUE REFERENCES raw_metrics_files(id),
+    md5 TEXT NOT NULL,
+    detail TEXT,
+    reason TEXT NOT NULL,
+    acked_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Deribit DVOL candles (only `download-dvol` writes here; INSERT OR IGNORE, append-only)
+CREATE TABLE raw_dvol (
+    currency TEXT NOT NULL,            -- 'BTC', 'ETH'
+    resolution_s INTEGER NOT NULL,     -- 3600
+    open_time INTEGER NOT NULL,        -- Unix timestamp ms
+    open REAL,
+    high REAL,
+    low REAL,
+    close REAL,                        -- DVOL_Z
+    source TEXT,
+    downloaded_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY(currency, resolution_s, open_time)
+) WITHOUT ROWID;
+
 CREATE INDEX idx_raw_klines_symbol_time ON raw_klines(symbol, interval, open_time);
 CREATE INDEX idx_raw_funding_symbol_time ON raw_funding_rates(symbol, funding_time);
 ```
@@ -328,6 +385,8 @@ CREATE INDEX idx_raw_funding_symbol_time ON raw_funding_rates(symbol, funding_ti
 **Supported symbols (8):** `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`, `SUIUSDT` (Vision data from 2023-05), `ZECUSDT` (from 2020-02), `NEARUSDT` (from 2020-10) and `HYPEUSDT` (from 2025-05); HYPE settles funding every 4h, the others every 8h. A new coin's first ingest goes through the CLI or `POST /api/data/ingest`; the UI ingest form lists archive symbols only.
 
 **Research universe and research tier (top 20, user ruling 2026-11-19: disk is limited).** `vibe_quant/data/universe_top20.txt` (committed, frozen until the user asks for a refresh) holds the 20 Binance USDT-M perps with the highest quote volume over the 30 complete UTC days ending on its as-of day: `contractType` PERPETUAL, `status` TRADING, `quoteAsset` USDT, `underlyingType` COIN; stablecoin pairs (USDCUSDT, ...), index/basket contracts (BTCDOM, ...) and tokenised stock/commodity/FX perps (`TRADIFI_PERPETUAL`, PAXG, XAUT) excluded; a 1000-prefixed contract and its plain twin are one coin. `python -m vibe_quant.data universe --top 20 [--as-of YYYY-MM-DD]` re-ranks, rewrites the file and prints its SHA-256 (`--as-of` exactly YYYY-MM-DD; `--top` above 20 warns; a file with the same as-of and N is kept unchanged without a request, because exchangeInfo membership is read at run time). `python -m vibe_quant.data download-research [--dry-run] [--yes]` archives, for the universe coins outside the 8 full-tier symbols, 1h + 1d LAST klines and funding rates + intervals from each listing date (no 1m, no MARK, no catalog write): it prints the per-coin and total size estimate and the free disk, refuses when free < estimate + 5 GB or the estimate exceeds the 2 GB research budget, asks before writing, and stops before the next coin once measured archive growth plus the remaining estimate exceeds the budget. Months come from Vision; every range still uncovered between the listing and the last closed bar (current month, a Vision 404, a hole inside a month past the 0.9 coverage skip) is fetched from REST, and a range REST does not serve either fails the run. A failed month/backfill/funding history writes nothing and is fetched by a re-run. `update` keeps 1m for the full tier only. A research coin enters the full tier only after an instrument spec is added to `INSTRUMENT_CONFIGS`; until then `ingest` and `download-mark` refuse it, and for full-tier coins both print the 1m estimate (≈ 1 GB per coin for 6 years of 1m with catalog bars) and the free disk and ask first (`--yes`; the API ingest job passes it after the UI preview). `status` and `verify` report research coins separately: `verify` fails when 1h, 1d, funding rates or funding intervals are absent or do not span the same history (funding within 8h of the price span, no funding step above 8h, intervals for every month except the current one), and reports 1h/1d gaps, flat zero-volume days as no data, a daily open outside [prev close/2, prev close×2] as possible ticker reuse. An exchange gap a re-probe confirms is empty (FROM..TO inclusive and at or before the last closed bar; no archived bar, no Vision bar and no REST bar opening in the range, where a touched Vision month may be a 404 or a published file with no row in the range; no probe error) is recorded once by `python -m vibe_quant.data accept-gap SYMBOL INTERVAL FROM TO --reason TEXT` (append-only `raw_accepted_gaps`, never auto-accepted): `download-research` then reports it as an accepted gap instead of failing a rerun, and `verify` lists it under ACCEPTED GAPS without failing, while a hole only partly inside an accepted range still fails. **Selection bias:** the list is chosen on recent volume, so backtests before the as-of year are optimistic (dead coins absent, today's winners present); every result on it repeats this and reports the coins listed before 2021 separately.
+
+**Positioning data (archive only, no catalog write).** `python -m vibe_quant.data download-metrics [--symbols] [--start] [--end] [--dry-run] [--recheck] [--yes]` archives Binance Vision daily `metrics` files (5-minute open interest and long/short ratios; default SUPPORTED_SYMBOLS + the universe file, first listed file to yesterday UTC) into `raw_metrics_files` / `raw_metrics`; it prints the files, rows and size estimate and the free disk, refuses when free < estimate + 5 GB and asks before writing. A day is fetched when it has no `ok` file and no file whose md5 equals the listing ETag; bytes whose md5 differs from the ETag after 3 attempts fail the day (exit 1, nothing written, a re-run retries it). `--recheck` re-fetches archived days whose listed file changed and records `same` or `drift` without touching `raw_metrics`; a malformed file (duplicate stamp with different values, row outside its UTC day, wrong symbol, bad header) stores no rows. `python -m vibe_quant.data download-dvol [--currencies BTC,ETH] [--start] [--yes]` archives Deribit DVOL hourly candles (from 2021-03-24) into `raw_dvol`, resumable, skipping the in-progress candle. `status` adds a `Metrics:` line per symbol and a `DVOL <CUR>` line; `verify` prints metrics gaps, missing rows, NULL counts and DVOL holes as information (the indicators read holes as NaN) and fails only on a symbol's newest drift/malformed file until `python -m vibe_quant.data ack-metrics SYMBOL DAY --reason TEXT` acknowledges it (append-only `raw_metrics_acks`, never automatic; refused when Vision now lists a different file: run `download-metrics --recheck` first).
 
 **Initial bulk load (example: 3 symbols, 2 years, 1-minute):**
 
@@ -677,6 +736,7 @@ sweep:
 - `FUNDING` (`period`, default 1): last settled perpetual funding rate in bps (mean of the last `period` settlements if > 1).
 - `FUNDING_Z` (`period`, default 30): z-score of the rate over the last `period` 8h settlements, computed on the full settlement series (not the bar buffer).
 - `BTC_TREND` (`period`, default 200) / `OWN_TREND`: BTCUSDT (resp. the strategy's own symbol) daily `close / EMA(close, span=period) - 1`. `BTC_ROC` (`period`, default 20): BTCUSDT daily `close[i] / close[i-period] - 1`. Computed once on the full daily history from the catalog and looked up as-of the strategy bar close (a bar sees only daily bars already closed: a 4h bar closing 20:00 on day D sees day D-1); NaN when the as-of daily bar is > 2 days old. Preflight requires the daily series to cover `[start - 3d, end - 2d]`, else `AuxDataUnavailableError`.
+- `OI_CHANGE` (`period`, default 12) / `LS_RATIO_Z` (default 288) / `DVOL_Z` (default 168) — positioning indicators from the archive tables above: `OI_CHANGE` = `sum_open_interest[i] / sum_open_interest[j] - 1` with row j stamped exactly `period` 5-minute rows earlier (NaN if absent); `LS_RATIO_Z` = z-score of `sum_toptrader_long_short_ratio` over `period` 5-minute rows, `DVOL_Z` = z-score of the DVOL close over `period` hourly candles (`ETH` DVOL for ETHUSDT, else `BTC`). A metrics row stamped `t` is usable from bar close `t + 600 s` until 600 s past that, a DVOL candle from its end (`open + 3600 s`) until 7200 s past that; a z-window with any missing row or candle is NaN (strict, no forward-fill). Preflight refuses a window the archive does not cover (first row > start + 3d, last row < end - 1d) with the `download-metrics` / `download-dvol` hint. Discovery uses them only when the indicator pool names them; paper, bankroll reports and shadow enrolment refuse them (no live feed).
 
 Archived settlement times are snapped to the 8h boundary (ms jitter) before the as-of lookup: the 08:00 bar sees the 08:00 settlement, a bar closing 07:59:59.999 sees 00:00. Coverage is enforced by a run-level preflight (screening and validation, with the run window) that raises `AuxDataUnavailableError` (a `DataUnavailableError`, never masked as a -inf result) when the archive is missing, has no funding for the symbol, starts more than 3 days after the window start (warmup allowance) or ends before `end - 16h`. Inside the run, per-bar lookups return NaN (never raise, since NT swallows `on_bar` errors) before the first settlement and when the last settlement is more than two funding periods old (archive holes are not forward-filled). Context indicators never forward-fill: a NaN from the lookup (including FUNDING/FUNDING_Z across an archive hole) is stored as the current value, so conditions on it are False instead of using the last valid value. Context indicators are excluded from the default GA pool, and paper/live trading refuses strategies using them (no live feed).
 
