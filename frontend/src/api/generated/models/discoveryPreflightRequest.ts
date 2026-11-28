@@ -83,6 +83,7 @@ export interface DiscoveryPreflightRequest {
   exit_gene_space?: DiscoveryPreflightRequestExitGeneSpace;
   null_gate?: boolean;
   bnb_discount?: boolean;
+  fee_tier?: 'VIP0';
   entry_order?: string;
   liquidation_mode?: DiscoveryPreflightRequestLiquidationMode;
   leverage?: number | null;

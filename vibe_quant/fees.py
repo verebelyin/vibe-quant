@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -25,6 +25,9 @@ BNB_DISCOUNT_FACTOR = Decimal("0.9")
 
 DEFAULT_TIER = "VIP0"
 
+#: The tier names the launch APIs accept; mirrors the keys of :data:`BINANCE_USDTM_TIERS`.
+FeeTier = Literal["VIP0"]
+
 
 @dataclass(frozen=True)
 class FeeSchedule:
@@ -39,7 +42,9 @@ class FeeSchedule:
     bnb_discount: bool = False
 
     def __post_init__(self) -> None:
-        if self.tier not in BINANCE_USDTM_TIERS:
+        # A list/dict tier would raise TypeError (unhashable) at the lookup; runners and
+        # the API treat a ValueError as a bad launch.
+        if not isinstance(self.tier, str) or self.tier not in BINANCE_USDTM_TIERS:
             raise ValueError(
                 f"unknown fee tier {self.tier!r}; known tiers: {sorted(BINANCE_USDTM_TIERS)}"
             )

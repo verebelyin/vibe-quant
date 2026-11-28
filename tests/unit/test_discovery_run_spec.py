@@ -164,6 +164,30 @@ def test_fee_schedule_helper() -> None:
     assert str(exc.value) == "unknown fee tier 'VIP99'; known tiers: ['VIP0']"
 
 
+@pytest.mark.parametrize("body", [{}, {"fee_tier": "VIP0"}], ids=["absent", "VIP0"])
+def test_fee_tier_api_default_keeps_params_and_argv(body: dict[str, Any]) -> None:
+    """R20: VIP0 (the only tier) is the default: no stored ``fee_tier``, no ``--fee-tier``."""
+    spec = _api_spec(**body)
+
+    assert "fee_tier" not in spec.to_params()
+    assert spec.to_params() == _api_spec().to_params()
+    assert spec.to_argv() == _api_spec().to_argv()
+    assert "--fee-tier" not in spec.to_argv()
+
+
+async def test_fee_tier_api_unknown_tier_is_422_with_no_row(tmp_path: Path) -> None:
+    """R20: a tier outside the table is pydantic's literal_error, before any run row."""
+    async with _api_client(tmp_path / "ft.db") as (client, state):
+        r = await client.post(
+            "/api/discovery/launch",
+            json={"symbols": ["BTCUSDT"], "timeframes": ["4h"], "fee_tier": "VIP12"},
+        )
+        assert r.status_code == 422, r.text
+        [error] = r.json()["detail"]
+        assert (error["type"], error["loc"]) == ("literal_error", ["body", "fee_tier"])
+        assert _run_count(state) == 0
+
+
 def test_liquidation_settings_helper() -> None:
     """Mode + resolved leverage, and the alias conflict main fails the run with."""
     off = DiscoveryRunSpec.from_argv(["--leverage", "5"]).liquidation_settings()

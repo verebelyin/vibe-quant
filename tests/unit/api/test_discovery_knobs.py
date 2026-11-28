@@ -484,7 +484,7 @@ async def test_discovery_launch_accepts_explicit_market_entry_order(
 
 @pytest.mark.parametrize(
     "extra",
-    [{"bnb_discounts": True}, {"bnb": True}, {"fee_tier": "VIP0"}, {"post_only": True}],
+    [{"bnb_discounts": True}, {"bnb": True}, {"post_only": True}],
 )
 async def test_discovery_launch_rejects_unknown_fields(
     client: tuple[AsyncClient, StateManager, BacktestJobManager], extra: dict[str, object]

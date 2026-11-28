@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, cast
 
 from vibe_quant.db.result_notes import parse_notes
 from vibe_quant.dsl.identity import dsl_body_key
+from vibe_quant.fees import FeeSchedule
 from vibe_quant.metrics import SHARPE_UNIT, fmt_sharpe
 from vibe_quant.sizing_settings import (
     SIZING_FIELDS,
@@ -275,6 +276,19 @@ def _discovery_recorded_sizing(payload: Mapping[str, object]) -> SizingParams | 
         return None
 
 
+def _recorded_fee(raw: object) -> FeeSchedule | None:
+    """The fee schedule a run recorded (None = VIP0, as legacy runs ran), or None if unreadable."""
+    if raw is None:
+        return FeeSchedule()
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return FeeSchedule.from_params(raw)
+    except ValueError:
+        logger.debug("Reference run has an unreadable fee schedule; skipping it")
+        return None
+
+
 def _resolved_param_key(key: str, config_fields: tuple[str, ...] | None) -> str:
     """The compiled config field ``key`` names, else its dot-folded spelling.
 
@@ -353,10 +367,18 @@ def find_screening_reference(
     val_window: tuple[str, str] | None = None,
     val_symbols: list[str] | None = None,
     val_sizing: Mapping[str, float | int | str] | None = None,
+    val_fee: FeeSchedule | None = None,
 ) -> ScreeningReference | None:
     """The reference of :func:`lookup_screening_reference`, without its refusals."""
     return lookup_screening_reference(
-        state, strategy_id, strategy_name, validated_params, val_window, val_symbols, val_sizing
+        state,
+        strategy_id,
+        strategy_name,
+        validated_params,
+        val_window,
+        val_symbols,
+        val_sizing,
+        val_fee,
     )[0]
 
 
@@ -368,6 +390,7 @@ def lookup_screening_reference(
     val_window: tuple[str, str] | None = None,
     val_symbols: list[str] | None = None,
     val_sizing: Mapping[str, float | int | str] | None = None,
+    val_fee: FeeSchedule | None = None,
 ) -> tuple[ScreeningReference | None, list[int]]:
     """Locate screening-tier metrics for a strategy, if any exist.
 
@@ -391,6 +414,9 @@ def lookup_screening_reference(
             settings). A reference must have recorded the same sizing: the same
             strategy at a different exposure cap is a different policy. ``None``
             means no sizing filter at all.
+        val_fee: The validation run's fee schedule. A reference must have recorded the
+            same one (no fee keys = VIP0); an unreadable one is skipped. ``None`` means
+            no fee filter at all.
 
     A screening run that executed a different effective DSL (it launched with
     ``parameters.dsl_override``) is refused, with the reason logged: its rows are another
@@ -409,7 +435,7 @@ def lookup_screening_reference(
     rejected: list[str] = []
     refused_ids: list[int] = []
     candidates, unreadable = _screening_candidates(
-        state, strategy_id, val_window, val_symbols, val_sizing
+        state, strategy_id, val_window, val_symbols, val_sizing, val_fee
     )
     for run_id in unreadable:
         reason = (
@@ -479,7 +505,9 @@ def lookup_screening_reference(
             "; ".join(rejected),
         )
     return (
-        _reference_from_discovery_notes(state, strategy_name, val_window, executed_dsl, val_sizing),
+        _reference_from_discovery_notes(
+            state, strategy_name, val_window, executed_dsl, val_sizing, val_fee
+        ),
         refused_ids,
     )
 
@@ -548,11 +576,12 @@ def _screening_candidates(
     val_window: tuple[str, str] | None,
     val_symbols: list[str] | None,
     val_sizing: Mapping[str, float | int | str] | None,
+    val_fee: FeeSchedule | None,
 ) -> tuple[list[tuple[int, str, str, dict[str, object]]], list[int]]:
     """The strategy's completed screening runs, newest first, plus unreadable ones.
 
     ``(candidates, unreadable_ids)``. A candidate is ``(id, start_date, end_date,
-    parameters)`` for every run that passes the validation's window / symbol / sizing
+    parameters)`` for every run that passes the validation's window / symbol / sizing / fee
     filters -- the same ones ``StateManager.get_latest_screening_run_with_sweeps``
     applies, which only ever returns the newest run. The reference now has to look
     further back: the newest run may have executed a different effective DSL and be
@@ -586,6 +615,8 @@ def _screening_candidates(
             unreadable.append(run_id)
             continue
         if wanted_sizing is not None and (_recorded_sizing_params(run_parameters) != wanted_sizing):
+            continue
+        if val_fee is not None and _recorded_fee(run_parameters) != val_fee:
             continue
         candidates.append((run_id, start, end, run_parameters))
     return candidates, unreadable
@@ -624,6 +655,7 @@ def _reference_from_discovery_notes(
     val_window: tuple[str, str] | None = None,
     strategy_dsl: dict[str, object] | None = None,
     val_sizing: Mapping[str, float | int | str] | None = None,
+    val_fee: FeeSchedule | None = None,
 ) -> ScreeningReference | None:
     """Match a discovery-exported strategy back to its champion metrics.
 
@@ -632,7 +664,8 @@ def _reference_from_discovery_notes(
     champion is matched purely by DSL body (name ignored). With no DSL, falls
     back to name equality. Runs are scanned newest-first with no cutoff; the
     first match wins. ``val_sizing`` skips a run whose ``notes.sizing`` is a
-    different (or unreadable) sizing, like the screening-run lookup does.
+    different (or unreadable) sizing, like the screening-run lookup does; ``val_fee``
+    does the same for ``notes.fee_schedule`` (absent = VIP0, as promote/replay read it).
     """
     wanted_body = dsl_body_key(strategy_dsl) if strategy_dsl else None
     wanted_sizing = None if val_sizing is None else dict(val_sizing)
@@ -649,6 +682,8 @@ def _reference_from_discovery_notes(
         if not isinstance(strategies, list):
             continue
         if wanted_sizing is not None and (_discovery_recorded_sizing(payload) != wanted_sizing):
+            continue
+        if val_fee is not None and _recorded_fee(payload.get("fee_schedule")) != val_fee:
             continue
         for entry in strategies:
             if not isinstance(entry, dict):

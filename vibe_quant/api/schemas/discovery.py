@@ -22,6 +22,7 @@ from vibe_quant.bankroll_grid import (
     build_cells,
     reject_run_level_with_grid,
 )
+from vibe_quant.fees import FeeTier  # noqa: TCH001 (pydantic resolves it at runtime)
 from vibe_quant.liquidation_settings import (
     DEFAULT_LEVERAGE,
     MISSING,
@@ -148,6 +149,9 @@ class DiscoveryLaunchRequest(BaseModel):
     # of this discovery (bd vibe-quant-2gyk1.4). Recorded in run parameters and
     # forwarded to the CLI only when true; the default keeps VIP0.
     bnb_discount: StrictBool = False
+    # The VIP fee tier of every screening backtest; forwarded and stored only when it is
+    # not the VIP0 default, so a default launch keeps its stored params and argv unchanged.
+    fee_tier: FeeTier = "VIP0"
     # Discovery screens with market entries only: post-only maker entries are
     # validation-only (screening maker-fill parity unproven, bead
     # vibe-quant-7eek0). Declared so an explicit non-market value fails loudly

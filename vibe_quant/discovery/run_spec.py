@@ -787,6 +787,8 @@ class DiscoveryRunSpec:
             _give("bootstrap_min_sharpe", body.bootstrap_min_sharpe)
         if body.bnb_discount:
             _give("bnb_discount", True)
+        if body.fee_tier != DEFAULT_TIER:
+            _give("fee_tier", body.fee_tier)
         if body.evaluator != "nt":
             _give("evaluator", body.evaluator)
         if body.gate_pool == "top_k":  # "all" is the CLI default: a default launch omits it
@@ -889,6 +891,8 @@ class DiscoveryRunSpec:
             params["bootstrap_min_sharpe"] = self.bootstrap_min_sharpe
         if "bnb_discount" in self.given:
             params["bnb_discount"] = True
+        if "fee_tier" in self.given:
+            params["fee_tier"] = self.fee_tier
         if "evaluator" in self.given:
             params["evaluator"] = self.evaluator
         params["gate_pool"] = self.gate_pool  # always: old rows without it ran top_k

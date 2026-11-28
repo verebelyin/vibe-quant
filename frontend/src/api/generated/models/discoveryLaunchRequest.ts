@@ -77,6 +77,7 @@ export interface DiscoveryLaunchRequest {
   exit_gene_space?: DiscoveryLaunchRequestExitGeneSpace;
   null_gate?: boolean;
   bnb_discount?: boolean;
+  fee_tier?: 'VIP0';
   entry_order?: string;
   liquidation_mode?: DiscoveryLaunchRequestLiquidationMode;
   leverage?: number | null;

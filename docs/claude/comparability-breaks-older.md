@@ -1,7 +1,9 @@
-# Comparability breaks, 2026-10-18 and older
+# Comparability breaks, 2026-10-19 and older
 
 Moved from [`discovery.md`](discovery.md#comparability-breaks) (word budget); same rule: results from before each date are NOT comparable with results after it.
 
+- **2026-10-19 DSR q95 critical value** (vibe-quant-rf0y7): DSR passes iff the legacy PSR statistic >= the run's MC spread (`q95-mean` of the correlated max) instead of 1.6449; null FPR <= 0.0200 (G2); earlier champion counts stricter; `--dsr-rule emax` reproduces old runs.
+- **2026-10-19 explicit pool restricts MA genes** (vibe-quant-nn7i7): explicit `--indicator-pool` without KAMA/VIDYA/FRAMA draws no MA genes; `None` unchanged.
 - **2026-10-18 direction=both own short genes** (vibe-quant-inydc): both genomes get their own short genes (before, short copied long and never fired). Long/short-constrained runs bit-identical; stored both champions replay long-only.
 - **2026-10-18 DSR effective N** (vibe-quant-megq1): DSR N = the effective count (see Gates); re-check `notes.dsr_trials.gate_n`, earlier verdicts used raw cumulative N (4h 22121, 1d 167).
 - **2026-10-17 1d funding exit timing** (vibe-quant-6osqd): a 1d boundary SL/TP exit (also WFA/CV) is funded to the 1m bar that hit the level, not the 1d close. Strategy 239@1d: funding `0.884065761488` -> `0.6492302331569999`, Sharpe `0.44582502161732274` -> `0.4484290923485963`, return `0.03747980496684309`, PF `1.902714157961589`, max DD `0.017959082659545107`.

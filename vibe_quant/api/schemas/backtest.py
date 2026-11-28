@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, 
 from vibe_quant.api.schemas._validators import KNOWN_TIMEFRAMES, check_date_range, clean_symbols
 from vibe_quant.api.schemas.finite import reject_non_finite
 from vibe_quant.balance_settings import BalanceConfigError, parse_initial_balance
+from vibe_quant.fees import DEFAULT_TIER, FeeSchedule
 from vibe_quant.liquidation_settings import LiquidationConfigError, LiquidationSettings
 from vibe_quant.sizing_settings import SIZING_FIELDS, SizingConfigError, SizingSettings
 from vibe_quant.symbol_leverage import SymbolLeverageError, check_leverage
@@ -89,6 +90,16 @@ class BacktestLaunchRequest(BaseModel):
             parse_initial_balance(self.parameters)
         except BalanceConfigError as exc:
             raise ValueError(f"parameters.initial_balance: {exc}") from exc
+        # The runner builds the fee schedule from these nested keys: a bad tier or a
+        # non-bool bnb_discount is a 422 naming the field, before any run row exists.
+        try:
+            FeeSchedule(tier=cast("str", self.parameters.get("fee_tier", DEFAULT_TIER)))
+        except ValueError as exc:
+            raise ValueError(f"parameters.fee_tier: {exc}") from exc
+        try:
+            FeeSchedule.from_params(self.parameters)
+        except ValueError as exc:
+            raise ValueError(f"parameters.bnb_discount: {exc}") from exc
         # Both sizing settings go through the ONE shared rule
         # (vibe-quant-2gyk1.2): a string, a bool, an explicit null or an
         # out-of-range number used to launch a run that sized at the default,

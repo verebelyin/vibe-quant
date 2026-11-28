@@ -721,6 +721,7 @@ async def test_promote_inherits_bnb_schedule_from_discovery_notes(
     child = state.get_backtest_run(r.json()["run_id"])
     assert child is not None
     assert child["parameters"]["bnb_discount"] is True
+    assert "fee_tier" not in child["parameters"]  # VIP0 is never stored (R21)
     assert child["parameters"]["promote_source"]["fee_schedule_source"] == "discovery_notes"
 
 
@@ -859,6 +860,7 @@ async def test_replay_inherits_bnb_schedule_from_discovery_notes(
     child = state.get_backtest_run(r.json()["replay_run_id"])
     assert child is not None
     assert child["parameters"]["bnb_discount"] is True
+    assert "fee_tier" not in child["parameters"]  # VIP0 is never stored (R21)
     assert child["parameters"]["fee_schedule_source"] == "discovery_notes"
 
 

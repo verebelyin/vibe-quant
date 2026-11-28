@@ -6820,6 +6820,12 @@
             "title": "Bnb Discount",
             "default": false
           },
+          "fee_tier": {
+            "type": "string",
+            "const": "VIP0",
+            "title": "Fee Tier",
+            "default": "VIP0"
+          },
           "entry_order": {
             "type": "string",
             "title": "Entry Order",
@@ -7229,6 +7235,12 @@
             "type": "boolean",
             "title": "Bnb Discount",
             "default": false
+          },
+          "fee_tier": {
+            "type": "string",
+            "const": "VIP0",
+            "title": "Fee Tier",
+            "default": "VIP0"
           },
           "entry_order": {
             "type": "string",

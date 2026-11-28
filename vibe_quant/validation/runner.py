@@ -33,6 +33,7 @@ from vibe_quant.engine_run import (
     bar_data_config,
     run_engine,
 )
+from vibe_quant.fees import FeeSchedule
 from vibe_quant.launch_settings import (
     PARSE_ORDER,
     Field,
@@ -839,6 +840,7 @@ class ValidationRunner:
                 result,
                 run_config=run_config,
                 sizing=launch.sizing,
+                fee=launch.fee_schedule,
             )
             if consistency is not None:
                 result.notes["consistency"] = consistency
@@ -2270,6 +2272,7 @@ class ValidationRunner:
         result: ValidationResult,
         run_config: dict[str, object] | None = None,
         sizing: SizingSettings | None = None,
+        fee: FeeSchedule | None = None,
     ) -> dict[str, object] | None:
         """Flag overfit promotions: validation collapsing vs screening.
 
@@ -2282,7 +2285,8 @@ class ValidationRunner:
         the run.
 
         Only a reference at the same sizing is comparable (S29): the same strategy run at a
-        different exposure cap is a different policy, not an overfit/underfit signal.
+        different exposure cap is a different policy, not an overfit/underfit signal; the
+        same holds for the fee schedule (``fee``, else the one ``run_config`` records).
         """
         from vibe_quant.validation.consistency import (
             assess_consistency,
@@ -2310,6 +2314,9 @@ class ValidationRunner:
                 if isinstance(syms := cfg.get("symbols"), list)
                 else None,
                 val_sizing=val_sizing,
+                val_fee=fee
+                if fee is not None
+                else FeeSchedule.from_params(params if isinstance(params, dict) else {}),
             )
             if reference is None:
                 if not refused:

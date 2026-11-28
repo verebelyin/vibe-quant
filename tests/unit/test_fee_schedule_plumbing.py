@@ -637,3 +637,25 @@ def test_discovery_cli_tiny_real_run_completes_and_records_bnb(
         "fee_tier": "VIP0",
         "bnb_discount": True,
     }
+
+
+# ---------------------------------------------------------------------------
+# Unhashable tier -> ValueError (R19b); the API tier literal mirrors the table
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("tier", [["VIP0"], {"a": 1}], ids=["list", "dict"])
+def test_unhashable_tier_is_a_value_error(tier: object) -> None:
+    """R19b: the runners catch ValueError as a bad launch; a TypeError used to escape."""
+    with pytest.raises(ValueError) as exc:
+        FeeSchedule.from_params({"fee_tier": tier})
+    assert str(exc.value) == f"unknown fee tier {tier!r}; known tiers: ['VIP0']"
+
+
+def test_fee_tier_literal_matches_the_tier_table() -> None:
+    """The discovery API's ``fee_tier`` literal offers exactly the shipped tiers."""
+    from typing import get_args
+
+    from vibe_quant.fees import BINANCE_USDTM_TIERS, FeeTier
+
+    assert set(get_args(FeeTier)) == set(BINANCE_USDTM_TIERS)
