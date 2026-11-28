@@ -3,6 +3,7 @@ import {
   useGetRunMetaApiResultsRunsRunIdMetaGet,
   useGetRunSummaryApiResultsRunsRunIdGet,
 } from "@/api/generated/results/results";
+import { costEdgeLines, costEdgeTier } from "@/components/results/costEdge";
 import { totalCosts } from "@/components/results/totalCosts";
 import { LoadingSpinner } from "@/components/ui";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -276,6 +277,26 @@ export function CostBreakdown({ runId }: CostBreakdownProps) {
             </span>
             <span className="font-mono text-muted-foreground">{formatFractionPct(perYear, 2)}</span>
           </div>
+        </div>
+
+        <div className="border-t pt-3 text-xs" data-testid="cost-edge">
+          {costEdgeLines(data.cost_edge, costEdgeTier(run?.run_mode)).map((line, i) => (
+            <p
+              // biome-ignore lint/suspicious/noArrayIndexKey: fixed-order sentence lines
+              key={i}
+              className={i === 0 ? "text-foreground" : "mt-1 text-muted-foreground"}
+            >
+              {line.map((part, j) =>
+                part.strong ? (
+                  // biome-ignore lint/suspicious/noArrayIndexKey: fixed-order sentence parts
+                  <strong key={j}>{part.text}</strong>
+                ) : (
+                  // biome-ignore lint/suspicious/noArrayIndexKey: fixed-order sentence parts
+                  <span key={j}>{part.text}</span>
+                ),
+              )}
+            </p>
+          ))}
         </div>
 
         {maker != null && <MakerEntryPanel maker={maker} data={data} />}

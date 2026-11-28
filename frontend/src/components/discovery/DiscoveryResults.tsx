@@ -9,6 +9,7 @@ import type {
   DiscoveryResultResponseStrategiesItem,
   RejectionCounts,
 } from "@/api/generated/models";
+import { rejectionEdgeText } from "@/components/results/costEdge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -508,6 +509,9 @@ function RejectionList({
             {typeof r.trades === "number" && ` trades=${r.trades}`}
             {` fee_drag=${fmtFeeDrag(finiteOrNull(r.fee_drag))}`}
             {` fees/yr=${fmtFeeDrag(finiteOrNull(r.fees_pct_equity_yr))}`}
+            <span title="summed over train windows and every symbol account, not the full-range headline">
+              {rejectionEdgeText(r.cost_edge)}
+            </span>
             {liq != null && (
               <Badge variant="destructive" className="ml-1 text-[10px]">
                 {liq}
