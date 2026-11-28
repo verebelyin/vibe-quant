@@ -13,6 +13,10 @@ again only when the listing names bytes the archive has not recorded:
 
 Bytes whose md5 != ETag after :data:`MD5_ATTEMPTS` GETs leave the day
 ``failed`` with nothing recorded, so the next run retries it.
+
+Zips are fetched by :data:`FETCH_WORKERS` threads (each file is ~6 KB, so a
+serial run waits ~0.5 s of latency per day); the archive is written by the
+calling thread only, in listing order.
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 import zlib
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from functools import partial
@@ -47,6 +52,7 @@ logger = logging.getLogger(__name__)
 VISION_METRICS_BASE = "https://data.binance.vision/data/futures/um/daily/metrics"
 VISION_S3_LISTING = "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"
 METRICS_PREFIX = "data/futures/um/daily/metrics"
+FETCH_WORKERS = 8  # concurrent zip GETs (Binance's own shell example fetches all at once)
 
 METRICS_HEADER = (
     "create_time",
@@ -242,31 +248,44 @@ def ingest_metrics(
         recorded: dict[str, list[tuple[str, str]]] = defaultdict(list)
         for row in archive.get_metrics_files(symbol):
             recorded[row["day"]].append((row["status"], row["md5"]))
+        todo: list[VisionFile] = []
         for vision_file in listed:
             files = recorded[vision_file.day.isoformat()]
             has_ok = any(status == "ok" for status, _ in files)
             if any(md5 == vision_file.md5 for _, md5 in files) or has_ok != recheck:
                 counts["skipped"] += 1
                 continue
-            _ingest_day(symbol, archive, vision_file, recheck, http, counts)
+            todo.append(vision_file)
+        with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
+            fetched = pool.map(partial(_fetch_or_error, symbol, client=http), todo)
+            for vision_file, content in zip(todo, fetched, strict=True):
+                _ingest_day(symbol, archive, vision_file, content, recheck, counts)
         return counts
     finally:
         if own_client:
             http.close()
 
 
+def _fetch_or_error(
+    symbol: str, vision_file: VisionFile, client: httpx.Client
+) -> bytes | DownloadError | None:
+    """:func:`_fetch_verified` with its DownloadError returned (worker threads never raise)."""
+    try:
+        return _fetch_verified(symbol, vision_file, client)
+    except DownloadError as exc:
+        return exc
+
+
 def _ingest_day(
     symbol: str,
     archive: RawDataArchive,
     vision_file: VisionFile,
+    content: bytes | DownloadError | None,
     recheck: bool,
-    client: httpx.Client,
     counts: dict[str, int],
 ) -> None:
-    try:
-        content = _fetch_verified(symbol, vision_file, client)
-    except DownloadError as exc:
-        logger.warning("FAILED %s %s: %s", symbol, vision_file.day, exc)
+    if isinstance(content, DownloadError):
+        logger.warning("FAILED %s %s: %s", symbol, vision_file.day, content)
         counts["failed"] += 1
         return
     if content is None:

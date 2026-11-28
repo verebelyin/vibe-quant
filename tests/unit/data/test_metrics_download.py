@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import io
 import random
+import threading
 import zipfile
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING
@@ -385,3 +386,29 @@ def test_listing_failure_writes_nothing(tmp_path: Path) -> None:
         ingest_metrics("BTCUSDT", RawDataArchive(existing), recheck=True, client=vision.client())
     assert hashlib.sha256(existing.read_bytes()).hexdigest() == digest
     assert vision.gets == [_name(DAY1)]
+
+
+def test_days_are_fetched_in_parallel_and_stored_in_day_order(tmp_path: Path) -> None:
+    """Zips download concurrently (a 4-party barrier only opens with 4 GETs in flight);
+    the archive still records the days in listing order."""
+    days = [DAY1 + timedelta(days=i) for i in range(8)]
+    barrier = threading.Barrier(4, timeout=5)
+
+    class ParallelVision(FakeVision):
+        def _handle(self, request: httpx.Request) -> httpx.Response:
+            if request.url.host != S3_HOST:
+                barrier.wait()  # raises BrokenBarrierError when GETs run one at a time
+            return super()._handle(request)
+
+    archive = RawDataArchive(tmp_path / "archive.db")
+    vision = ParallelVision()
+    for day in days:
+        vision.put(_name(day), _zip(_name(day), _rows(day)))
+
+    counts = ingest_metrics("BTCUSDT", archive, recheck=False, client=vision.client())
+
+    assert (counts["files_ok"], counts["rows_inserted"], counts["failed"]) == (8, 8 * 288, 0)
+    stored = archive.get_metrics_files("BTCUSDT")
+    assert [row["day"] for row in sorted(stored, key=lambda r: r["id"])] == [
+        d.isoformat() for d in days
+    ]
