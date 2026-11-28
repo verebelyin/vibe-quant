@@ -14,6 +14,7 @@ import { formatApiErrorDetail } from "@/components/discovery/apiErrorDetail";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -39,6 +40,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 const POLL_MS = 5000;
 const REVALIDATE = "re-validate first";
 const DEFAULT_MULTIPLES = [0.25, 0.5, 0.75, 1, 2, 3, 5, 10];
+/** The API's default margin grid (isolated, cross) x (3, 5, 10) x (0.5, 1.0): 12 cells. */
+const DEFAULT_SWEEP_CELLS = 12;
+export const SWEEP_CHECKBOX_LABEL = "Also sweep margin settings at the recommended size";
+export const CROSS_NOTE = "Cross: leverage changes only how many positions fit.";
 
 /** Design §2.7 / C9, verbatim: the 50% is a sizing budget, never a loss bound. */
 export const RISK_HELD_TOOLTIP =
@@ -75,6 +80,10 @@ const REASON_TEXT: Record<string, string> = {
   liquidated: "Liquidated",
   bust: "Account ruined (cross bust)",
   path_divergence: "Liquidation overlay diverged from the engine path",
+  move_unavailable: "Liquidating move unavailable",
+  cross_path_dependent: "Not ranked: multi-coin cross",
+  no_safe_setting: "No safe setting",
+  no_recommended_size: "no recommended size",
   stale: `Parent changed since this report: ${REVALIDATE}`,
 };
 
@@ -128,16 +137,19 @@ export function launchGate(
 
 /**
  * The API's upper estimate (`_estimated_seconds`): the parent's validation time
- * times the baseline plus every cell (1.0 always added) in waves of `workers`.
+ * times the baseline plus every cell (1.0 always added) in waves of `workers`,
+ * plus the margin-sweep cells (0 when the sweep is off) as their own waves.
  */
 export function estimateSeconds(
   parentSeconds: number | null | undefined,
   multiples: number[],
   workers: number,
+  sweepCells = 0,
 ): number | null {
   if (typeof parentSeconds !== "number" || !Number.isFinite(parentSeconds)) return null;
   const cells = new Set([...multiples, 1]).size;
-  return roundHalfEven(parentSeconds * (1 + Math.ceil(cells / workers)));
+  const waves = 1 + Math.ceil(cells / workers) + Math.ceil(sweepCells / workers);
+  return roundHalfEven(parentSeconds * waves);
 }
 
 export function formatEta(seconds: number | null): string {
@@ -348,6 +360,118 @@ export function recommendationView(report: Json, freshness: string): Recommendat
   return { kind: "none", reason, text: reasonText(reason), ceiling };
 }
 
+// --- margin sweep -----------------------------------------------------------------
+
+/** A cell's liquidating move (design R28): "32.80% short", never / at entry / unavailable. */
+export function formatMove(raw: unknown): string {
+  const m = obj(raw);
+  const value = num(m.value);
+  let text: string;
+  if (m.status === "never") text = "not liquidatable in this scenario";
+  else if (m.status === "at_entry") text = "0.00% (at entry)";
+  else if (m.status === "unavailable")
+    text = typeof m.reason === "string" ? `unavailable (${m.reason})` : "unavailable";
+  else if (m.status === "ok" && value !== null)
+    text = `${(value * 100).toFixed(2)}%${typeof m.side === "string" ? ` ${m.side}` : ""}`;
+  else return "—";
+  return m.path_dependent === true ? `${text} (simultaneous entry only)` : text;
+}
+
+export interface MarginRowView {
+  key: string;
+  mode: string;
+  leverage: number | null;
+  marginLimit: number | null;
+  positions: string;
+  move: string;
+  totalReturn: number | null;
+  mtmDd: number | null;
+  liquidations: number | null;
+  eligible: boolean;
+  reasonText: string;
+  safest: boolean;
+}
+
+export type SafestView = { kind: "safest"; text: string } | { kind: "none"; text: string };
+
+export type SweepView =
+  | { kind: "none" }
+  | { kind: "message"; title: string; text: string }
+  | {
+      kind: "completed";
+      title: string;
+      rows: MarginRowView[];
+      safest: SafestView;
+      label: string;
+      crossNote: boolean;
+    };
+
+function sameSetting(a: Json, b: Json): boolean {
+  return a.mode === b.mode && a.leverage === b.leverage && a.max_margin_pct === b.max_margin_pct;
+}
+
+/**
+ * The margin-settings card: none for a report without a sweep (legacy or not requested),
+ * a skipped / failed line, or the cells with the safest setting (masked when stale).
+ */
+export function sweepView(report: Json, freshness: string): SweepView {
+  if (report.margin_sweep == null) return { kind: "none" };
+  const sweep = obj(report.margin_sweep);
+  const k = num(sweep.k);
+  const title = k === null ? "Margin settings" : `Margin settings at k = ${k}`;
+  const reason = typeof sweep.reason === "string" ? sweep.reason : "unknown";
+  if (sweep.status === "skipped") {
+    return { kind: "message", title, text: `Sweep skipped: ${reasonText(reason)}` };
+  }
+  if (sweep.status !== "completed") {
+    return { kind: "message", title, text: `Sweep failed: ${reason}` };
+  }
+  const stale = freshness === "stale";
+  const best = stale || sweep.safest == null ? null : obj(sweep.safest);
+  const cells = Array.isArray(sweep.cells) ? sweep.cells.map(obj) : [];
+  const rows = cells.map((c, i): MarginRowView => {
+    const eligible = c.eligible === true;
+    const why = eligible ? "" : reasonText(String(c.ineligible_reason ?? c.status ?? ""));
+    const positions = num(c.positions);
+    const remainder = num(c.remainder) ?? 0;
+    return {
+      key: `${String(c.mode)}-${String(c.leverage)}-${String(c.max_margin_pct)}-${i}`,
+      mode: String(c.mode ?? ""),
+      leverage: num(c.leverage),
+      marginLimit: num(c.max_margin_pct),
+      positions: positions === null ? "—" : `${positions}${remainder > 0 ? " + 1 smaller" : ""}`,
+      move: formatMove(c.move),
+      totalReturn: num(c.total_return),
+      mtmDd: num(c.mtm_dd),
+      liquidations: num(c.liquidation_count),
+      eligible,
+      reasonText: c.status === "ok" || eligible ? why : `${why}${c.error ? `: ${c.error}` : ""}`,
+      safest: best !== null && sameSetting(c, best),
+    };
+  });
+  let safest: SafestView;
+  if (stale) safest = { kind: "none", text: reasonText("stale") };
+  else if (best === null) safest = { kind: "none", text: reasonText("no_safe_setting") };
+  else {
+    const limit = num(best.max_margin_pct);
+    safest = {
+      kind: "safest",
+      text:
+        `Safest setting: ${String(best.mode)}, leverage ${String(best.leverage)}, ` +
+        `margin limit ${pct(limit, 0)} (liquidating move ${formatMove(best.move)})`,
+    };
+  }
+  const scenario = obj(sweep.scenario);
+  return {
+    kind: "completed",
+    title,
+    rows,
+    safest,
+    label: typeof scenario.label === "string" ? scenario.label : "",
+    crossNote: rows.some((r) => r.mode === "cross"),
+  };
+}
+
 // --- rendering --------------------------------------------------------------------
 
 function pct(v: number | null, digits = 1): string {
@@ -380,12 +504,16 @@ function LaunchForm({
   runId,
   parentSeconds,
   disabled,
+  lastSweep,
 }: {
   runId: number;
   parentSeconds: number | null;
   disabled: boolean;
+  lastSweep: boolean;
 }) {
   const queryClient = useQueryClient();
+  // Off by default (the API's default); a re-launch keeps the last report's choice.
+  const [sweep, setSweep] = useState(lastSweep);
   const [userCap, setUserCap] = useState("1");
   const [ddLimit, setDdLimit] = useState("0.3");
   const [targetVol, setTargetVol] = useState("0.2");
@@ -407,6 +535,7 @@ function LaunchForm({
     parentSeconds,
     DEFAULT_MULTIPLES,
     Number.isFinite(w) && w > 0 ? w : 1,
+    sweep ? DEFAULT_SWEEP_CELLS : 0,
   );
 
   const invalid = [userCap, ddLimit, targetVol, workers].some((v) => numberFieldError(v) !== null);
@@ -449,6 +578,7 @@ function LaunchForm({
                 dd_limit: Number(ddLimit),
                 target_vol: Number(targetVol),
                 workers: Number(workers),
+                margin_sweep: sweep,
               },
             })
           }
@@ -456,10 +586,22 @@ function LaunchForm({
           Start sizing report
         </Button>
       </div>
+      <div className="flex items-center gap-2">
+        <Checkbox
+          id={`bk-sweep-${runId}`}
+          checked={sweep}
+          onCheckedChange={(v) => setSweep(v === true)}
+        />
+        <Label htmlFor={`bk-sweep-${runId}`} className="cursor-pointer text-sm">
+          {SWEEP_CHECKBOX_LABEL}
+        </Label>
+      </div>
       <p className="text-xs text-muted-foreground">
         Sizes k = {DEFAULT_MULTIPLES.join(", ")} at the run's own leverage and margin mode (cross if
-        liquidation was off). Estimated time:{" "}
-        <span className="font-medium text-foreground">{formatEta(eta)}</span>
+        liquidation was off)
+        {sweep &&
+          `, then ${DEFAULT_SWEEP_CELLS} margin settings (isolated and cross, leverage 3, 5, 10, margin limit 50% and 100%) at the recommended size`}
+        . Estimated time: <span className="font-medium text-foreground">{formatEta(eta)}</span>
         {eta === null && " (the run recorded no validation time)"}.
       </p>
     </div>
@@ -580,10 +722,78 @@ function StressTable({ rows }: { rows: RowView[] }) {
   );
 }
 
+function MarginSweepCard({ view }: { view: Exclude<SweepView, { kind: "none" }> }) {
+  return (
+    <div className="flex flex-col gap-2 rounded-md border p-3">
+      <div className="text-sm font-semibold">{view.title}</div>
+      {view.kind === "message" ? (
+        <p className="text-sm text-muted-foreground">{view.text}</p>
+      ) : (
+        <>
+          <div className="text-sm">
+            {view.safest.kind === "safest" ? (
+              <span className="font-medium">{view.safest.text}.</span>
+            ) : (
+              <span>{view.safest.text}.</span>
+            )}
+          </div>
+          <div className="w-0 min-w-full overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Mode</TableHead>
+                  <TableHead>Leverage</TableHead>
+                  <TableHead>Margin limit</TableHead>
+                  <TableHead>Positions</TableHead>
+                  <TableHead>Liquidating move (side)</TableHead>
+                  <TableHead className="text-right">Return</TableHead>
+                  <TableHead className="text-right">MTM DD</TableHead>
+                  <TableHead className="text-right">Liquidations</TableHead>
+                  <TableHead>Verdict</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {view.rows.map((r) => (
+                  <TableRow key={r.key} className={r.safest ? "bg-primary/10" : undefined}>
+                    <TableCell>{r.mode}</TableCell>
+                    <TableCell className="tabular-nums">{r.leverage ?? "—"}</TableCell>
+                    <TableCell className="tabular-nums">{pct(r.marginLimit, 0)}</TableCell>
+                    <TableCell className="tabular-nums">{r.positions}</TableCell>
+                    <TableCell className="tabular-nums">{r.move}</TableCell>
+                    <TableCell className="text-right tabular-nums">{pct(r.totalReturn)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{pct(r.mtmDd)}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {r.liquidations ?? "—"}
+                    </TableCell>
+                    <TableCell className="text-xs">
+                      {r.safest ? (
+                        <Badge>safest</Badge>
+                      ) : (
+                        <span className="text-muted-foreground">
+                          {r.eligible ? "eligible" : r.reasonText}
+                        </span>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+          <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+            {view.label && <p>{view.label}</p>}
+            {view.crossNote && <p>{CROSS_NOTE}</p>}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ReportBody({ resp }: { resp: BankrollReportResponse }) {
   const report = obj(resp.report);
   const rec = recommendationView(report, resp.freshness);
   const rows = rowViews(report, rec.kind === "recommended" ? rec.k : null);
+  const sweep = sweepView(report, resp.freshness);
   const disclosures = obj(report.disclosures);
   const notes = [disclosures.slippage_timing, disclosures.k1_control].filter(
     (t): t is string => typeof t === "string",
@@ -606,6 +816,7 @@ function ReportBody({ resp }: { resp: BankrollReportResponse }) {
         )}
       </div>
       <StressTable rows={rows} />
+      {sweep.kind !== "none" && <MarginSweepCard view={sweep} />}
       <div className="flex flex-col gap-1 text-xs text-muted-foreground">
         <p>{typeof report.label === "string" ? report.label : REPLAY_CAPTION}</p>
         {notes.map((t) => (
@@ -744,6 +955,7 @@ export function BankrollPanel({ runId }: { runId: number }) {
             runId={runId}
             parentSeconds={summary?.execution_time_seconds ?? null}
             disabled={gate !== "ok"}
+            lastSweep={obj(resp?.request).margin_sweep === true}
           />
         )}
       </CardContent>

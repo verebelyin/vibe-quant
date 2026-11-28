@@ -11,6 +11,7 @@ import {
   estimateSeconds,
   formatDuration,
   formatEta,
+  formatMove,
   formatMultiple,
   K_TOOLTIP,
   launchErrorText,
@@ -25,6 +26,7 @@ import {
   recommendationView,
   rowViews,
   staleView,
+  sweepView,
 } from "@/components/results/BankrollPanel";
 
 /** An error shaped like the one `customInstance` throws. */
@@ -340,6 +342,15 @@ describe("time estimate", () => {
     expect(estimateSeconds(0.9, [1, 2, 3, 4], 1)).toBe(4);
   });
 
+  it("margin sweep: the opt-in sweep adds its cells as their own worker waves", () => {
+    // Design R27: parent 100 s, 9 size cells, 4 workers -> 3 waves; 12 sweep cells -> 3 more.
+    const nine = [0.25, 0.5, 0.75, 2, 3, 4, 5, 10];
+    expect(estimateSeconds(100, nine, 4, 12)).toBe(700);
+    expect(estimateSeconds(100, nine, 4, 4)).toBe(500);
+    expect(estimateSeconds(100, nine, 4, 0)).toBe(400);
+    expect(estimateSeconds(100, nine, 4)).toBe(400);
+  });
+
   it("unknown without a recorded validation time", () => {
     expect(estimateSeconds(null, [1], 2)).toBeNull();
     expect(estimateSeconds(Number.NaN, [1], 2)).toBeNull();
@@ -368,5 +379,190 @@ describe("launch error text", () => {
       "Another sizing report is running; one runs at a time. (report_running: report 3 is running)",
     );
     expect(launchErrorText(new Error("boom"))).toBe("Could not start the sizing report");
+  });
+});
+
+function move(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    status: "ok",
+    value: 0.328,
+    side: "short",
+    legs: [["BTCUSDT", 500]],
+    reason: null,
+    path_dependent: false,
+    ...over,
+  };
+}
+
+function marginCell(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    ...row({ role: "cell", k: 2 }),
+    mode: "isolated",
+    leverage: 3,
+    max_margin_pct: 0.5,
+    reused: false,
+    positions: 1,
+    remainder: 0,
+    move: move(),
+    ...over,
+  };
+}
+
+function sweepReport(sweep: Record<string, unknown> | null | undefined): Record<string, unknown> {
+  const report: Record<string, unknown> = { rows: [row()], recommendation: { k: 2 } };
+  if (sweep !== undefined) report.margin_sweep = sweep;
+  return report;
+}
+
+function completedSweep(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    status: "completed",
+    reason: null,
+    recommendation_reason: null,
+    k: 2,
+    scenario: { label: "Modeled scenario: test label." },
+    cells: [
+      marginCell(),
+      marginCell({ leverage: 10, max_margin_pct: 1, move: move({ value: 0.0812, side: "long" }) }),
+      marginCell({
+        mode: "cross",
+        leverage: 5,
+        max_margin_pct: 0.5,
+        positions: 2,
+        remainder: 125.5,
+        eligible: false,
+        ineligible_reason: "cross_path_dependent",
+        move: move({ value: 0.6651038178164769, side: "long", path_dependent: true }),
+      }),
+    ],
+    safest: { mode: "isolated", leverage: 3, max_margin_pct: 0.5, move: move() },
+    safest_reason: null,
+    ...over,
+  };
+}
+
+describe("margin sweep", () => {
+  it("margin sweep: a stale report shows no safest setting", () => {
+    // The API masks `safest` on a stale read; the panel must not rely on it.
+    const v = sweepView(sweepReport(completedSweep()), "stale");
+    expect(v.kind).toBe("completed");
+    if (v.kind !== "completed") return;
+    expect(v.safest).toEqual({
+      kind: "none",
+      text: "Parent changed since this report: re-validate first",
+    });
+    expect(v.rows.some((r) => r.safest)).toBe(false);
+  });
+
+  it("margin sweep: move text per status, path-dependent marked", () => {
+    expect(formatMove(move())).toBe("32.80% short");
+    expect(formatMove(move({ value: 0.0812, side: "long" }))).toBe("8.12% long");
+    expect(formatMove(move({ status: "never", value: null, side: null }))).toBe(
+      "not liquidatable in this scenario",
+    );
+    expect(formatMove(move({ status: "at_entry", value: 0, side: "long" }))).toBe(
+      "0.00% (at entry)",
+    );
+    expect(
+      formatMove(move({ status: "unavailable", value: null, side: null, reason: "tier_overflow" })),
+    ).toBe("unavailable (tier_overflow)");
+    expect(
+      formatMove(move({ status: "unavailable", value: null, side: null, reason: "no_tier_table" })),
+    ).toBe("unavailable (no_tier_table)");
+    expect(
+      formatMove(move({ value: 0.6651038178164769, side: "long", path_dependent: true })),
+    ).toBe("66.51% long (simultaneous entry only)");
+    expect(formatMove({})).toBe("—");
+  });
+
+  it("margin sweep: a completed sweep names the safest setting and marks only its row", () => {
+    const v = sweepView(sweepReport(completedSweep()), "fresh");
+    expect(v.kind).toBe("completed");
+    if (v.kind !== "completed") return;
+    expect(v.title).toBe("Margin settings at k = 2");
+    expect(v.label).toBe("Modeled scenario: test label.");
+    expect(v.crossNote).toBe(true);
+    expect(v.safest).toEqual({
+      kind: "safest",
+      text: "Safest setting: isolated, leverage 3, margin limit 50% (liquidating move 32.80% short)",
+    });
+    expect(v.rows.map((r) => [r.mode, r.leverage, r.marginLimit, r.safest])).toEqual([
+      ["isolated", 3, 0.5, true],
+      ["isolated", 10, 1, false],
+      ["cross", 5, 0.5, false],
+    ]);
+    expect(v.rows.map((r) => r.positions)).toEqual(["1", "1", "2 + 1 smaller"]);
+    expect(v.rows.map((r) => r.move)).toEqual([
+      "32.80% short",
+      "8.12% long",
+      "66.51% long (simultaneous entry only)",
+    ]);
+    expect(v.rows[2]?.reasonText).toBe("Not ranked: multi-coin cross");
+
+    // An unrelated safest cell: the line and the marked row follow it.
+    const other = completedSweep({
+      k: 0.5,
+      safest: {
+        mode: "isolated",
+        leverage: 10,
+        max_margin_pct: 1,
+        move: move({ value: 0.0812, side: "long" }),
+      },
+    });
+    const w = sweepView(sweepReport(other), "fresh");
+    if (w.kind !== "completed") throw new Error(w.kind);
+    expect(w.title).toBe("Margin settings at k = 0.5");
+    expect(w.safest.text).toBe(
+      "Safest setting: isolated, leverage 10, margin limit 100% (liquidating move 8.12% long)",
+    );
+    expect(w.rows.map((r) => r.safest)).toEqual([false, true, false]);
+  });
+
+  it("margin sweep: isolated-only sweep has no cross note", () => {
+    const v = sweepView(sweepReport(completedSweep({ cells: [marginCell()] })), "fresh");
+    if (v.kind !== "completed") throw new Error(v.kind);
+    expect(v.crossNote).toBe(false);
+  });
+
+  it("margin sweep: no safe setting, skipped and failed say why", () => {
+    const none = sweepView(
+      sweepReport(completedSweep({ safest: null, safest_reason: "no_safe_setting" })),
+      "fresh",
+    );
+    if (none.kind !== "completed") throw new Error(none.kind);
+    expect(none.safest).toEqual({ kind: "none", text: "No safe setting" });
+
+    const skipped = completedSweep({
+      status: "skipped",
+      reason: "no_recommended_size",
+      recommendation_reason: "no_eligible_row",
+      k: null,
+      scenario: null,
+      cells: [],
+      safest: null,
+    });
+    expect(sweepView(sweepReport(skipped), "fresh")).toEqual({
+      kind: "message",
+      title: "Margin settings",
+      text: "Sweep skipped: no recommended size",
+    });
+
+    const failed = completedSweep({
+      status: "failed",
+      reason: "KeyError: 'venue'",
+      cells: [],
+      scenario: null,
+      safest: null,
+    });
+    expect(sweepView(sweepReport(failed), "fresh")).toEqual({
+      kind: "message",
+      title: "Margin settings at k = 2",
+      text: "Sweep failed: KeyError: 'venue'",
+    });
+  });
+
+  it("margin sweep: a legacy report or a report without the sweep shows no card", () => {
+    expect(sweepView(sweepReport(undefined), "fresh")).toEqual({ kind: "none" });
+    expect(sweepView(sweepReport(null), "fresh")).toEqual({ kind: "none" });
   });
 });
