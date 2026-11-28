@@ -102,7 +102,7 @@ Coverage axes — check which ones the change crosses and verify each side:
 ## Agent speed rules
 
 Timings, mutant caps, E2E and test-time rules: [`docs/claude/agent-speed.md`](docs/claude/agent-speed.md).
-- **Gate once per round:** `swarm-check.sh` runs the tests the diff reaches (import closure + by-path/string references + policy tests; `--list-tests` prints them); run it once, last, after targeted tests + ruff + mypy are green. On FAIL read the LOG it prints, re-run only the failing test, then the gate once more. Never run `pytest tests/unit` yourself.
+- **Gate once per round:** `swarm-check.sh` runs one-hop tests (direct importers + by-path/string references + policy tests; `--list-tests` prints them; `--full` catches the rest); run it once, last, after targeted tests + ruff + mypy are green. On FAIL read the LOG it prints, re-run only the failing test, then the gate once more. Never run `pytest tests/unit` yourself.
 - **Fewer, fatter turns:** batch every independent read, grep and test run in one turn; read whole functions; chain shell checks with `&&`; track work in beads, not todo lists.
 - **Keep proofs short:** unit tests and `exactness_239.py`; a live discovery check uses pop 4–6, 1–2 gens, a 2–3 month window.
 

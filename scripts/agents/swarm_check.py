@@ -13,12 +13,14 @@ A NEW check is registered in WARN_MODE_UNTIL with a date: until then its FAIL pr
 "WARN <name>: warn-mode until <date>: <detail>" and does not fail the gate, so its first job
 surfaces the backlog without a gate rerun.
 
-Two modes (bead q2ijs). PER ROUND (default, a maker's gate): ONE parallel pytest call over
-the changed test files + POLICY_TESTS + the reverse import closure of the changed vibe_quant
-modules (no cap) + the tests that reach a changed file by path or name (path-mentions,
-script consumers) + the files a `-k <stems>` can match (filtered by -k, so the explicit files
+Two modes (bead q2ijs). PER ROUND (default, a maker's gate) is a QUICK one-hop selection
+(user 2026-11-28, bead 135uq): ONE parallel pytest call over the changed test files +
+POLICY_TESTS + the tests importing a changed vibe_quant/tests module DIRECTLY (through
+package `__init__` facades, no further hop) + the tests that reach a changed file by path or
+name (path-mentions, a changed module named in a string, script consumers, the tests naming
+a changed .md) + the files a `-k <stems>` can match (filtered by -k, so the explicit files
 still run whole), `timing` tests deselected; then a serial `-m timing` call over the changed
-test files only.
+test files only. A caller two hops away is left to --full, the verifier's net.
 INTEGRATION (`--full`, the verifier before land): the whole tests/unit in parallel, then
 every `timing` test serially. A conftest/__init__ .py, pyproject.toml, uv.lock, a
 `__main__.py` outside vibe_quant/, a non-Python file under vibe_quant/ or tests/ (readers not
@@ -197,7 +199,9 @@ module the selection also scans tests/unit for the repo-relative path or the mod
 select half of tests/unit, and `-k` already matches the test files named after them). Those
 files join the importer selection. A generic file name (`__main__.py`, `__init__.py`, one
 without a suffix) is matched only as "<parent dir>/<name>". A changed scripts/** file selects
-the tests naming it or any script that names it (script_consumer_test_files).
+the tests naming or importing it, one hop (script_consumer_test_files). Left to --full: a test
+reaching a change through another script, a module or a .md reader globbing a directory
+(test_mkbrief.py renders docs/orchestration/prompts/*.md; chief ruling R-gf-3).
 
 Tool commands can be stubbed via env (full command, shell-quoted; for the gate's own tests,
 never needed in normal use: python-env handles dependency changes):
@@ -480,10 +484,9 @@ def _gate_slots_module() -> Any:
     return mod
 
 
-# No cap on the importer-file selection (the reverse import closure of the changed modules):
-# a hub module (metrics.py, errors.py, dsl/compiler.py) reaches 200-250 of ~380 test files,
-# and that closure still costs less than the whole suite, which also pays for the heaviest
-# indicator-port files. The full suite runs once per integration (`--full`, the verifier)
+# No cap on the importer-file selection (the DIRECT importers of the changed modules since
+# 2026-11-28; the old transitive closure reached 375 files for bankroll/recommend.py, bead
+# 135uq). The full suite runs once per integration (`--full`, the verifier)
 # and whenever full_suite_reason says the selection cannot be trusted (a conftest/__init__,
 # pyproject.toml or uv.lock change). Bead q2ijs: the old 150-file cap sent every
 # discovery/__main__.py round to the full suite (7-9 min under 4 parallel makers).
@@ -1501,7 +1504,7 @@ def _build_import_graph(
 # Production modules loaded by DIRECTORY SCAN, not by name: dsl/plugin_loader.py walks
 # dsl/plugins/ with pkgutil.iter_modules + importlib, dsl/compiler.py hashes plugins/*.py
 # and dsl/indicators.py triggers the load. Any change under the prefix (edit, add, delete,
-# rename) seeds these modules' reverse closure (review rev-gate-speed-1 F1: a rams.py diff
+# rename) seeds these modules' importers (review rev-gate-speed-1 F1: a rams.py diff
 # omitted tests/unit/test_indicator_compute.py). Re-check with
 # `rg 'importlib|import_module|iter_modules|spec_from_file|glob' vibe_quant` when adding one.
 DIRECTORY_LOADERS = {
@@ -1576,12 +1579,18 @@ def reached_modules(
     changed: Sequence[str],
     graph: Mapping[str, set[str]],
     importers: Mapping[str, set[str]] | None = None,
+    *,
+    one_hop: bool = False,
 ) -> set[str]:
     """The changed vibe_quant/tests modules plus every module importing one of them,
     directly or transitively (the reverse closure over the graph's modules).
 
-    `importers` is the prebuilt reverse index (`import_graph_pair`), which a plan reuses: it
-    is 705 sets to rebuild, one of the two allocations that dominated a plan's garbage."""
+    `one_hop` (the per-round importer and string selection, user 2026-11-28): only a package
+    `__init__` importing a reached module extends the walk - a facade re-export, whose
+    importers import the changed symbol directly; any other importer is a 2nd hop, left to
+    --full. `importers` is the prebuilt reverse index (`import_graph_pair`), which a plan
+    reuses: it is 705 sets to rebuild, one of the two allocations that dominated a plan's
+    garbage."""
     seeds = {mod for path in changed if (mod := graph_module_name(path))}
     if importers is None:
         built: dict[str, set[str]] = {}
@@ -1590,11 +1599,12 @@ def reached_modules(
                 for target in imports:
                     built.setdefault(target, set()).add(mod)
         importers = built
+    packages = {_dotted(p) for p in graph if p.endswith("__init__.py")} if one_hop else None
     reached = set(seeds)
     frontier = list(seeds)
     while frontier:
         for mod in importers.get(frontier.pop(), ()):
-            if mod not in reached:
+            if mod not in reached and (packages is None or mod in packages):
                 reached.add(mod)
                 frontier.append(mod)
     return reached
@@ -1681,17 +1691,26 @@ def dynamic_reference_test_files(
     return sorted(out)
 
 
-def importer_test_files(changed: Sequence[str], graph: Mapping[str, set[str]]) -> list[str]:
-    """tests/unit test files that reach a changed vibe_quant/tests module (reverse closure).
+def importer_test_files(
+    changed: Sequence[str],
+    graph: Mapping[str, set[str]],
+    importers: Mapping[str, set[str]] | None = None,
+    *,
+    one_hop: bool = True,
+) -> list[str]:
+    """tests/unit test files that import a changed vibe_quant/tests module DIRECTLY (one hop,
+    through package facades: `reached_modules(one_hop=True)`; `one_hop=False`: the whole
+    reverse closure, for the PASS cache's invalidation).
 
     Selection by test NAME (`-k <stem>`) misses a caller test whose names never mention the
-    module: tests/unit/test_symbol_agg.py::test_topk_ranks_gate_passers_first stayed red
-    through DiscoveryPipeline.run while the gate PASSed (20261015-funding-carry pqon2 r1).
-    The seeds are the modules the diff names; the walk follows vibe_quant AND tests modules
-    (a helper, or a test file another test imports). Sorted: the pytest command line must
-    not depend on filesystem order.
+    module (20261015-funding-carry pqon2 r1), so imports select. Until 2026-11-28 this was
+    the whole reverse closure: a bankroll/recommend.py change reached 375 files through the
+    API app and the CLI (bead 135uq, 825 s); the user made the maker gate a quick check and
+    --full the net for a caller further away. The seeds are the modules the diff names
+    (vibe_quant AND tests modules: a changed helper selects the tests importing it). Sorted:
+    the pytest command line must not depend on filesystem order.
     """
-    reached = reached_modules(changed, graph)
+    reached = reached_modules(changed, graph, importers, one_hop=one_hop)
     if not reached:
         return []
     return sorted(
@@ -1728,15 +1747,23 @@ def is_gate_meta_test(test: str) -> bool:
     return Path(test).name.startswith("test_swarm_check")
 
 
-def md_reader_test_files(changed: Sequence[str], worktree: Path) -> list[str]:
-    """For a changed `*.md` outside vibe_quant/: every tests/unit file whose source spells
-    the `.md` suffix (a reader names it: Path("SKILL.md"), glob("*.md"), prompts/x.md). A
-    test that walks a directory without naming the suffix is a POLICY_TESTS scanner, which
-    always runs. test_mkbrief.py renders docs/orchestration/prompts/*.md, so .md is not
-    inert."""
-    if not any(p.endswith(".md") and not p.startswith("vibe_quant/") for p in changed):
-        return []
-    return tests_mentioning(worktree, {".md"})
+def md_reader_test_files(
+    changed: Sequence[str], worktree: Path, *, one_hop: bool = True
+) -> list[str]:
+    """For a changed `*.md` outside vibe_quant/: the tests/unit files naming THAT file
+    (file_needles: its repo path or file name, e.g. "GLOSSARY.md"). Until 2026-11-28 every
+    file spelling the `.md` suffix ran (63 for a GLOSSARY.md edit, bead 135uq); a reader that
+    globs a directory (test_mkbrief.py renders docs/orchestration/prompts/*.md) now runs in
+    --full, and a tree-scanning reader is a POLICY_TESTS entry (the word budgets).
+    `one_hop=False` (the PASS cache's invalidation) keeps the old rule: every file spelling
+    the `.md` suffix."""
+    mds = [p for p in changed if p.endswith(".md") and not p.startswith("vibe_quant/")]
+    if not one_hop:
+        return tests_mentioning(worktree, {".md"}) if mds else []
+    needles: set[str] = set()
+    for path in mds:
+        needles |= file_needles(path)
+    return tests_mentioning(worktree, needles)
 
 
 def file_needles(path: str) -> set[str]:
@@ -1769,38 +1796,39 @@ def tests_mentioning(worktree: Path, needles: AbstractSet[str]) -> list[str]:
     return out
 
 
-def script_consumer_test_files(changed: Sequence[str], worktree: Path) -> list[str]:
-    """tests/unit test files that reach a changed scripts/** file by NAME, directly or through
-    other scripts.
+def script_consumer_test_files(
+    changed: Sequence[str], worktree: Path, *, one_hop: bool = True
+) -> list[str]:
+    """tests/unit test files that reach a changed scripts/** file DIRECTLY: naming it
+    (file_needles: path + file name, never a bare stem) or importing a changed
+    scripts/agents/<mod>.py by module name (script_import_re; review rev-gate-1 B6, such an
+    importer was only a `-k` candidate).
 
-    Scripts load each other by path (`spec_from_file_location(..., with_name("x.py"))`, a
-    subprocess of `scripts/agents/x.py`), so there is no import edge to walk. 2026-10-22:
-    commit 8805dea8 changed scripts/agents/handoff_lint.py, the gate PASSed, and
-    tests/unit/test_swarm_bus.py failed - bus.py loads handoff_lint.py by file name and the
-    test loads bus.py. The walk: every scripts/** file whose text names a reached file joins
-    the reached set (fixpoint), then every test file naming any reached file is selected.
-    Needles are file_needles (path + file name), never a bare stem. A reached
-    scripts/agents/<mod>.py is also reached through a Python import by module name
-    (script_import_re): review rev-gate-1 B6, such an importer was only a `-k` candidate.
+    Scripts load each other by path, so there is no import edge to walk. Until 2026-11-28 the
+    walk also followed every scripts/** file naming a reached script to a fixpoint (2026-10-22:
+    bus.py loads handoff_lint.py by file name, so a handoff_lint.py edit must run
+    test_swarm_bus.py): a swarm_check.py-only edit selected 33 files. The user made the maker
+    gate a quick one-hop check (chief ruling R-gf-2, bead 135uq): a test reaching the change
+    through another script is a 2nd hop, left to --full. `one_hop=False` (the PASS cache's
+    invalidation) keeps that fixpoint: every scripts/** file naming or importing a reached
+    script joins the reached set.
     """
     seeds = [p for p in changed if p.startswith("scripts/") and not is_board_path(p)]
     if not seeds:
         return []
-    root = worktree / "scripts"
-    texts: dict[str, str] = {}
-    if root.is_dir():
-        for path in sorted(root.rglob("*")):
-            if not path.is_file() or "__pycache__" in path.parts:
-                continue
-            texts[path.relative_to(worktree).as_posix()] = path.read_text(
-                encoding="utf-8", errors="replace"
-            )  # OSError: plan_tests runs the full suite
     reached = set(seeds)
     needles: set[str] = set()
     for seed in seeds:
         needles |= file_needles(seed)
     imports = script_import_re(reached)
-    grew = True
+    root = worktree / "scripts"
+    grew = not one_hop and root.is_dir()
+    texts: dict[str, str] = {}
+    if grew:
+        for path in sorted(root.rglob("*")):
+            if path.is_file() and "__pycache__" not in path.parts:
+                rel = path.relative_to(worktree).as_posix()
+                texts[rel] = read_cached(path, "replace")  # OSError: plan_tests -> full
     while grew:
         grew = False
         for rel, text in texts.items():
@@ -2347,8 +2375,10 @@ def write_file_passes(cache_dir: Path, env: str, tree: str, tests: Sequence[str]
 
 
 def diff_reaches(worktree: Path, paths: Sequence[str]) -> set[str] | None:
-    """The tests/unit files this gate's per-round selection runs for a diff of `paths`: the
-    consumers, the `-k` candidates, the changed tests and the triggered policy tests. None
+    """The tests/unit files a diff of `paths` may change the verdict of: the consumers over
+    every rule's TRANSITIVE closure (not the one-hop per-round selection: a stored PASS 2
+    hops from a later round's diff is stale, chief ruling R-gf-4), the `-k` candidates, the
+    changed tests and the triggered policy tests. None
     when it would run the whole suite, a conftest/pyproject/uv.lock changed, or the
     selection is unknown (any error): the caller then reuses nothing."""
     if full_suite_reason(paths) or any(
@@ -2356,7 +2386,7 @@ def diff_reaches(worktree: Path, paths: Sequence[str]) -> set[str] | None:
     ):
         return None
     try:
-        reached = _selected_consumers(worktree, paths)
+        reached = _selected_consumers(worktree, paths, one_hop=False)
         if expr := k_expr([p for p in paths if not graph_module_name(p)]):
             reached.update(k_candidate_files(worktree, expr, set()))
         reached.update(policy_test_files(worktree, paths))
@@ -2602,17 +2632,23 @@ class FullSuite(Exception):
 
 
 def _selected_consumers(
-    worktree: Path, changed: Sequence[str], why: dict[str, list[str]] | None = None
+    worktree: Path,
+    changed: Sequence[str],
+    why: dict[str, list[str]] | None = None,
+    *,
+    one_hop: bool = True,
 ) -> set[str]:
-    """Every tests/unit file reaching a changed path: the reverse import closure over
+    """Every tests/unit file one hop from a changed path: the direct importers over
     vibe_quant AND tests modules (seeded with the directory loaders of a changed plugin), the
-    tests naming a changed module's path or a reached module in a string, the consumers of a
+    tests naming a changed module's path or a changed module in a string, the consumers of a
     changed script, and the tests that may read a changed non-Python file. Raises GraphError
     or OSError when a file cannot be read, FullSuite when the change reaches something the
     selection does not model: the caller then runs the full suite. `why` collects the files
     each rule selected (kind -> files). A changed tests/fixtures resource adds its readers
     (fixture_reader_files) as if they had changed: a reader test runs, a reader helper
-    seeds its importers, a reader script its consumers."""
+    seeds its importers, a reader script its consumers. `one_hop=False` (diff_reaches, the
+    PASS cache's invalidation; chief ruling R-gf-4) walks every rule's whole closure, the
+    pre-2026-11-28 selection: a stored PASS 2 hops from a later diff must not be reused."""
     selected: set[str] = set()
 
     def add(kind: str, files: Sequence[str]) -> None:
@@ -2639,14 +2675,17 @@ def _selected_consumers(
         if loose := unmodelled_loaders(worktree, snapshot):
             raise FullSuite(f"unmodelled dynamic loader {', '.join(loose)}")
         graph, importers = import_graph_pair(worktree, seeds, snapshot)
+        # one hop for the importer and string rules (quick maker gate, user 2026-11-28); the
+        # conftest rule and its FullSuite triggers keep the transitive closure (fail closed)
         reached = reached_modules(seeds, graph, importers)
-        add("importer", importer_test_files(seeds, graph))
+        direct = reached_modules(seeds, graph, importers, one_hop=True) if one_hop else reached
+        add("importer", importer_test_files(seeds, graph, importers, one_hop=one_hop))
         add("mention", path_mention_test_files(seeds, worktree))
-        add("dynamic", dynamic_reference_test_files(reached, worktree, snapshot))
+        add("dynamic", dynamic_reference_test_files(direct, worktree, snapshot))
         check_pytest_plugins(worktree, snapshot)
         add("conftest", conftest_fixture_test_files(reached, graph, worktree, snapshot))
-    add("script", script_consumer_test_files(changed, worktree))
-    add("md", md_reader_test_files(changed, worktree))
+    add("script", script_consumer_test_files(changed, worktree, one_hop=one_hop))
+    add("md", md_reader_test_files(changed, worktree, one_hop=one_hop))
     return selected
 
 
@@ -3158,7 +3197,7 @@ def load_line(load1: float | None) -> str:
 def plan_tests(cfg: Config, state: GitState) -> TestPlan:
     """What the tests check runs. First, serially, the triggered POLICY_TESTS (fail fast: a red
     one skips the rest). Per round (default): ONE parallel call over the changed test
-    files + the reverse import closure + the tests that reach a changed file
+    files + the direct (one-hop) importers + the tests that reach a changed file
     by path/name, plus the files a `-k <stems>` can match (filtered by -k), with `timing`
     tests deselected; then a serial `-m timing` call over the changed test files only.
     --full (integration) or a full_suite_reason runs the whole tests/unit in parallel, then

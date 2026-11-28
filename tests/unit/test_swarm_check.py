@@ -519,11 +519,10 @@ class TestImportGraph:
             plan.notes[0].startswith("full tests/unit: selection unknown") and why in plan.notes[0]
         )
 
-    def test_direct_and_transitive_importers(self) -> None:
+    def test_direct_importers_only(self) -> None:
         # test_other imports vibe_quant.c directly; test_direct reaches it through
-        # vibe_quant.a.b (a two-module chain: the caller test in the bead's report).
+        # vibe_quant.a.b, a 2nd hop the quick per-round gate leaves to --full (2026-11-28)
         assert swarm_check.importer_test_files(["vibe_quant/c.py"], self._GRAPH) == [
-            "tests/unit/test_direct.py",
             "tests/unit/test_other.py",
         ]
 
@@ -835,9 +834,9 @@ class TestImporterTestSelection:
         assert _called_with(runner, "test_symbol_agg.py")
         assert swarm_check.gate_summary(checks) == ("GATE FAIL (1 failed)", 1)
 
-    def test_deleted_module_still_selects_its_lazy_importers_chain(self, tmp_path: Path) -> None:
+    def test_deleted_module_still_selects_its_lazy_importers(self, tmp_path: Path) -> None:
         # Deleting selection.py (on disk) must keep the `from vibe_quant.discovery import
-        # selection` submodule edge, or the pipeline's caller test is never selected.
+        # selection` submodule edge, or the caller test is never selected.
         repo = _init_repo(tmp_path)
         _git(repo, "checkout", "-qb", "feature")
         (repo / "vibe_quant" / "discovery").mkdir()
@@ -845,13 +844,9 @@ class TestImporterTestSelection:
         (repo / "vibe_quant" / "discovery" / "selection.py").write_text(
             "def f() -> int:\n    return 1\n"
         )
-        (repo / "vibe_quant" / "discovery" / "pipeline.py").write_text(
-            "def run() -> int:\n    from vibe_quant.discovery import selection\n\n"
-            "    return selection.f()\n"
-        )
         (repo / "tests" / "unit" / "test_caller.py").write_text(
-            "from vibe_quant.discovery.pipeline import run\n\n\n"
-            "def test_run() -> None:\n    assert run() == 1\n"
+            "def test_run() -> None:\n    from vibe_quant.discovery import selection\n\n"
+            "    assert selection.f() == 1\n"
         )
         _git(repo, "add", "-A")
         _git(repo, "commit", "-qm", "lazy submodule import")

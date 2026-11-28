@@ -226,6 +226,21 @@ class TestFileCache:
         _gate(tmp_path, repo, run)
         assert _ran(run) == {"tests/unit/test_other.py"}
 
+    def test_a_second_hop_edit_reruns_the_test_two_hops_away(self, tmp_path: Path) -> None:
+        """Review rev-gatefast-1 B1 (chief ruling R-gf-4): round 1 edits foo.py (which imports
+        bar.py) and test_foo PASSes; round 2 edits only bar.py. test_foo is still selected
+        (foo.py differs from the base) and must re-run, not reuse its stale PASS: the cache
+        invalidation walks the transitive closure, not the one-hop selection."""
+        repo = _cache_repo(tmp_path)
+        _commit(repo, {"vibe_quant/foo.py": "from vibe_quant.bar import B\nF = 2\n"})
+        _gate(tmp_path, repo, _Pytest())
+        _commit(repo, {"vibe_quant/bar.py": "B = 3\n"})
+        run = _Pytest()
+        run.red = {"tests/unit/test_foo.py"}
+        result, _ = _gate(tmp_path, repo, run)
+        assert _ran(run) == {"tests/unit/test_foo.py", "tests/unit/test_other.py"}
+        assert result.check.status == "FAIL"
+
     def test_a_failed_file_is_never_stored(self, tmp_path: Path) -> None:
         repo = _cache_repo(tmp_path)
         _gate(tmp_path, repo, _Pytest())

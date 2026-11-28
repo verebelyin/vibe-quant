@@ -130,15 +130,20 @@ class TestCacheInvalidation:
         self, tmp_path: Path
     ) -> None:
         """The import graph keys on the snapshot: a new vibe_quant edge in the SAME process
-        must re-plan (a stale graph would miss the test that now reaches the module)."""
+        must re-plan (a stale graph would miss the test that now reaches the module). The
+        edge is a package facade re-export, which the one-hop selection walks through."""
         repo = self._repo(tmp_path)
         (repo / "vibe_quant" / "bar.py").write_text("B = 1\n")
+        (repo / "vibe_quant" / "pkg").mkdir()
+        (repo / "vibe_quant" / "pkg" / "__init__.py").write_text("F = 1\n")
         (repo / "tests" / "unit" / "test_other.py").write_text(
-            "from vibe_quant.foo import F\n\n\ndef test_x() -> None:\n    assert F == 1\n"
+            "from vibe_quant.pkg import F\n\n\ndef test_x() -> None:\n    assert F == 1\n"
         )
         assert _plan(repo, ["vibe_quant/bar.py"]).explicit == set()
 
-        (repo / "vibe_quant" / "foo.py").write_text("from vibe_quant.bar import B\n\nF = B\n")
+        (repo / "vibe_quant" / "pkg" / "__init__.py").write_text(
+            "from vibe_quant.bar import B\n\nF = B\n"
+        )
         assert _plan(repo, ["vibe_quant/bar.py"]).explicit == {"tests/unit/test_other.py"}
 
     def test_a_test_file_that_gains_an_import_between_two_plans_is_selected(

@@ -1,8 +1,10 @@
 """Per-round test selection of scripts/agents/swarm_check.py.
 
-The per-round gate runs the reverse import closure, the tests that reach a changed file by
-path or name, the policy tests and a `-k` group restricted to files that can match it; the
-whole tests/unit runs only under --full or a full_suite_reason. These tests pin what that
+The per-round gate is a quick one-hop selection (user 2026-11-28): the direct importers, the
+tests that reach a changed file by path or name, the policy tests and a `-k` group restricted
+to files that can match it; the whole tests/unit runs only under --full or a
+full_suite_reason. A 2nd hop (a caller's tests, a script loading the changed script, a .md
+reader globbing a directory such as test_mkbrief.py) runs only under --full. These tests pin what that
 selection must still catch (on the REAL tree where a past miss happened) and the --full /
 --list-tests modes.
 """
@@ -189,19 +191,23 @@ class TestScriptConsumers:
     @pytest.mark.parametrize(
         ("changed", "expected"),
         [
-            # a.py -> b.py names it -> test_b.py names b.py; the shim names b.py too
-            (["scripts/agents/a.py"], ["tests/unit/test_b.py", "tests/unit/test_shim.py"]),
-            (["scripts/agents/b.py"], ["tests/unit/test_b.py", "tests/unit/test_shim.py"]),
+            # one hop (chief ruling R-gf-2, user 2026-11-28): test_b.py and the shim reach
+            # a.py only through b.py, a 2nd hop left to --full
+            (["scripts/agents/a.py"], []),
+            (["scripts/agents/b.py"], ["tests/unit/test_b.py"]),
             # the shim is matched by "agents/sh", never by the bare word "sh"
             (["scripts/agents/sh"], ["tests/unit/test_shim.py"]),
             (["scripts/agents/c.py"], []),
-            (["scripts/agents/q2.py"], ["tests/unit/test_top.py"]),
+            (["scripts/agents/q2.py"], []),
+            (["scripts/agents/a_top.py"], ["tests/unit/test_top.py"]),
             (["vibe_quant/x.py", "docs/a.md"], []),
         ],
     )
-    def test_a_script_reaches_the_tests_of_its_by_name_consumers(
+    def test_a_script_selects_the_tests_naming_it_one_hop(
         self, tmp_path: Path, changed: list[str], expected: list[str]
     ) -> None:
+        """Until 2026-11-28 the walk followed the scripts naming a reached script to a
+        fixpoint (a swarm_check.py-only edit selected 33 files through bus.py, shims, ...)."""
         repo = _scripts_repo(tmp_path)
         assert swarm_check.script_consumer_test_files(changed, repo) == expected
 
@@ -229,9 +235,9 @@ class TestScriptConsumers:
             "tests/unit/test_dotted.py",
             "tests/unit/test_from.py",
             "tests/unit/test_syspath.py",
-            "tests/unit/test_via_user.py",  # user.py imports it by dotted name
         } <= plan.explicit
-        assert "tests/unit/test_namesake.py" not in plan.explicit
+        # user.py imports it by dotted name: test_via_user.py is a 2nd hop, left to --full
+        assert not {"tests/unit/test_namesake.py", "tests/unit/test_via_user.py"} & plan.explicit
 
 
 class TestFixtureReaders:
@@ -336,17 +342,27 @@ def _mini(tmp_path: Path, files: dict[str, str]) -> Path:
 class TestReviewProbes:
     """The four review probes (rev-gate-speed-1), as selection assertions on scratch trees."""
 
-    def test_a_string_loaded_module_selects_the_loader_tests(self, tmp_path: Path) -> None:
+    def test_a_string_loaded_module_is_a_second_hop_left_to_full(self, tmp_path: Path) -> None:
+        """A production string reference is an import edge, but the test reaching alpha.py
+        through loader.py is a 2nd hop: the quick per-round selection (user 2026-11-28,
+        chief ruling R-gf-1) leaves 2-hop loaders to --full. A test naming the module in a
+        string, or importing it, still runs per round."""
         repo = _mini(
             tmp_path,
             {
                 "vibe_quant/plugins/alpha.py": "X = 2\n",
                 "vibe_quant/loader.py": 'import importlib\nNAME = "vibe_quant.plugins.alpha"\n',
                 "tests/unit/test_alpha_contract.py": "from vibe_quant.loader import NAME\n",
+                "tests/unit/test_alpha_patch.py": 'T = "vibe_quant.plugins.alpha.X"\n',
+                "tests/unit/test_alpha.py": "from vibe_quant.plugins.alpha import X\n",
             },
         )
         plan = _plan(repo, ["vibe_quant/plugins/alpha.py"])
-        assert "tests/unit/test_alpha_contract.py" in plan.explicit
+        assert plan.reasons == {
+            "importer": ["tests/unit/test_alpha.py"],
+            "dynamic": ["tests/unit/test_alpha_patch.py"],
+        }
+        assert _plan(repo, ["vibe_quant/plugins/alpha.py"], full=True).full
 
 
 class TestRound2Probes:
@@ -565,3 +581,133 @@ class TestFullMode:
         assert swarm_check.cache_key("t", "b", round_cfg, "x", "m") != swarm_check.cache_key(
             "t", "b", full_cfg, "x", "m"
         )
+
+
+class TestQuickSelection:
+    """User 2026-11-28: the maker gate is a QUICK one-hop selection; --full (the verifier at
+    integration) catches the far-away breakage. Bead 135uq: a bankroll/recommend.py change
+    selected 413 files (375 by the transitive import closure) for one direct importer."""
+
+    _TREE = {
+        "vibe_quant/__init__.py": "",
+        "vibe_quant/core.py": "def f() -> int:\n    return 1\n",
+        "vibe_quant/mid.py": "from vibe_quant.core import f\n",
+        "vibe_quant/top.py": "from vibe_quant.mid import f\n",
+        "vibe_quant/pkg/__init__.py": "from vibe_quant.pkg.impl import G\n",
+        "vibe_quant/pkg/impl.py": "G = 1\n",
+        "vibe_quant/pkg/user.py": "from vibe_quant.pkg.impl import G\n",
+        "tests/unit/test_core.py": "from vibe_quant.core import f\n",
+        "tests/unit/test_mid.py": "from vibe_quant.mid import f\n",
+        "tests/unit/test_top.py": "from vibe_quant.top import f\n",
+        "tests/unit/test_patch.py": 'TARGET = "vibe_quant.core.f"\n',
+        "tests/unit/test_mid_patch.py": 'T = "vibe_quant.mid.f"\n',  # a 2nd hop for core.py
+        "tests/unit/test_reads.py": 'SRC = "vibe_quant/core.py"\n',
+        "tests/unit/test_facade.py": "from vibe_quant.pkg import G\n",
+        "tests/unit/test_user.py": "from vibe_quant.pkg.user import G\n",
+        "tests/unit/test_impl.py": "from vibe_quant.pkg.impl import G\n",
+        "tests/unit/test_glossary.py": 'DOC = "GLOSSARY.md"\n',
+        "tests/unit/test_skills.py": 'DOC = "SKILL.md"\n',
+        "tests/unit/test_agent_speed.py": 'DOC = "docs/claude/agent-speed.md"\n',
+    }
+
+    @pytest.mark.parametrize(
+        ("changed", "reasons"),
+        [
+            (
+                "vibe_quant/core.py",
+                {
+                    "importer": ["tests/unit/test_core.py"],
+                    "mention": ["tests/unit/test_reads.py"],
+                    "dynamic": ["tests/unit/test_patch.py"],
+                },
+            ),
+            # a package __init__ re-exporting the changed module is a facade: its importers
+            # import the changed symbol directly; a sibling module's importers are a 2nd hop
+            (
+                "vibe_quant/pkg/impl.py",
+                {"importer": ["tests/unit/test_facade.py", "tests/unit/test_impl.py"]},
+            ),
+        ],
+    )
+    def test_a_module_change_selects_its_direct_importers_and_mentions_only(
+        self, tmp_path: Path, changed: str, reasons: dict[str, list[str]]
+    ) -> None:
+        plan = _plan(_mini(tmp_path, self._TREE), [changed])
+        assert not plan.full, plan.notes
+        assert plan.reasons == reasons
+        assert sorted(plan.explicit) == sorted(f for fs in reasons.values() for f in fs)
+
+    @pytest.mark.parametrize(
+        ("changed", "selected"),
+        [
+            ("GLOSSARY.md", ["tests/unit/test_glossary.py"]),
+            ("docs/claude/agent-speed.md", ["tests/unit/test_agent_speed.py"]),
+        ],
+    )
+    def test_an_md_change_selects_only_the_tests_naming_that_file(
+        self, tmp_path: Path, changed: str, selected: list[str]
+    ) -> None:
+        plan = _plan(_mini(tmp_path, self._TREE), [changed])
+        assert not plan.full, plan.notes
+        assert plan.reasons == {"md": selected}
+
+    @pytest.mark.parametrize(
+        ("changed", "why"),
+        [
+            ("vibe_quant/pkg/__init__.py", "__init__"),
+            ("tests/unit/conftest.py", "conftest"),
+        ],
+    )
+    def test_the_fail_closed_triggers_still_run_the_full_suite(
+        self, tmp_path: Path, changed: str, why: str
+    ) -> None:
+        tree = {**self._TREE, "tests/unit/conftest.py": ""}
+        plan = _plan(_mini(tmp_path, tree), [changed])
+        assert plan.full and plan.files == ["tests/unit"]
+        assert why in plan.notes[0]
+
+    def test_the_conftest_rule_keeps_the_transitive_closure(self, tmp_path: Path) -> None:
+        """Chief ruling R-gf-1: a conftest fixture importing vibe_quant.mid (which imports the
+        changed core.py) still selects its requesting test, and a module-level conftest import
+        of mid still runs the whole tests/unit (fail closed): only the importer and string
+        rules are one hop."""
+        fixture = "import pytest\n\n\n@pytest.fixture\ndef mid():\n    import vibe_quant.mid\n"
+        tree = {
+            **self._TREE,
+            "tests/unit/sub/conftest.py": fixture,
+            "tests/unit/sub/test_req.py": "def test_x(mid):\n    pass\n",
+        }
+        plan = _plan(_mini(tmp_path / "fixture", tree), ["vibe_quant/core.py"])
+        assert not plan.full, plan.notes
+        assert plan.reasons.get("conftest") == ["tests/unit/sub/test_req.py"]
+        tree = {**self._TREE, "tests/unit/conftest.py": "import vibe_quant.mid\n"}
+        plan = _plan(_mini(tmp_path / "module", tree), ["vibe_quant/core.py"])
+        assert plan.full and "conftest" in plan.notes[0]
+
+    @pytest.mark.parametrize(
+        ("changed", "second_hop"),
+        [
+            ("vibe_quant/core.py", {"tests/unit/test_mid.py", "tests/unit/test_top.py"}),
+            ("vibe_quant/core.py", {"tests/unit/test_mid_patch.py"}),  # string of a 2-hop module
+            ("scripts/agents/alpha_tool.py", {"tests/unit/test_beta.py"}),  # beta loads alpha
+            ("docs/x.md", {"tests/unit/test_mdglob.py"}),  # globs *.md, names no file
+        ],
+    )
+    def test_the_pass_cache_invalidation_keeps_the_transitive_closure(
+        self, tmp_path: Path, changed: str, second_hop: set[str]
+    ) -> None:
+        """Chief ruling R-gf-4 (review rev-gatefast-1 B1): diff_reaches decides whether a
+        stored per-file PASS still holds, so it walks the whole closure: a test 2 hops from
+        a later round's diff must re-run even though the quick selection skips it."""
+        tree = {
+            **self._TREE,
+            "scripts/agents/alpha_tool.py": "A = 1\n",
+            "scripts/agents/beta_tool.py": 'SRC = HERE / "alpha_tool.py"\n',
+            "tests/unit/test_beta.py": 'B = ROOT / "scripts/agents/beta_tool.py"\n',
+            "docs/x.md": "x\n",
+            "tests/unit/test_mdglob.py": 'DOCS = sorted(ROOT.glob("docs/*.md"))\n',
+        }
+        repo = _mini(tmp_path, tree)
+        assert not second_hop & _plan(repo, [changed]).explicit
+        reached = swarm_check.diff_reaches(repo, [changed])
+        assert reached is not None and second_hop <= reached
