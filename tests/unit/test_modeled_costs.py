@@ -457,6 +457,7 @@ def _position_costs(pos: FakePosition, *, total: float, slippage: float = 0.0) -
         pos_fees=0.0,
         slippage_cost=slippage,
         accrual=FundingAccrual(total=total),
+        turnover=0.0,
     )
 
 
@@ -582,6 +583,7 @@ def test_reconcile_ignores_open_positions(archive: Path) -> None:
         pos_fees=0.0,
         slippage_cost=0.5,
         accrual=FundingAccrual(total=0.1),
+        turnover=0.0,
     )
 
     _module().reconcile(ledger, [item])  # no raise: not a closed position

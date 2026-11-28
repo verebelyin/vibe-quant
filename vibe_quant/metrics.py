@@ -171,6 +171,76 @@ def fees_pct_equity_per_year(fees: float, starting_balance: float, days: float) 
     return fees / starting_balance * 365.0 / days
 
 
+@dataclass(frozen=True, slots=True)
+class CostEdge:
+    """A run's edge and costs per unit of traded notional, in bps per side.
+
+    ``turnover`` is the summed |notional| of every fill that paid a tier fee plus the
+    run-end mark leg (a liquidation hit leg pays clearance, not a tier fee: excluded).
+    ``net_pnl`` has funding INSIDE; ``commissions`` are the tier fees (liquidation
+    clearance excluded); ``slippage`` is the booked modelled slippage (0.0 in screening,
+    whose fill prices carry it, so there ``breakeven_fee_bps == gross_edge_bps``).
+    Every bps is ``None`` when ``turnover <= 0`` or an input or the result is not
+    finite (never raises).
+    """
+
+    turnover: float
+    net_pnl: float
+    commissions: float
+    slippage: float
+
+    def _bps(self, numerator: float) -> float | None:
+        inputs = (self.turnover, self.net_pnl, self.commissions, self.slippage)
+        if not all(math.isfinite(v) for v in inputs) or self.turnover <= 0.0:
+            return None
+        bps = numerator / self.turnover * 1e4
+        return bps if math.isfinite(bps) else None
+
+    @property
+    def gross_edge_bps(self) -> float | None:
+        """Edge before every cost: ``(net + commissions + slippage) / turnover``."""
+        return self._bps(self.net_pnl + self.commissions + self.slippage)
+
+    @property
+    def cost_paid_bps(self) -> float | None:
+        """Costs paid: ``(commissions + slippage) / turnover``."""
+        return self._bps(self.commissions + self.slippage)
+
+    @property
+    def breakeven_fee_bps(self) -> float | None:
+        """The fee per side that nets zero, slippage as booked: ``(net + commissions) / turnover``."""
+        return self._bps(self.net_pnl + self.commissions)
+
+    def to_notes(self) -> dict[str, float | None]:
+        """The stored shape; its key order is the sweep-row column order."""
+        return {
+            "turnover": self.turnover,
+            "gross_edge_bps": self.gross_edge_bps,
+            "cost_paid_bps": self.cost_paid_bps,
+            "breakeven_fee_bps": self.breakeven_fee_bps,
+        }
+
+    @staticmethod
+    def total(items: Sequence[CostEdge | None]) -> CostEdge | None:
+        """Field sums in item order; ``None`` when empty or any part is unrecorded."""
+        if not items or any(item is None for item in items):
+            return None
+        turnover = net_pnl = commissions = slippage = 0.0
+        for item in cast("Sequence[CostEdge]", items):
+            turnover += item.turnover
+            net_pnl += item.net_pnl
+            commissions += item.commissions
+            slippage += item.slippage
+        return CostEdge(turnover, net_pnl, commissions, slippage)
+
+
+def cost_edge_columns(ce: CostEdge | None) -> dict[str, float | None]:
+    """``ce.to_notes()``, or the same four keys all ``None`` (fixed key order)."""
+    if ce is None:
+        return dict.fromkeys(("turnover", "gross_edge_bps", "cost_paid_bps", "breakeven_fee_bps"))
+    return ce.to_notes()
+
+
 _DAY_NS = 86_400 * 1_000_000_000
 
 

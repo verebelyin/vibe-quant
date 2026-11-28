@@ -440,6 +440,7 @@ class PositionCosts:
     at the entry) + ``exit_slippage`` (booked at the exit). ``exit_price`` /
     ``exit_reason`` are the trade-record projection: set for a marked position and a
     liquidated one, ``None`` for an ordinary close (the caller reads ``avg_px_close``).
+    ``turnover`` is :func:`position_turnover` (tier-fee-paying fills plus the mark leg).
     """
 
     pos: Any
@@ -451,6 +452,7 @@ class PositionCosts:
     pos_fees: float
     slippage_cost: float
     accrual: FundingAccrual | None
+    turnover: float
     fee_legs: tuple[float, float] | None = None
     gross_pnl: float | None = None
     entry_slippage: float = 0.0
@@ -470,6 +472,7 @@ class Ledger:
     total_slippage: float = 0.0
     total_funding: float = 0.0
     funding_fallbacks: int = 0
+    turnover: float = 0.0
     unrealized_at_end: float = 0.0
     cash_events: list[tuple[int, float]] = field(default_factory=list)
     modeled_cash: dict[str, list[tuple[int, float]]] = field(default_factory=dict)
@@ -546,6 +549,7 @@ def cost_positions(
                 pos_fees=pos_fees,
                 slippage_cost=entry_slip + exit_slip,
                 accrual=accrual,
+                turnover=position_turnover(pos, mark),
                 entry_slippage=entry_slip,
                 exit_slippage=exit_slip,
             )
@@ -587,6 +591,7 @@ def accumulate(
         else:
             ledger.total_fees += abs(item.pos_fees)
         ledger.total_slippage += item.slippage_cost
+        ledger.turnover += item.turnover
 
         funding_fees = 0.0
         funding_events: list[tuple[int, float]] = []
@@ -627,12 +632,31 @@ class ScreeningLiquidationTrades:
     total_fees: float = 0.0
     total_funding: float = 0.0
     funding_fallbacks: int = 0
+    turnover: float = 0.0  # position_turnover summed in loop order; dropped positions skipped
     trade_pnls: list[float] = field(default_factory=list)  # net of costs incl. funding
     closed_net: list[tuple[int, float]] = field(default_factory=list)
     cash_events: list[tuple[int, float]] = field(default_factory=list)
     # per-trade return on entry notional for the return moments (closed / liquidated only)
     returns: list[float] = field(default_factory=list)
     n_closed: int = 0
+
+
+def position_turnover(pos: Any, mark: Any | None = None, hit: Any | None = None) -> float:
+    """Summed |notional| of a position's tier-fee-paying fills, in ``pos.events`` order.
+
+    With ``hit`` only the fills the overlay keeps count (``ts_event <= hit.ts``, as
+    :func:`liquidated_close`); the hit leg itself pays clearance, not a tier fee, so it is
+    never added. Without a hit, a ``mark`` adds the run-end leg ``|signed_qty| * mark.price``
+    (the notional the mark's ``exit_fee`` is charged on).
+    """
+    turnover = 0.0
+    for fill in pos.events:
+        if hit is not None and int(fill.ts_event) > hit.ts:
+            continue
+        turnover += abs(float(fill.last_px) * float(fill.last_qty))
+    if hit is None and mark is not None:
+        turnover += abs(float(pos.signed_qty)) * mark.price
+    return turnover
 
 
 def liquidated_close(pos: Any, hit: Any) -> tuple[float, list[float]]:
@@ -698,6 +722,7 @@ def screening_liquidation_trades(
             fees = sum(abs(c) for c in kept_commissions) + hit.clearance_fee
             closed = True
             accrual = accrual.truncated(hit.ts)
+            turnover = position_turnover(pos, hit=hit)
         else:
             fees = sum(abs(float(c)) for c in pos.commissions())
             realized = float(pos.realized_pnl)
@@ -708,7 +733,9 @@ def screening_liquidation_trades(
                 fees += mark.exit_fee
                 realized += mark.unrealized - mark.exit_fee
             closed = mark is None
+            turnover = position_turnover(pos, mark)
         out.total_fees += fees
+        out.turnover += turnover
         out.total_funding += accrual.total
         out.funding_fallbacks += accrual.fallback_settlements
         out.trade_pnls.append(realized - accrual.total)
@@ -753,6 +780,7 @@ def _validation_liquidated_costs(
         pos_fees=pos_fees,
         slippage_cost=costs.entry_slippage,
         accrual=accrual,
+        turnover=position_turnover(costs.pos, hit=hit),
         fee_legs=(kept_fees, hit.clearance_fee),
         gross_pnl=realized_pnl + abs(pos_fees),
         entry_slippage=costs.entry_slippage,
@@ -818,6 +846,7 @@ def validation_liquidated_run(
                 pos_fees=0.0,
                 slippage_cost=entry_slip,
                 accrual=funding_by_key.get(key),  # the scan's input; cut at the hit later
+                turnover=0.0,
                 entry_slippage=entry_slip,
             )
         )

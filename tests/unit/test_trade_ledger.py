@@ -530,6 +530,7 @@ def _costs(
         pos_fees=pos_fees,
         slippage_cost=slippage_cost,
         accrual=accrual,
+        turnover=0.0,
         entry_slippage=entry_slippage,
         exit_slippage=exit_slippage,
     )
